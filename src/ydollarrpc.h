@@ -63,6 +63,7 @@ namespace Stats {
     constexpr const char* ERR_BPS          = "errBps";
     constexpr const char* MINT_FROZEN      = "mintFrozen";
     constexpr const char* MINT_FROZEN_UNTIL= "mintFrozenUntil";
+    constexpr const char* SUPPLY_CAP_CENTS = "supplyCapCents"; // optional; absent or 0 = no cap
 }
 
 // ── yd_getbalance result ──────────────────────────────────────────────────────────────────
