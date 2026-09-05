@@ -5,7 +5,7 @@
 // ── JSON readers ──────────────────────────────────────────────────────────────────────────
 
 qint64 YellowbackJson::toInt(const json& j, const char* key, qint64 def) {
-    if (!j.is_object() || !j.contains(key) || j[key].is_null()) return def;
+    if (!j.is_object() || j.find(key) == j.end() || j[key].is_null()) return def;
     const json& v = j[key];
     if (v.is_number_integer())  return v.get<json::number_integer_t>();
     if (v.is_number_unsigned()) return (qint64)v.get<json::number_unsigned_t>();
@@ -16,14 +16,14 @@ qint64 YellowbackJson::toInt(const json& j, const char* key, qint64 def) {
 }
 
 QString YellowbackJson::toStr(const json& j, const char* key, const QString& def) {
-    if (!j.is_object() || !j.contains(key) || j[key].is_null()) return def;
+    if (!j.is_object() || j.find(key) == j.end() || j[key].is_null()) return def;
     const json& v = j[key];
     if (v.is_string()) return QString::fromStdString(v.get<json::string_t>());
     return QString::fromStdString(v.dump());
 }
 
 bool YellowbackJson::toBool(const json& j, const char* key, bool def) {
-    if (!j.is_object() || !j.contains(key) || j[key].is_null()) return def;
+    if (!j.is_object() || j.find(key) == j.end() || j[key].is_null()) return def;
     const json& v = j[key];
     if (v.is_boolean()) return v.get<bool>();
     if (v.is_number())  return toInt(j, key) != 0;
@@ -31,7 +31,7 @@ bool YellowbackJson::toBool(const json& j, const char* key, bool def) {
 }
 
 bool YellowbackJson::isNull(const json& j, const char* key) {
-    return !j.is_object() || !j.contains(key) || j[key].is_null();
+    return !j.is_object() || j.find(key) == j.end() || j[key].is_null();
 }
 
 // ── Records ───────────────────────────────────────────────────────────────────────────────
@@ -224,8 +224,8 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 return tr("Lock tier %1 (%2, ratio %3). Dates are estimates at 75 seconds per block.")
                         .arg(p.tier).arg(YellowbackFormat::tierName(p.tier)).arg(YellowbackFormat::tierRatio(p.tier));
             case Vault:
-                return p.vaultTxid % "\n" % tr("Owner key: ") % p.ownerKeyId % "\n" %
-                       tr("Roster: ") % QString::number(p.rosterIndex);
+                return QString(p.vaultTxid % "\n" % tr("Owner key: ") % p.ownerKeyId % "\n" %
+                               tr("Roster: ") % QString::number(p.rosterIndex));
         }
     }
 

@@ -52,10 +52,10 @@ void YellowbackController::call(const char* method, const json& params, OkFn ok,
         [=, this](QNetworkReply* reply, const json& parsed) {
             QString msg;
             if (!parsed.is_discarded() && parsed.is_object() &&
-                parsed.contains("error") && parsed["error"].is_object() &&
-                parsed["error"].contains("message") && parsed["error"]["message"].is_string()) {
+                parsed.find("error") != parsed.end() && parsed["error"].is_object() &&
+                parsed["error"].find("message") != parsed["error"].end() && parsed["error"]["message"].is_string()) {
                 msg = QString::fromStdString(parsed["error"]["message"].get<json::string_t>());
-                if (parsed["error"].contains("code") && parsed["error"]["code"].is_number_integer()) {
+                if (parsed["error"].find("code") != parsed["error"].end() && parsed["error"]["code"].is_number_integer()) {
                     // Keep the identifier: the code is what makes "Method not found" unambiguous
                     int code = parsed["error"]["code"].get<json::number_integer_t>();
                     if (code == YellowbackRpc::Errors::METHOD_NOT_FOUND_CODE && !msg.contains(YellowbackRpc::Errors::METHOD_NOT_FOUND))

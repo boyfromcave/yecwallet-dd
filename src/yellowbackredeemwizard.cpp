@@ -179,7 +179,7 @@ void YellowbackRedeemWizard::startRedeem() {
             ctl->addPendingRedemption(pos.vaultTxid, expiryHeight);
 
             // The node's roster for this vault wins over the one shown on the review page
-            if (r.contains(ROSTER) && r[ROSTER].is_object()) {
+            if (r.find(ROSTER) != r.end() && r[ROSTER].is_object()) {
                 rosterK = (int)YellowbackJson::toInt(r[ROSTER], YellowbackRpc::Roster::K, rosterK);
                 rosterN = (int)YellowbackJson::toInt(r[ROSTER], YellowbackRpc::Roster::N, rosterN);
             }
