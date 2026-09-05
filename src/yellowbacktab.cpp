@@ -196,12 +196,25 @@ void YellowbackTab::updateOverview() {
             .arg(age).arg(age * YellowbackRpc::SECONDS_PER_BLOCK / 60).arg(YellowbackJson::toInt(s, PRICE_HEIGHT)));
     }
 
+    // yed_getprotectionstatus refines the three protection figures when it has answered
+    const json& prot = ctl->protection();
+    const bool haveProt = prot.is_object() && !prot.empty();
+    const json& dca = haveProt && prot.find(YellowbackRpc::Protection::DCA) != prot.end() ? prot[YellowbackRpc::Protection::DCA] : json::object();
+    const json& erj = haveProt && prot.find(YellowbackRpc::Protection::ERR) != prot.end() ? prot[YellowbackRpc::Protection::ERR] : json::object();
+
     qint64 health = YellowbackJson::toInt(s, HEALTH_PCT);
+    QString band = YellowbackJson::toStr(dca, YellowbackRpc::Protection::DCA_BAND);
     uiOverview->lblHealth->setText(QString::number(health) % " %" %
-        (health < 100 ? tr("  (below 100 %: emergency redemption ratio in effect, minting paused)") : ""));
+        (!band.isEmpty() ? QString("  (" % band % ")") : QString()) %
+        (health < 100 ? tr("  — below 100 %: emergency redemption ratio in effect, minting paused") : QString()));
     uiOverview->lblDca->setText(QString::number((double)YellowbackJson::toInt(s, DCA_BPS, 10000) / 10000.0, 'f', 2) % "x");
-    qint64 err = YellowbackJson::toInt(s, ERR_BPS);
-    uiOverview->lblErr->setText(err > 0 ? tr("active: +%1 % burn required").arg((double)err / 100.0, 0, 'f', 2) : tr("inactive"));
+    bool errActive = haveProt ? YellowbackJson::toBool(erj, YellowbackRpc::Protection::ERR_ACTIVE) : health < 100;
+    if (errActive) {
+        qint64 mult = YellowbackJson::toInt(erj, YellowbackRpc::Protection::ERR_BURN_MULTIPLIER_BPS, 10000);
+        uiOverview->lblErr->setText(tr("active: redemptions burn %1x the minted amount").arg((double)mult / 10000.0, 0, 'f', 2));
+    } else {
+        uiOverview->lblErr->setText(tr("inactive"));
+    }
 
     QString blocker = ctl->mintBlocker(0);
     uiOverview->lblMintStatus->setText(blocker.isEmpty() ? tr("open") : tr("paused: ") % blocker);
@@ -318,21 +331,25 @@ void YellowbackTab::doSend() {
         uiSend->lblSendHint->setText(tr("Enter an amount in dollars, e.g. 12.50."));
         return;
     }
-    if (cents < YellowbackRpc::MIN_OUTPUT_CENTS) {
-        uiSend->lblSendHint->setText(tr("The smallest YED payment is %1.").arg(YellowbackFormat::cents(YellowbackRpc::MIN_OUTPUT_CENTS)));
+    const qint64 minOut = ctl->minOutputCents();
+    if (cents < minOut) {
+        uiSend->lblSendHint->setText(tr("The smallest YED payment is %1.").arg(YellowbackFormat::cents(minOut)));
         return;
     }
     if (cents > ctl->confirmedCents()) {
         uiSend->lblSendHint->setText(tr("Only %1 is confirmed and spendable.").arg(YellowbackFormat::cents(ctl->confirmedCents())));
         return;
     }
-    // Change floor (plan C20): the node refuses when change would be under $1.00. Say so first.
+    // Change floor (rule C20): the node refuses when change would be under the minimum output.
+    // This is only a first check on the whole balance; the node's message names the exact
+    // workable amounts for the inputs it selected.
     qint64 change = ctl->confirmedCents() - cents;
-    if (change > 0 && change < YellowbackRpc::MIN_OUTPUT_CENTS) {
-        uiSend->lblSendHint->setText(tr("This amount would leave %1 of change, below the $1.00 minimum. Send exactly %2 (everything) or at most %3.")
+    if (change > 0 && change < minOut) {
+        uiSend->lblSendHint->setText(tr("This amount would leave %1 of change, below the %2 minimum. Send exactly %3 (everything) or at most %4.")
             .arg(YellowbackFormat::cents(change))
+            .arg(YellowbackFormat::cents(minOut))
             .arg(YellowbackFormat::cents(ctl->confirmedCents()))
-            .arg(YellowbackFormat::cents(ctl->confirmedCents() - YellowbackRpc::MIN_OUTPUT_CENTS)));
+            .arg(YellowbackFormat::cents(ctl->confirmedCents() - minOut)));
         return;
     }
     uiSend->lblSendHint->clear();
@@ -363,10 +380,10 @@ void YellowbackTab::doSend() {
                 [=, this](const QString& e) {
                     uiSend->btnSend->setEnabled(actionsEnabled);
                     QString msg = tr("yed_send failed: ") % e;
-                    if (e.contains(YellowbackRpc::Errors::CHANGE_FLOOR, Qt::CaseInsensitive))
-                        msg += tr("\n\nThe change left over would be below $1.00. Send exactly %1 (everything) or at most %2.")
-                            .arg(YellowbackFormat::cents(ctl->confirmedCents()))
-                            .arg(YellowbackFormat::cents(ctl->confirmedCents() - YellowbackRpc::MIN_OUTPUT_CENTS));
+                    if (e.contains(YellowbackRpc::Errors::CHANGE_FLOOR))
+                        msg += tr("\n\nThe change left over would be below the minimum output; the node's message above names the amounts that work.");
+                    else if (e.contains(YellowbackRpc::Errors::WALLET_LOCKED))
+                        msg += tr("\n\nUnlock the wallet first (walletpassphrase in the console tab).");
                     uiSend->lblSendStatus->setText(msg);
                     QMessageBox::critical(this, tr("Yellowback transfer failed"), msg);
                 });
@@ -420,10 +437,10 @@ void YellowbackTab::requestEstimate() {
         updateMintGate();
         return;
     }
-    if (cents < YellowbackRpc::MIN_MINT_CENTS || cents > YellowbackRpc::MAX_MINT_CENTS) {
+    if (cents < ctl->minMintCents() || cents > ctl->maxMintCents()) {
         estimateZat = -1;
         uiMint->lblMintHint->setText(tr("A mint must be between %1 and %2.")
-            .arg(YellowbackFormat::cents(YellowbackRpc::MIN_MINT_CENTS)).arg(YellowbackFormat::cents(YellowbackRpc::MAX_MINT_CENTS)));
+            .arg(YellowbackFormat::cents(ctl->minMintCents())).arg(YellowbackFormat::cents(ctl->maxMintCents())));
         updateMintGate();
         return;
     }
@@ -437,6 +454,20 @@ void YellowbackTab::requestEstimate() {
             estimateCents = cents;
             estimateTier  = tier;
             estimateZat   = YellowbackJson::toInt(e, REQUIRED_ZAT, -1);
+            // The node answers `error` (bad-oracle-price, collateral-out-of-range) with a
+            // null requiredZat instead of failing the call.
+            QString estError = YellowbackJson::toStr(e, ERROR);
+            if (estimateZat < 0 || !estError.isEmpty()) {
+                estimateZat = -1;
+                uiMint->lblCollateral->setText("-");
+                uiMint->lblUnlock->setText("-");
+                uiMint->lblRatio->setText(QString::number(YellowbackJson::toInt(e, RATIO_PCT)) % " %");
+                uiMint->lblPrice->setText(YellowbackJson::isNull(e, PRICE_MICRO_USD) ? tr("no price") :
+                    "$" % QString::number((double)YellowbackJson::toInt(e, PRICE_MICRO_USD) / 1000000.0, 'f', 4) % tr(" per YEC"));
+                uiMint->lblMintHint->setText(tr("No estimate: %1").arg(estError.isEmpty() ? tr("the node returned no collateral figure") : estError));
+                updateMintGate();
+                return;
+            }
             uiMint->lblCollateral->setText(YellowbackFormat::zec(estimateZat) %
                 tr("  (%1 % ratio x %2 DCA)").arg(YellowbackJson::toInt(e, RATIO_PCT))
                     .arg((double)YellowbackJson::toInt(e, DCA_BPS, 10000) / 10000.0, 0, 'f', 2));
@@ -489,9 +520,12 @@ void YellowbackTab::doMint() {
     ctl->mint(cents, tier,
         [=, this](const json& r) {
             using namespace YellowbackRpc::MintResult;
-            uiMint->lblMintStatus->setText(tr("Mint submitted. txid: %1\nVault: %2, lock height %3, collateral %4")
+            QString warning = YellowbackJson::toStr(r, WARNING);
+            uiMint->lblMintStatus->setText(tr("Mint submitted. txid: %1\nVault: %2, lock height %3, collateral %4, expires unmined at height %5")
                 .arg(YellowbackJson::toStr(r, TXID)).arg(YellowbackJson::toStr(r, VAULT))
-                .arg(YellowbackJson::toInt(r, LOCK_HEIGHT)).arg(YellowbackFormat::zec(YellowbackJson::toInt(r, COLLATERAL_ZAT))));
+                .arg(YellowbackJson::toInt(r, LOCK_HEIGHT)).arg(YellowbackFormat::zec(YellowbackJson::toInt(r, COLLATERAL_ZAT)))
+                .arg(YellowbackJson::toInt(r, EXPIRY_HEIGHT)) %
+                (warning.isEmpty() ? QString() : "\n" % tr("Node warning: ") % warning));
             uiMint->txtAmount->clear();
             estimateZat = -1;
             Settings::getInstance()->setYellowbackBackupPending(true);
@@ -508,8 +542,11 @@ void YellowbackTab::doMint() {
             updateMintGate();
         },
         [=, this](const QString& e) {
-            uiMint->lblMintStatus->setText(tr("yed_mint failed: ") % e);
-            QMessageBox::critical(this, tr("Mint failed"), tr("yed_mint failed: ") % e);
+            QString msg = tr("yed_mint failed: ") % e;
+            if (e.contains(YellowbackRpc::Errors::WALLET_LOCKED))
+                msg += tr("\n\nUnlock the wallet first (walletpassphrase in the console tab).");
+            uiMint->lblMintStatus->setText(msg);
+            QMessageBox::critical(this, tr("Mint failed"), msg);
             updateMintGate();
         });
 }
@@ -539,7 +576,7 @@ void YellowbackTab::setupPositions() {
         if (ctl == nullptr) return;
         auto idx = uiPositions->tblPositions->currentIndex();
         auto p = ctl->positionsModel()->positionAt(idx.row());
-        if (p == nullptr || !ctl->hasPendingRedemption(p->vaultTxid)) return;
+        if (p == nullptr || !(p->pending || ctl->hasPendingRedemption(p->vaultTxid))) return;
         abortPending(p->vaultTxid);
     });
     QObject::connect(uiPositions->btnWhyVoid, &QPushButton::clicked, [=, this]() {
@@ -560,7 +597,7 @@ void YellowbackTab::updatePositions() {
     } else {
         QStringList parts;
         for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
-            int deadline = ctl->deadlineHeight(it.value());
+            int deadline = it.value();   // yed_redeem.deadlineHeight, inclusive
             parts << tr("vault %1 (submit by height %2, %3 blocks left)")
                      .arg(it.key()).arg(deadline).arg(qMax(0, deadline - ctl->height()));
         }
@@ -575,8 +612,9 @@ void YellowbackTab::updatePositions() {
         QObject::connect(sel, &QItemSelectionModel::currentRowChanged, this, [=, this](const QModelIndex& cur, const QModelIndex&) {
             auto p = ctl->positionsModel()->positionAt(cur.row());
             bool have = p != nullptr;
-            uiPositions->btnRedeem->setEnabled(actionsEnabled && have && p->canRedeem);
-            uiPositions->btnAbortPending->setEnabled(actionsEnabled && have && ctl->hasPendingRedemption(p->vaultTxid));
+            bool pend = have && (p->pending || ctl->hasPendingRedemption(p->vaultTxid));
+            uiPositions->btnRedeem->setEnabled(actionsEnabled && have && p->canRedeem && !pend);
+            uiPositions->btnAbortPending->setEnabled(actionsEnabled && pend);
             uiPositions->btnWhyVoid->setEnabled(actionsEnabled && have && p->status == YellowbackRpc::Position::STATUS_VOID);
         });
     }
@@ -694,7 +732,7 @@ void YellowbackTab::updateRedeemPage() {
         uiRedeem->lblBurn->setText(YellowbackFormat::cents(sel->requiredBurnCents) %
             (sel->requiredBurnCents > sel->mintedCents ? tr("  (more than minted: emergency redemption ratio)") : ""));
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat));
-        if (ctl->hasPendingRedemption(vault))
+        if (sel->pending || ctl->hasPendingRedemption(vault))
             uiRedeem->lblRedeemHint->setText(tr("A redemption of this vault is already in progress (see Vaults)."));
         else if (sel->requiredBurnCents > ctl->confirmedCents())
             uiRedeem->lblRedeemHint->setText(tr("You need %1 of confirmed YED to burn but have %2.")
@@ -706,10 +744,6 @@ void YellowbackTab::updateRedeemPage() {
 
 void YellowbackTab::startRedemption(const QString& vaultTxid) {
     if (ctl == nullptr || !actionsEnabled) return;
-    if (ctl->hasPendingRedemption(vaultTxid)) {
-        QMessageBox::information(this, tr("Already in progress"), tr("A redemption of this vault is already pending. Abort it from the Vaults page to start over."));
-        return;
-    }
     const YellowbackPosition* sel = nullptr;
     for (int r = 0; ; r++) {
         auto p = ctl->positionsModel()->positionAt(r);
@@ -717,6 +751,10 @@ void YellowbackTab::startRedemption(const QString& vaultTxid) {
         if (p->vaultTxid == vaultTxid) { sel = p; break; }
     }
     if (sel == nullptr) return;
+    if (sel->pending || ctl->hasPendingRedemption(vaultTxid)) {
+        QMessageBox::information(this, tr("Already in progress"), tr("A redemption of this vault is already pending. Abort it from the Vaults page to start over."));
+        return;
+    }
 
     YellowbackRedeemWizard wizard(ctl, *sel, this);
     wizard.exec();
