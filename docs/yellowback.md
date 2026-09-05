@@ -1,9 +1,9 @@
-# YDollar in YecWallet — development notes
+# Yellowback in YecWallet — development notes
 
 This file records the wallet-side baseline (plan §6 Phase 5b, "Phase 0 (wallet side)") and the
 conventions the `feature/digidollar` fork follows. The node-side contract lives in
-`ycash-dd/doc/ydollar-rpc.md`; every RPC method and result field this wallet depends on is
-listed once in `src/ydollarrpc.h`.
+`ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends on is
+listed once in `src/yellowbackrpc.h`.
 
 ## Phase 0 baseline
 
@@ -50,25 +50,25 @@ conf (`test_framework/util.py`) writes exactly those keys. The QTest target atta
 
 `Controller::getInfoThenRefresh` sets testnet mode from `getinfo.testnet`, which a regtest node
 reports as `false`. The stock tabs still work on regtest (regtest transparent addresses share the
-testnet prefixes and pass `Settings::isTAddress`), but a YDollar address check keyed on that flag
-would pick the mainnet `yd` prefix. The YDollar code therefore takes the network from
-`yd_getinfo.network` (`main` / `test` / `regtest` → `yd` / `yt` / `yr`) and never reads
-`Settings::isTestnet()` for anything YDollar-specific (`YDollarController::network()`).
+testnet prefixes and pass `Settings::isTAddress`), but a Yellowback address check keyed on that flag
+would pick the mainnet `ye` prefix. The Yellowback code therefore takes the network from
+`yed_getinfo.network` (`main` / `test` / `regtest` → `ye` / `yt` / `yr`) and never reads
+`Settings::isTestnet()` for anything Yellowback-specific (`YellowbackController::network()`).
 
 ## Verification status of the fork
 
-The YDollar code in this fork was written without a compiler or Qt on the development host (see
+The Yellowback code in this fork was written without a compiler or Qt on the development host (see
 the table above). It has been reviewed for C++20 / Qt 6 correctness by hand, but it has **not**
 been compiled or run. The first build on a host with CMake and Qt 6 is expected to surface
 ordinary compile errors; none of the design depends on anything unverified beyond that.
 
 ## Conventions
 
-- Naming: `YDollar` / `ydollar` / `YD` everywhere; `DigiDollar` appears only in comments citing
+- Naming: `Yellowback` for the system, `YED` for amounts, `yed_*` RPCs (workspace AGENTS.md rule 6); `DigiDollar` appears only in comments citing
   `ref/digibyte` files.
-- Amounts: integer cents in code; `YDollarController::formatCents` renders them.
+- Amounts: integer cents in code; `YellowbackController::formatCents` renders them.
 - Heights: shown with an estimated date at 75 s per block, labelled as an estimate.
-- Copy: the wallet never describes YDollar as trustless or shielded (plan §8.1). It says
+- Copy: the wallet never describes Yellowback as trustless or shielded (plan §8.1). It says
   "transparent" and "federated" where a user might expect otherwise.
 - Errors: node error strings are stable identifiers and are always shown verbatim.
 
@@ -76,15 +76,15 @@ ordinary compile errors; none of the design depends on anything unverified beyon
 
 | File | What |
 |---|---|
-| `src/ydollarrpc.h` | the RPC contract: every `yd_*` method name, result field, error identifier, `/cosign` shape and displayed protocol constant; `RPC_VERSION = 1` |
-| `src/ydollarcontroller.{cpp,h}` | `YDollarController`: all `yd_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/balance, mint gate reasons, pending redemptions. Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
-| `src/ydollarmodels.{cpp,h}` | `YDollarPosition` / `YDollarTx` records, tolerant JSON readers, formatting helpers, `YDollarPositionsModel`, `YDollarTxModel` |
-| `src/ydollartab.{cpp,h,ui}` + `src/ydollar{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the YDollar tab (index 4 of the main tab bar, after Transactions) and its eight sub-pages |
-| `src/ydollarredeemwizard.{cpp,h}` | the redemption wizard: `yd_redeem` → operator `/cosign` POSTs → `yd_submitredeem`, with retry, countdown and abort |
-| `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `ydollar=1`; `Connection::offerYDollarConfRepair` appends them to an existing conf |
-| `src/settings.{cpp,h}` | `ydollar/endpoints`, `ydollar/unitcents`, `ydollar/advanced`, `ydollar/backuppending`; `getYDollarRpcVersion()` |
+| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier, `/cosign` shape and displayed protocol constant; `RPC_VERSION = 1` |
+| `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/balance, mint gate reasons, pending redemptions. Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
+| `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, `YellowbackPositionsModel`, `YellowbackTxModel` |
+| `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its eight sub-pages |
+| `src/yellowbackredeemwizard.{cpp,h}` | the redemption wizard: `yed_redeem` → operator `/cosign` POSTs → `yed_submitredeem`, with retry, countdown and abort |
+| `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
+| `src/settings.{cpp,h}` | `yellowback/endpoints`, `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
-| `CMakeLists.txt`, `tests/ydollartab_test.cpp` | source registration; the optional `ydollar_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
+| `CMakeLists.txt`, `tests/yellowbacktab_test.cpp` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
 
 ## Operator `/cosign` request shape assumed by the wizard
 
