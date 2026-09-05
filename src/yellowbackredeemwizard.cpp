@@ -160,8 +160,8 @@ void YellowbackRedeemWizard::refreshOperatorList() {
 
 QString YellowbackRedeemWizard::deadlineText() const {
     int left = deadlineHeight - ctl->height();
-    if (left <= 0) return tr("Deadline passed (height %1).").arg(deadlineHeight);
-    return tr("Submit by height %1: %2 blocks left (about %3 minutes). Current index height %4.")
+    if (left < 0) return tr("Deadline passed (height %1).").arg(deadlineHeight);
+    return tr("Submit by height %1 (inclusive): %2 blocks left (about %3 minutes). Current index height %4.")
             .arg(deadlineHeight).arg(left).arg(left * YellowbackRpc::SECONDS_PER_BLOCK / 60).arg(ctl->height());
 }
 
@@ -174,9 +174,10 @@ void YellowbackRedeemWizard::startRedeem() {
             hex               = YellowbackJson::toStr(r, HEX);
             expiryHeight      = (int)YellowbackJson::toInt(r, EXPIRY_HEIGHT);
             requiredBurnCents = YellowbackJson::toInt(r, REQUIRED_BURN_CENTS, pos.requiredBurnCents);
-            deadlineHeight    = ctl->deadlineHeight(expiryHeight);
+            burnCents         = YellowbackJson::toInt(r, BURN_CENTS, requiredBurnCents);
+            deadlineHeight    = (int)YellowbackJson::toInt(r, DEADLINE_HEIGHT, ctl->deadlineHeight(expiryHeight));
             redeemIssued      = true;
-            ctl->addPendingRedemption(pos.vaultTxid, expiryHeight);
+            ctl->addPendingRedemption(pos.vaultTxid, deadlineHeight);
 
             // The node's roster for this vault wins over the one shown on the review page
             if (r.find(ROSTER) != r.end() && r[ROSTER].is_object()) {
@@ -186,7 +187,7 @@ void YellowbackRedeemWizard::startRedeem() {
             if (rosterK <= 0) rosterK = 1;
 
             lblCollectStatus->setText(tr("Your node signed the redemption (burning %1, expiry height %2). Contacting operators...")
-                .arg(YellowbackFormat::cents(requiredBurnCents)).arg(expiryHeight));
+                .arg(YellowbackFormat::cents(burnCents)).arg(expiryHeight));
             lblDeadline->setText(deadlineText());
             refreshOperatorList();
             timer->start();
@@ -265,12 +266,18 @@ void YellowbackRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply
     QString newHex;
     QString error;
     bool transient = false;
+    int  quorum    = -1;     // quorumSignatures from the reply, -1 when absent
+    bool complete  = false;
 
     if (reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300) {
         if (!parsed.is_discarded() && parsed.is_object()) {
-            newHex = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_HEX);
-            error  = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_ERROR);
+            newHex   = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_HEX);
+            error    = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_ERROR);
             transient = YellowbackJson::toBool(parsed, YellowbackRpc::Cosign::RESP_TRANSIENT);
+            quorum   = (int)YellowbackJson::toInt(parsed, YellowbackRpc::Cosign::RESP_QUORUM_SIGNATURES, -1);
+            complete = YellowbackJson::toBool(parsed, YellowbackRpc::Cosign::RESP_COMPLETE);
+            int k    = (int)YellowbackJson::toInt(parsed, YellowbackRpc::Cosign::RESP_K, -1);
+            if (k > 0 && k != rosterK) rosterK = k;   // the co-signer's roster wins
         } else {
             // plain-text hex
             static const QRegularExpression hexRe("^[0-9a-fA-F]+$");
@@ -290,12 +297,15 @@ void YellowbackRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply
     }
 
     if (!newHex.isEmpty() && error.isEmpty()) {
-        if (newHex.length() <= hex.length()) {
+        // quorumSignatures is the count on the returned hex; a reply that did not raise it
+        // added nothing. Without the field, fall back to the hex growing.
+        bool added = quorum >= 0 ? quorum > signatures : newHex.length() > hex.length();
+        if (!added) {
             op.failed = true;
             op.status = tr("refused: reply did not add a signature");
         } else {
             hex = newHex;
-            signatures++;
+            signatures = quorum >= 0 ? quorum : signatures + 1;
             op.done = true;
             op.status = tr("signed");
         }
@@ -311,7 +321,7 @@ void YellowbackRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply
     }
     refreshOperatorList();
 
-    if (signatures >= rosterK) finishCollecting();
+    if (complete || signatures >= rosterK) finishCollecting();
     else postNext();
 }
 
@@ -319,7 +329,7 @@ void YellowbackRedeemWizard::tick() {
     if (aborted || !redeemIssued) return;
     lblDeadline->setText(deadlineText());
 
-    if (ctl->height() >= deadlineHeight && !didSubmit && !pgCollect->isComplete()) {
+    if (ctl->height() > deadlineHeight && !didSubmit && !pgCollect->isComplete()) {
         timer->stop();
         collecting = false;
         lblCollectStatus->setText(tr("The deadline passed before enough signatures were collected. The redemption is being aborted; you can start over."));
@@ -365,10 +375,11 @@ void YellowbackRedeemWizard::doSubmit() {
     ctl->submitRedeem(hex,
         [=, this](const json& r) {
             didSubmit = true;
-            submittedTxid = YellowbackJson::toStr(r, YellowbackRpc::SendResult::TXID);
+            submittedTxid = YellowbackJson::toStr(r, YellowbackRpc::SubmitResult::TXID);
+            qint64 q = YellowbackJson::toInt(r, YellowbackRpc::SubmitResult::QUORUM_SIGNATURES, signatures);
             ctl->removePendingRedemption(pos.vaultTxid);
-            lblSubmit->setText(tr("Broadcast. txid: %1\n\n%2 of YED were burned; %3 of collateral returns to your wallet once the transaction confirms.")
-                .arg(submittedTxid).arg(YellowbackFormat::cents(requiredBurnCents)).arg(YellowbackFormat::zec(pos.collateralZat)));
+            lblSubmit->setText(tr("Broadcast with %1 federation signature(s). txid: %2\n\n%3 of YED were burned; %4 of collateral returns to your wallet once the transaction confirms.")
+                .arg(q).arg(submittedTxid).arg(YellowbackFormat::cents(burnCents)).arg(YellowbackFormat::zec(pos.collateralZat)));
             pgSubmit->setOk(true);
         },
         [=, this](const QString& e) {

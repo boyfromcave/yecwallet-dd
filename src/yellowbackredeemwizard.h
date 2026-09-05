@@ -26,8 +26,9 @@ private:
 //   1 Review     burn, collateral returned, roster k-of-n, configured operators
 //   2 Collect    yed_redeem on the local node -> POST the hex to each operator's /cosign endpoint
 //                (HTTPS, through the app's existing QNetworkAccessManager) until k signatures;
-//                transient refusals (RED-0, RED-2) retried after the next block; a countdown
-//                to the 36-block deadline; abort at any time via yed_abortredeem
+//                transient refusals ("RED-n: ... (transient)", or transient: true) retried after
+//                the next block; a countdown to yed_redeem.deadlineHeight; abort at any time
+//                via yed_abortredeem
 //   3 Submit     yed_submitredeem on the local node, which re-verifies every signature (SUB-1)
 //
 // This is the only code in the wallet that talks to anything other than the local node. It
@@ -91,8 +92,9 @@ private:
     QString             hex;                    // current transaction hex (grows a signature at a time)
     int                 signatures = 0;         // co-signatures obtained
     int                 expiryHeight = 0;
-    int                 deadlineHeight = 0;
+    int                 deadlineHeight = 0;         // yed_redeem.deadlineHeight (inclusive)
     qint64              requiredBurnCents = 0;
+    qint64              burnCents = 0;              // what the transaction actually burns
     bool                redeemIssued = false;   // yed_redeem succeeded (pending record exists)
     bool                posting      = false;   // a POST is in flight
     bool                collecting   = false;
