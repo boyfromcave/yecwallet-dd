@@ -48,6 +48,8 @@ public:
     bool    looksLikeYellowbackAddress(const QString& addr) const;
     bool    isShieldedAddress(const QString& addr) const;   // s1..., ys..., z... (refused)
     const json& stats() const { return statsJson; }
+    const json& protection() const { return protectionJson; }   // yed_getprotectionstatus
+    const json& params() const { return paramsJson; }           // yed_getinfo.params
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
     double  yecBalance() const;                   // from the stock DataModel
@@ -55,7 +57,15 @@ public:
     YellowbackPositionsModel* positionsModel() { return positions; }
     YellowbackTxModel*        transactionsModel() { return transactions; }
 
+    // ── Protocol parameters: yed_getinfo.params when present, else the compiled-in defaults ─
+    qint64  minMintCents() const;
+    qint64  maxMintCents() const;
+    qint64  minOutputCents() const;
+    int     mintEvalLag() const;
+    int     mintWindow() const;
+
     // ── Mint gate: empty string when a mint of `cents` is allowed, else the reason ─────────
+    // Prefers yed_getprotectionstatus (mintingAllowed and why) and falls back to yed_getstats.
     QString mintBlocker(qint64 cents) const;
 
     // ── RPC calls. `ok` receives the "result"; `err` the node's error message verbatim ─────
@@ -77,15 +87,18 @@ public:
     void getVault(const QString& txid, OkFn ok, ErrFn err);
 
     // ── Pending redemptions (yed_redeem issued, yed_submitredeem not yet) ───────────────────
-    void addPendingRedemption(const QString& vaultTxid, int expiryHeight);
+    // Keyed by vault txid; the value is yed_redeem.deadlineHeight, the last height at which
+    // yed_submitredeem is accepted.
+    void addPendingRedemption(const QString& vaultTxid, int deadlineHeight);
     void removePendingRedemption(const QString& vaultTxid);
     bool hasPendingRedemption(const QString& vaultTxid) const { return pending.contains(vaultTxid); }
     const QMap<QString, int>& pendingRedemptions() const { return pending; }
-    int  deadlineHeight(int expiryHeight) const;  // last height a submit is accepted
+    int  deadlineHeight(int expiryHeight) const;  // fallback when the node did not say: expiry - EXPIRING_SOON - 1
 
     // Static helpers
     static bool isMethodNotFound(const QString& errorMessage);
-    static bool isTransientRefusal(const QString& errorMessage);
+    static bool isIndexUnhealthy(const QString& errorMessage);
+    static bool isTransientRefusal(const QString& errorMessage);   // "... (transient)"
 
     MainWindow* mainWindow() { return main; }
     Connection* connection();
@@ -93,7 +106,7 @@ public:
 signals:
     void availabilityChanged(bool available, const QString& reason);
     void infoUpdated();
-    void statsUpdated();
+    void statsUpdated();          // after yed_getstats and after yed_getprotectionstatus
     void balanceUpdated();
     void positionsUpdated();
     void transactionsUpdated();
@@ -103,6 +116,7 @@ signals:
 private:
     void applyInfo(const json& info);
     void refreshStats();
+    void refreshProtection();
     void refreshBalance();
     void refreshPositions();
     void refreshTransactions();
@@ -125,11 +139,13 @@ private:
     int     indexHeight      = 0;
     int     indexStartHeight = 0;
     int     lastRefreshHeight = -1;
-    json    statsJson   = json::object();
+    json    statsJson      = json::object();
+    json    protectionJson = json::object();
+    json    paramsJson     = json::object();
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
 
-    QMap<QString, int> pending;                   // vaultTxid -> expiryHeight
+    QMap<QString, int> pending;                   // vaultTxid -> deadlineHeight
 };
 
 #endif // YELLOWBACKCONTROLLER_H

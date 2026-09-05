@@ -18,7 +18,13 @@ struct YellowbackPosition {
     bool    canRedeem       = false;
     qint64  requiredBurnCents = 0;
     int     unlockHeight    = 0;
+    int     mintHeight      = 0;
     QString ownerKeyId;
+    bool    pending         = false;   // the node holds a yed_redeem for this vault
+    QString voidReason;                // VOID only
+    int     closeHeight     = 0;       // CLOSED only
+    QString closingTxid;               // CLOSED only
+    qint64  burnedCents     = 0;       // CLOSED only
 
     static YellowbackPosition fromJson(const json& j);
 };

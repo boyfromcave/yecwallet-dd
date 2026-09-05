@@ -48,8 +48,14 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.rosterIndex       = (int)YellowbackJson::toInt(j, ROSTER_INDEX);
     p.canRedeem         = YellowbackJson::toBool(j, CAN_REDEEM);
     p.requiredBurnCents = YellowbackJson::toInt (j, REQUIRED_BURN_CENTS);
-    p.unlockHeight      = (int)YellowbackJson::toInt(j, UNLOCK_HEIGHT);
+    p.unlockHeight      = (int)YellowbackJson::toInt(j, UNLOCK_HEIGHT, p.lockHeight);
+    p.mintHeight        = (int)YellowbackJson::toInt(j, MINT_HEIGHT);
     p.ownerKeyId        = YellowbackJson::toStr (j, OWNER_KEY_ID);
+    p.pending           = YellowbackJson::toBool(j, PENDING);
+    p.voidReason        = YellowbackJson::toStr (j, VOID_REASON);
+    p.closeHeight       = (int)YellowbackJson::toInt(j, CLOSE_HEIGHT);
+    p.closingTxid       = YellowbackJson::toStr (j, CLOSING_TXID);
+    p.burnedCents       = YellowbackJson::toInt (j, BURNED_CENTS);
     return p;
 }
 
@@ -61,11 +67,11 @@ YellowbackTx YellowbackTx::fromJson(const json& j) {
     t.confirmations = (int)YellowbackJson::toInt(j, CONFIRMATIONS);
     t.type          = YellowbackJson::toStr (j, TYPE);
     t.verdict       = YellowbackJson::toStr (j, VERDICT);
-    t.yedIn          = YellowbackJson::toInt (j, YD_IN);
-    t.yedOut         = YellowbackJson::toInt (j, YD_OUT);
+    t.yedIn         = YellowbackJson::toInt (j, YED_IN);
+    t.yedOut        = YellowbackJson::toInt (j, YED_OUT);
     t.burned        = YellowbackJson::toInt (j, BURNED);
     t.amountCents   = YellowbackJson::toInt (j, AMOUNT_CENTS);
-    t.expired       = YellowbackJson::toBool(j, EXPIRED);
+    t.expired       = YellowbackJson::toBool(j, EXPIRED) || t.verdict == VERDICT_EXPIRED;
     return t;
 }
 
@@ -126,6 +132,7 @@ QString YellowbackFormat::typeLabel(const QString& type) {
     if (type == TYPE_RECEIVE) return QObject::tr("Received");
     if (type == TYPE_BURN)    return QObject::tr("Burn");
     if (type == TYPE_REDEEM)  return QObject::tr("Redeem");
+    if (type == TYPE_TRANSFER) return QObject::tr("Sent");   // payload type name on expired rows
     return type;
 }
 
@@ -202,7 +209,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 if (p.requiredBurnCents > p.mintedCents) s += tr(" (above minted)");
                 return s;
             }
-            case Redeemable:   return p.canRedeem ? tr("yes") : tr("no");
+            case Redeemable:   return p.pending ? tr("redemption pending") : p.canRedeem ? tr("yes") : tr("no");
             case Vault:        return p.vaultTxid;
         }
     }
@@ -211,10 +218,12 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
         switch (index.column()) {
             case Status:
                 if (p.status == YellowbackRpc::Position::STATUS_VOID)
-                    return tr("This mint was recorded as VOID by the Yellowback index: it created no YED. "
-                              "The collateral returns to you at the unlock height with no burn required.");
+                    return QString(tr("This mint was recorded as VOID by the Yellowback index: it created no YED. "
+                                      "The collateral returns to you at the unlock height with no burn required.") %
+                                   (p.voidReason.isEmpty() ? QString() : QString("\n" % tr("Reason: ") % p.voidReason)));
                 if (p.status == YellowbackRpc::Position::STATUS_CLOSED)
-                    return tr("Redeemed: the collateral has been released.");
+                    return tr("Redeemed at height %1 by %2; %3 of YED were burned.")
+                            .arg(p.closeHeight).arg(p.closingTxid).arg(YellowbackFormat::cents(p.burnedCents));
                 return tr("Active: %1 of YED are backed by this vault.").arg(YellowbackFormat::cents(p.mintedCents));
             case RequiredBurn:
                 return tr("The YED that must be destroyed to release the collateral, at the current "
@@ -312,7 +321,7 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
                 return YellowbackFormat::cents(a);
             }
             case Confirmations: return t.expired ? tr("expired") : QString::number(t.confirmations);
-            case Height:        return t.height > 0 ? QString::number(t.height) : tr("unconfirmed");
+            case Height:        return t.expired ? tr("expired") : t.height > 0 ? QString::number(t.height) : tr("unconfirmed");
             case Verdict:       return t.verdict;
             case Txid:          return t.txid;
         }

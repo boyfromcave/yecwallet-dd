@@ -66,6 +66,12 @@ void YellowbackController::call(const char* method, const json& params, OkFn ok,
             } else {
                 msg = tr("Unknown error");
             }
+            // Every command but yed_getinfo answers this while the index is unhealthy; take
+            // the tab down at once instead of waiting for the next yed_getinfo.
+            if (isIndexUnhealthy(msg)) {
+                healthy = false;
+                setAvailability(false, tr("Yellowback unavailable: %1").arg(msg));
+            }
             if (err) err(msg);
         });
 }
@@ -74,8 +80,12 @@ bool YellowbackController::isMethodNotFound(const QString& m) {
     return m.contains(YellowbackRpc::Errors::METHOD_NOT_FOUND, Qt::CaseInsensitive);
 }
 
+bool YellowbackController::isIndexUnhealthy(const QString& m) {
+    return m.contains(YellowbackRpc::Errors::INDEX_UNHEALTHY, Qt::CaseInsensitive);
+}
+
 bool YellowbackController::isTransientRefusal(const QString& m) {
-    return m.contains(YellowbackRpc::Errors::RED_0) || m.contains(YellowbackRpc::Errors::RED_2);
+    return m.trimmed().endsWith(YellowbackRpc::Errors::TRANSIENT_SUFFIX);
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────────────────
@@ -140,6 +150,8 @@ void YellowbackController::applyInfo(const json& info) {
     indexStartHeight = (int)YellowbackJson::toInt(info, START_HEIGHT, indexStartHeight);
     synced           = YellowbackJson::toBool(info, SYNCED, false);
     healthy          = YellowbackJson::toBool(info, HEALTHY, false);
+    if (info.is_object() && info.find(PARAMS) != info.end() && info[PARAMS].is_object())
+        paramsJson = info[PARAMS];
 
     if (!synced) {
         setAvailability(false, tr("The Yellowback index is syncing (index height %1). Actions are disabled until it reaches the chain tip.").arg(indexHeight));
@@ -162,6 +174,7 @@ void YellowbackController::refresh(bool force) {
             if (force || indexHeight != lastRefreshHeight || !pending.isEmpty()) {
                 lastRefreshHeight = indexHeight;
                 refreshStats();
+                refreshProtection();
                 refreshBalance();
                 refreshPositions();
                 refreshTransactions();
@@ -180,6 +193,15 @@ void YellowbackController::refreshStats() {
             emit statsUpdated();
         },
         [=, this](const QString& e) { main->logger->write("yed_getstats: " + e); });
+}
+
+void YellowbackController::refreshProtection() {
+    call(YellowbackRpc::GETPROTECTIONSTATUS, json(nullptr),
+        [=, this](const json& p) {
+            protectionJson = p.is_object() ? p : json::object();
+            emit statsUpdated();
+        },
+        [=, this](const QString& e) { main->logger->write("yed_getprotectionstatus: " + e); });
 }
 
 void YellowbackController::refreshBalance() {
@@ -219,11 +241,13 @@ void YellowbackController::refreshTransactions() {
 // ── Pending redemptions ───────────────────────────────────────────────────────────────────
 
 int YellowbackController::deadlineHeight(int expiryHeight) const {
-    return expiryHeight - YellowbackRpc::EXPIRING_SOON;
+    // yed_submitredeem refuses once expiry < chainHeight + 1 + EXPIRING_SOON, so the last
+    // accepted height is expiry - EXPIRING_SOON - 1 (what yed_redeem.deadlineHeight reports).
+    return expiryHeight - YellowbackRpc::EXPIRING_SOON - 1;
 }
 
-void YellowbackController::addPendingRedemption(const QString& vaultTxid, int expiryHeight) {
-    pending[vaultTxid] = expiryHeight;
+void YellowbackController::addPendingRedemption(const QString& vaultTxid, int deadline) {
+    pending[vaultTxid] = deadline;
     emit pendingChanged();
 }
 
@@ -241,7 +265,7 @@ bool YellowbackController::watchPending() {
             indexHeight = h;
             QList<QString> expired;
             for (auto it = pending.constBegin(); it != pending.constEnd(); ++it)
-                if (h >= deadlineHeight(it.value())) expired.append(it.key());
+                if (h > it.value()) expired.append(it.key());   // deadlineHeight is inclusive
             for (auto& v : expired) {
                 pending.remove(v);
                 emit pendingChanged();
@@ -284,36 +308,61 @@ double YellowbackController::yecBalance() const {
     return total;
 }
 
+// ── Protocol parameters ───────────────────────────────────────────────────────────────────
+
+qint64 YellowbackController::minMintCents() const   { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MIN_MINT_CENTS,   YellowbackRpc::MIN_MINT_CENTS); }
+qint64 YellowbackController::maxMintCents() const   { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MAX_MINT_CENTS,   YellowbackRpc::MAX_MINT_CENTS); }
+qint64 YellowbackController::minOutputCents() const { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MIN_OUTPUT_CENTS, YellowbackRpc::MIN_OUTPUT_CENTS); }
+int    YellowbackController::mintEvalLag() const    { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MINT_EVAL_LAG, YellowbackRpc::MINT_EVAL_LAG); }
+int    YellowbackController::mintWindow() const     { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MINT_WINDOW,   YellowbackRpc::MINT_WINDOW); }
+
 // ── Mint gate ─────────────────────────────────────────────────────────────────────────────
 
 QString YellowbackController::mintBlocker(qint64 cents) const {
     using namespace YellowbackRpc;
     if (!available) return reason;
-    if (indexHeight < indexStartHeight + MINT_EVAL_LAG)
+    if (indexHeight < indexStartHeight + mintEvalLag())
         return tr("The Yellowback index is too young to evaluate a mint (height %1, needs %2).")
-                .arg(indexHeight).arg(indexStartHeight + MINT_EVAL_LAG);
-    if (YellowbackJson::toBool(statsJson, Stats::MINT_FROZEN)) {
-        int until = (int)YellowbackJson::toInt(statsJson, Stats::MINT_FROZEN_UNTIL);
-        return tr("Minting is paused by the volatility freeze until height %1.")
-                .arg(YellowbackFormat::heightWithEstimate(until, indexHeight));
+                .arg(indexHeight).arg(indexStartHeight + mintEvalLag());
+
+    // yed_getprotectionstatus is the authority on whether minting is open and why; fall back
+    // to the yed_getstats fields when it has not answered yet.
+    const bool haveProt = protectionJson.is_object() && !protectionJson.empty();
+    const json& vol = haveProt && protectionJson.find(Protection::VOLATILITY) != protectionJson.end()
+                      ? protectionJson[Protection::VOLATILITY] : statsJson;
+    const json& err = haveProt && protectionJson.find(Protection::ERR) != protectionJson.end()
+                      ? protectionJson[Protection::ERR] : json::object();
+
+    bool frozen = haveProt ? YellowbackJson::toBool(vol, Protection::VOL_MINT_FROZEN)
+                           : YellowbackJson::toBool(statsJson, Stats::MINT_FROZEN);
+    if (frozen) {
+        int until = haveProt ? (int)YellowbackJson::toInt(vol, Protection::VOL_FROZEN_UNTIL, -1)
+                             : (int)YellowbackJson::toInt(statsJson, Stats::MINT_FROZEN_UNTIL, -1);
+        return until > 0
+            ? tr("Minting is paused by the volatility freeze until height %1.")
+                .arg(YellowbackFormat::heightWithEstimate(until, indexHeight))
+            : tr("Minting is paused by the volatility freeze.");
     }
     if (YellowbackJson::isNull(statsJson, Stats::PRICE_MICRO_USD))
         return tr("Minting is paused: the federation has not published a fresh YEC price.");
-    qint64 health = YellowbackJson::toInt(statsJson, Stats::HEALTH_PCT, 0);
-    if (health < 100)
+    qint64 health = haveProt ? YellowbackJson::toInt(protectionJson, Protection::HEALTH_PCT, 0)
+                             : YellowbackJson::toInt(statsJson, Stats::HEALTH_PCT, 0);
+    bool errActive = haveProt ? YellowbackJson::toBool(err, Protection::ERR_ACTIVE) : health < 100;
+    if (errActive)
         return tr("Minting is paused: system health is %1 % (must be at least 100 %). "
                   "The emergency redemption ratio is in effect.").arg(health);
+    if (haveProt && !YellowbackJson::toBool(protectionJson, Protection::MINTING_ALLOWED, true))
+        return tr("Minting is paused (yed_getprotectionstatus reports mintingAllowed = false).");
+
     if (cents > 0) {
-        if (cents < MIN_MINT_CENTS || cents > MAX_MINT_CENTS)
+        if (cents < minMintCents() || cents > maxMintCents())
             return tr("A mint must be between %1 and %2.")
-                    .arg(YellowbackFormat::cents(MIN_MINT_CENTS)).arg(YellowbackFormat::cents(MAX_MINT_CENTS));
-        if (!YellowbackJson::isNull(statsJson, Stats::SUPPLY_CAP_CENTS)) {
-            qint64 cap = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS);
-            qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
-            if (cap > 0 && supply + cents > cap)
-                return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
-                        .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap));
-        }
+                    .arg(YellowbackFormat::cents(minMintCents())).arg(YellowbackFormat::cents(maxMintCents()));
+        qint64 cap = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS, 0);   // 0 = no cap
+        qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
+        if (cap > 0 && supply + cents > cap)
+            return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
+                    .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap));
     }
     return QString();
 }
