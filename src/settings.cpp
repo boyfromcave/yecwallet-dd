@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "settings.h"
+#include "ydollarrpc.h"
 
 Settings* Settings::instance = nullptr;
 
@@ -113,6 +114,42 @@ bool Settings::isSaplingActive() {
 
 double Settings::getZECPrice() { 
     return zecPrice; 
+}
+
+QStringList Settings::getYDollarEndpoints() {
+    return QSettings().value("ydollar/endpoints", QStringList()).toStringList();
+}
+
+void Settings::setYDollarEndpoints(const QStringList& urls) {
+    QSettings().setValue("ydollar/endpoints", urls);
+}
+
+bool Settings::getYDollarUnitCents() {
+    return QSettings().value("ydollar/unitcents", false).toBool();
+}
+
+void Settings::setYDollarUnitCents(bool cents) {
+    QSettings().setValue("ydollar/unitcents", cents);
+}
+
+bool Settings::getYDollarAdvanced() {
+    return QSettings().value("ydollar/advanced", false).toBool();
+}
+
+void Settings::setYDollarAdvanced(bool advanced) {
+    QSettings().setValue("ydollar/advanced", advanced);
+}
+
+bool Settings::getYDollarBackupPending() {
+    return QSettings().value("ydollar/backuppending", false).toBool();
+}
+
+void Settings::setYDollarBackupPending(bool pending) {
+    QSettings().setValue("ydollar/backuppending", pending);
+}
+
+int Settings::getYDollarRpcVersion() {
+    return YDollarRpc::RPC_VERSION;
 }
 
 bool Settings::getAutoShield() {
