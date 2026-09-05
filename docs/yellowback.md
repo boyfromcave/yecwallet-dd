@@ -5,19 +5,19 @@ conventions the `feature/digidollar` fork follows. The node-side contract lives 
 `ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends on is
 listed once in `src/yellowbackrpc.h`.
 
-## Phase 0 baseline
+## Build status
 
-| Item | Result |
-|---|---|
-| Host | macOS 26.0 (Darwin 25.0.0), arm64, Apple clang 17.0.0 |
-| CMake | **not installed** (`which cmake` → nothing; no `/opt/homebrew/Cellar/cmake`) |
-| Qt 6 (system) | **not installed** (no `/opt/homebrew/Cellar/qt*`, no `~/Qt`) |
-| Qt 6 (static, `build.sh`) | not attempted: `build.sh` fetches and builds Qt 6.5.8 (`build.sh:57`) and needs CMake too |
-| `Qt6::Test` | unknown on this host. Homebrew's `qt` formula ships `qtbase`, which includes the Test module, so a system-Qt build would have it; the static release Qt never does (`scripts/build-qt.sh` passes `-no-feature-testlib`, plan H1) |
-| Build of the unmodified app | **blocked** by the two missing tools; nothing was installed (see the rule below) |
+| Item | Phase 0 (first session) | Now |
+|---|---|---|
+| Host | macOS 26.0 (Darwin 25.0.0), arm64, Apple clang 17.0.0 | same |
+| CMake | not installed | `/opt/homebrew/bin/cmake` (+ ninja) |
+| Qt 6 (system) | not installed | Homebrew `qt` at `/opt/homebrew/opt/qt` (Qt 6, with `Qt6::Test`) |
+| Qt 6 (static, `build.sh`) | not attempted | still not attempted (release packaging only) |
+| Build of the fork | blocked | **compiles**: `build/bin/yecwallet.app` and `build/bin/yellowback_test` |
+| `yellowback_test` (QTest, offscreen) | not built | **passes** (5 cases, including the frozen-contract case) |
 
-Nothing was `brew install`ed. The commands that would build the development configuration on
-this host, once the tools are present:
+Nothing was `brew install`ed by an agent session; the tools appeared on the host between the
+two sessions. The development configuration is built with:
 
 ```bash
 brew install cmake ninja qt            # Homebrew qt = Qt 6 with qtbase (Test), qttools (LinguistTools)
@@ -57,10 +57,48 @@ would pick the mainnet `ye` prefix. The Yellowback code therefore takes the netw
 
 ## Verification status of the fork
 
-The Yellowback code in this fork was written without a compiler or Qt on the development host (see
-the table above). It has been reviewed for C++20 / Qt 6 correctness by hand, but it has **not**
-been compiled or run. The first build on a host with CMake and Qt 6 is expected to surface
-ordinary compile errors; none of the design depends on anything unverified beyond that.
+The Yellowback code was first written without a compiler or Qt on the host; it now **compiles
+cleanly** against the system Qt 6 (`cmake --build build`, no warnings in the Yellowback files)
+and the QTest target passes under `QT_QPA_PLATFORM=offscreen`. What has *not* been done: running
+the GUI against a live regtest node (plan H2), so every `yed_*` reply shape is verified against
+the contract document and the node's `src/rpc/yellowback*.cpp` by reading, not by a round trip.
+
+## Reconciliation with the frozen contract (rpcversion 1)
+
+`ycash-dd/doc/yellowback-rpc.md` was frozen after the wallet was first written. The wallet was
+diffed against it method by method (and against `ycash-dd/src/rpc/yellowbackwallet.cpp` /
+`yellowback.cpp` for exact strings) and changed on every mismatch; the node was not touched.
+
+| Area | Wallet assumed | Contract says | Wallet change |
+|---|---|---|---|
+| `/cosign` success body | `{hex}` (+ optional `signatures`) | `{hex, quorumSignatures, k, complete}` | reads `quorumSignatures` to count progress (falls back to the hex growing), `complete` to stop early, `k` overrides the roster's k |
+| transient co-signer refusal | error text contains `RED-0` or `RED-2` | error text **ends with `(transient)`**, or JSON `transient: true`; 429 rate-limit is transient | `isTransientRefusal` matches the suffix only; `transient` flag still honoured |
+| submit deadline | `expiryHeight - 3`, computed in the wallet; expired when `height >= deadline` | `yed_redeem.deadlineHeight = expiryHeight - 3 - 1`, **inclusive** ("submit by this height") | pending map stores the node's `deadlineHeight`; expiry check is `height > deadline`; the wallet-side fallback is `expiry - EXPIRING_SOON - 1`; `REDEEM_DEADLINE` is 36 |
+| `yed_redeem` result | `hex, vault, roster, requiredBurnCents, expiryHeight` | also `burnCents, changeCents, deadlineHeight`, `roster{index,k,n,pubkeys[]}` | shows `burnCents` (what the tx burns) rather than `requiredBurnCents` |
+| `yed_submitredeem` result | `txid` | `txid, quorumSignatures` | shown in the final page |
+| `yed_estimatecollateral` | always `requiredZat` | `requiredZat` **null** with `error: bad-oracle-price` (or `collateral-out-of-range`, node-only); `lockHeight` and `unlockHeight` both present | handles the null + `error` case as "no estimate", mint button stays disabled |
+| `yed_getstats` | no `lastBreachHeight`; `supplyCapCents` optional | `supplyCapCents` always present (0 = none), `priceHeight`/`priceAge`/`lastBreachHeight`/`mintFrozenUntil` are `-1` when undefined | field added to the header; cap test uses `0 = none` |
+| `yed_getprotectionstatus` | not used | exists: `mintingAllowed`, `dca.band`, `err.active/burnMultiplierBps`, `volatility.frozenUntil` | fetched on every refresh; `mintBlocker` and the Overview's health/ERR lines prefer it over `yed_getstats` |
+| `yed_getinfo.params` | not used; limits compiled in | `minMintCents, maxMintCents, minOutputCents, mintWindow, mintEvalLag, tiers[]…` | `YellowbackController::minMintCents()` etc. read them, with the compiled-in values as fallback; the tier table (`YellowbackFormat::tierName/tierRatio`) is still compiled in |
+| `yed_listpositions` | no `pending` | `pending`, `mintHeight`, `voidReason`, `closeHeight`, `closingTxid`, `burnedCents` | all read; `pending` from the node drives the Redeem/Abort buttons alongside the wallet's own map (survives a wallet restart) |
+| `yed_listtransactions` expired rows | `expired: true` only | `height: -1`, `verdict: "expired"`, `expired: true`; and the node's expired rows carry the **payload** type name (`transfer`), which is not in the contract's `mint\|send\|receive\|burn\|redeem` list | `expired` also set from the verdict; `transfer` rendered as "Sent" |
+| C20 change floor | matched the word `change` | the message carries `(C20)` and names the workable amounts | matches `C20`; the node's amounts are shown instead of recomputed |
+| index unhealthy | only via `yed_getinfo.healthy` | every other command fails with `-1` "yellowback index unhealthy: …; restart with -reindex-yellowback" | any such error takes the tab down immediately |
+| locked wallet | not handled | `walletpassphrase` in the message | a hint is appended on mint/send |
+| `yed_mint` result | `txid, vault, lockHeight, collateralZat` | also `evalHeight, expiryHeight, ownerKeyId, warning` | `warning` and `expiryHeight` shown |
+| addresses | `ye`/`yt`/`yr` by `yed_getinfo.network` | same | no change |
+| `-32601` Method not found | matched | same | no change |
+
+Points the wallet **cannot** use exactly as specified, for the node side to consider:
+
+- The contract lists `yed_listtransactions.type` as `mint|send|receive|burn|redeem`, but an
+  expired transfer row is emitted with `type: "transfer"` (`yellowbackwallet.cpp`, the
+  `PayloadTypeName` branch). The wallet tolerates it; the contract or the node should pick one.
+- `yed_estimatecollateral` can return `error: "collateral-out-of-range"`, which the contract
+  does not list (only `bad-oracle-price`). The wallet shows either verbatim.
+- The wallet's tier names and ratios (1 h / 30 d / 90 d / 180 d / 1 y at 1000–300 %) are
+  compiled in. `yed_getinfo.params.tiers[{tier,blocks,ratioPct}]` carries the ratios and lock
+  lengths, so a future revision should render from it; nothing in the contract blocks that.
 
 ## Conventions
 
@@ -86,14 +124,14 @@ ordinary compile errors; none of the design depends on anything unverified beyon
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
 | `CMakeLists.txt`, `tests/yellowbacktab_test.cpp` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
 
-## Operator `/cosign` request shape assumed by the wizard
+## Operator `/cosign` request shape used by the wizard
 
-`POST <endpoint>/cosign`, body `{"hex": "<owner-signed hex>"}`, `Content-Type: application/json`,
-30-second transfer timeout. A 2xx reply is either `{"hex": "<hex with one more signature>"}` or
-a plain-text hex body. Any other status is `{"error": "<RED-n ...>", "transient": bool}`; a
-missing `transient` falls back to matching `RED-0` / `RED-2` in the error text (plan E2), and a
+As the coordinator (`ycash-dd/contrib/yellowback/yellowback_fed.py`) implements it:
+`POST <endpoint>/cosign`, body `{"hex": "<owner-signed or partially co-signed hex>"}`,
+`Content-Type: application/json`, 30-second transfer timeout. A 2xx reply is
+`{"hex", "quorumSignatures", "k", "complete"}` (a plain-text hex body is still accepted).
+A refusal is 409 `{"error": "<RED-n: ... [(transient)]>", "transient": bool}`, a rate limit is
+429 with `transient: true`; a missing `transient` falls back to the `(transient)` suffix, and a
 network-level failure with no HTTP status is treated as transient too. Operators are contacted
-one at a time in the configured order, each receiving the hex the previous one returned. This
-is the wallet's reading of plan §5 and D16, which fix the body as "owner-signed hex" and the
-reply as "the hex with one more signature" but not the framing; reconcile against the
-coordinator when it exists.
+one at a time in the configured order, each receiving the hex the previous one returned, until
+`quorumSignatures >= k` or `complete`.

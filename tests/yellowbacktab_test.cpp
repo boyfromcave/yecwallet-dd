@@ -9,6 +9,8 @@
 
 #include "yellowbacktab.h"
 #include "yellowbackmodels.h"
+#include "yellowbackcontroller.h"
+#include "yellowbackrpc.h"
 #include "settings.h"
 
 class YellowbackTabTest : public QObject {
@@ -71,6 +73,32 @@ private slots:
         auto t = YellowbackTx::fromJson(nlohmann::json::object());
         QVERIFY(t.txid.isEmpty());
         QCOMPARE(t.confirmations, 0);
+    }
+
+    // The frozen contract (ycash-dd/doc/yellowback-rpc.md): expired rows, node-side pending,
+    // transient co-signer refusals and the inclusive submit deadline.
+    void followsFrozenContract() {
+        auto e = YellowbackTx::fromJson(nlohmann::json::parse(
+            R"({"txid":"cd","height":-1,"confirmations":0,"type":"transfer","verdict":"expired",
+                "yedIn":0,"yedOut":0,"burned":0,"amountCents":500,"expired":true})"));
+        QVERIFY(e.expired);
+        QCOMPARE(e.height, -1);
+        QCOMPARE(YellowbackFormat::typeLabel(e.type), QString("Sent"));
+        QCOMPARE(YellowbackFormat::typeLabel("receive"), QString("Received"));
+
+        auto p = YellowbackPosition::fromJson(nlohmann::json::parse(
+            R"({"vaultTxid":"ab","status":"CLOSED","pending":true,"closeHeight":77,"closingTxid":"ef","burnedCents":10000})"));
+        QVERIFY(p.pending);
+        QCOMPARE(p.closeHeight, 77);
+        QCOMPARE(p.burnedCents, (qint64)10000);
+
+        QVERIFY(YellowbackController::isTransientRefusal("RED-0: index behind the chain (transient)"));
+        QVERIFY(!YellowbackController::isTransientRefusal("RED-3: burn below required"));
+        QVERIFY(YellowbackController::isMethodNotFound("Method not found (Yellowback requires -experimentalfeatures -yellowback)"));
+        QVERIFY(YellowbackController::isIndexUnhealthy("yellowback index unhealthy: corrupt; restart with -reindex-yellowback"));
+
+        QCOMPARE(YellowbackRpc::REDEEM_DEADLINE, 36);   // expiry - EXPIRING_SOON - 1, relative to the build height
+        QCOMPARE(QString(YellowbackRpc::Cosign::RESP_QUORUM_SIGNATURES), QString("quorumSignatures"));
     }
 };
 
