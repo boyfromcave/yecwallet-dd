@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>YDollarSettings</class>
- <widget class="QWidget" name="YDollarSettings">
+ <class>YellowbackSettings</class>
+ <widget class="QWidget" name="YellowbackSettings">
   <layout class="QVBoxLayout" name="settingsLayout">
    <item>
     <widget class="QGroupBox" name="grpOperators">
@@ -10,14 +10,14 @@
       <item><widget class="QPlainTextEdit" name="txtEndpoints"/></item>
       <item>
        <layout class="QHBoxLayout" name="opsButtons">
-        <item><widget class="QPushButton" name="btnVerify"><property name="text"><string>Check against the roster (yd_getroster)</string></property></widget></item>
+        <item><widget class="QPushButton" name="btnVerify"><property name="text"><string>Check against the roster (yed_getroster)</string></property></widget></item>
         <item><widget class="QLabel" name="lblEndpointsStatus"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget></item>
        </layout>
       </item>
      </layout>
     </widget>
    </item>
-   <item><widget class="QCheckBox" name="chkUnitCents"><property name="text"><string>Show YDollar amounts in cents instead of dollars</string></property></widget></item>
+   <item><widget class="QCheckBox" name="chkUnitCents"><property name="text"><string>Show YED amounts in cents instead of dollars</string></property></widget></item>
    <item><widget class="QCheckBox" name="chkAdvanced"><property name="text"><string>Show advanced details (raw transaction hex, roster script)</string></property></widget></item>
    <item>
     <widget class="QLabel" name="lblRpcVersion"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget>
@@ -29,7 +29,7 @@
      <property name="text"><string>The node needs both of these lines in its ycash.conf:
 
 experimentalfeatures=1
-ydollar=1</string></property>
+yellowback=1</string></property>
     </widget>
    </item>
    <item>

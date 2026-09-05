@@ -74,16 +74,16 @@ public:
     QString get_theme_name();
     void set_theme_name(QString theme_name);
 
-    // YDollar (plan §4.7 Settings row). Persisted in QSettings under "ydollar/".
-    QStringList getYDollarEndpoints();               // operator /cosign base URLs, default empty
-    void        setYDollarEndpoints(const QStringList& urls);
-    bool        getYDollarUnitCents();               // display cents instead of dollars
-    void        setYDollarUnitCents(bool cents);
-    bool        getYDollarAdvanced();                // show raw hex etc.
-    void        setYDollarAdvanced(bool advanced);
-    bool        getYDollarBackupPending();           // wallet.dat backup nag after a mint
-    void        setYDollarBackupPending(bool pending);
-    static int  getYDollarRpcVersion();              // the rpcversion this build understands
+    // Yellowback (plan §4.7 Settings row). Persisted in QSettings under "yellowback/".
+    QStringList getYellowbackEndpoints();               // operator /cosign base URLs, default empty
+    void        setYellowbackEndpoints(const QStringList& urls);
+    bool        getYellowbackUnitCents();               // display cents instead of dollars
+    void        setYellowbackUnitCents(bool cents);
+    bool        getYellowbackAdvanced();                // show raw hex etc.
+    void        setYellowbackAdvanced(bool advanced);
+    bool        getYellowbackBackupPending();           // wallet.dat backup nag after a mint
+    void        setYellowbackBackupPending(bool pending);
+    static int  getYellowbackRpcVersion();              // the rpcversion this build understands
             
     bool    isSaplingActive();
 

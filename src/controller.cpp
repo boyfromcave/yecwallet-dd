@@ -6,7 +6,7 @@
 #include "turnstile.h"
 #include "version.h"
 #include "rescanprogress.h"
-#include "ydollarcontroller.h"
+#include "yellowbackcontroller.h"
 
 using json = nlohmann::json;
 
@@ -56,8 +56,8 @@ Controller::Controller(MainWindow* main) {
     // Crate the ZcashdRPC 
     zrpc = new ZcashdRPC();
 
-    // YDollar: every yd_* call goes through this, on the same Connection
-    ydollar = new YDollarController(main, this);
+    // Yellowback: every yed_* call goes through this, on the same Connection
+    yellowback = new YellowbackController(main, this);
 
     // Initialize the migration status to unavailable.
     this->migrationStatus.available = false;
@@ -72,7 +72,7 @@ Controller::~Controller() {
 
     delete model;
     delete zrpc;
-    delete ydollar;
+    delete yellowback;
 }
 
 void Controller::setEZcashd(QProcess* p) {
@@ -82,7 +82,7 @@ void Controller::setEZcashd(QProcess* p) {
 
     ezcashd = p;
     
-    if (ezcashd && ui->tabWidget->indexOf(main->zcashdtab) == -1) {   // YDollar tab now sits at index 4
+    if (ezcashd && ui->tabWidget->indexOf(main->zcashdtab) == -1) {   // Yellowback tab now sits at index 4
         ui->tabWidget->addTab(main->zcashdtab, "ycashd");
     }
 }
@@ -108,8 +108,8 @@ void Controller::setConnection(Connection* c) {
     if (Settings::getInstance()->getCheckForUpdates())
         checkForUpdate();
 
-    // YDollar: version check and conf repair offer, then its own first refresh
-    ydollar->onConnected();
+    // Yellowback: version check and conf repair offer, then its own first refresh
+    yellowback->onConnected();
 
     // Force update, because this might be coming from a settings update
     // where we need to immediately refresh
@@ -282,7 +282,7 @@ void Controller::getInfoThenRefresh(bool force) {
             refreshAddresses();     // This calls refreshZSentTransactions() and refreshReceivedZTrans()
             refreshTransactions();
             refreshMigration();     // Sapling turnstile migration status.
-            ydollar->refresh(force); // YDollar index, balance, positions, transactions
+            yellowback->refresh(force); // Yellowback index, balance, positions, transactions
         }
 
         int connections = reply["connections"].get<json::number_integer_t>();
@@ -639,8 +639,8 @@ void Controller::watchTxStatus() {
     if (!zrpc->haveConnection()) 
         return noConnection();
 
-    // YDollar: a pending redemption keeps the quick timer on, like a watched opid does
-    if (ydollar->watchPending())
+    // Yellowback: a pending redemption keeps the quick timer on, like a watched opid does
+    if (yellowback->watchPending())
         txTimer->start(Settings::quickUpdateSpeed);
     else if (watchingOps.isEmpty() && txTimer->interval() != Settings::updateSpeed)
         txTimer->start(Settings::updateSpeed);

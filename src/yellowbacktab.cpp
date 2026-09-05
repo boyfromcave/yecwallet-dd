@@ -1,40 +1,40 @@
-#include "ydollartab.h"
-#include "ydollarcontroller.h"
-#include "ydollarmodels.h"
-#include "ydollarrpc.h"
-#include "ydollarredeemwizard.h"
+#include "yellowbacktab.h"
+#include "yellowbackcontroller.h"
+#include "yellowbackmodels.h"
+#include "yellowbackrpc.h"
+#include "yellowbackredeemwizard.h"
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "addressbook.h"
 #include "settings.h"
 
-#include "ui_ydollartab.h"
-#include "ui_ydollaroverview.h"
-#include "ui_ydollarreceive.h"
-#include "ui_ydollarsend.h"
-#include "ui_ydollarmint.h"
-#include "ui_ydollarpositions.h"
-#include "ui_ydollartransactions.h"
-#include "ui_ydollarredeem.h"
-#include "ui_ydollarsettings.h"
+#include "ui_yellowbacktab.h"
+#include "ui_yellowbackoverview.h"
+#include "ui_yellowbackreceive.h"
+#include "ui_yellowbacksend.h"
+#include "ui_yellowbackmint.h"
+#include "ui_yellowbackpositions.h"
+#include "ui_yellowbacktransactions.h"
+#include "ui_yellowbackredeem.h"
+#include "ui_yellowbacksettings.h"
 
 using json = nlohmann::json;
 
-YDollarTab::YDollarTab(MainWindow* main, QWidget* parent) : QWidget(parent) {
+YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent) {
     this->main = main;
-    ui = new Ui::YDollarTab();
+    ui = new Ui::YellowbackTab();
     ui->setupUi(this);
 
     setupPages();
 
-    ui->lblBanner->setText(tr("YDollar: waiting for the node..."));
+    ui->lblBanner->setText(tr("Yellowback: waiting for the node..."));
     ui->lblBanner->setVisible(true);
     ui->wBackupNag->setVisible(false);
     setActionsEnabled(false);
     updateBackupNag();
 }
 
-YDollarTab::~YDollarTab() {
+YellowbackTab::~YellowbackTab() {
     delete uiOverview;
     delete uiReceive;
     delete uiSend;
@@ -48,18 +48,18 @@ YDollarTab::~YDollarTab() {
 
 // ── Construction ──────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupPages() {
+void YellowbackTab::setupPages() {
     for (int i = 0; i < PageCount; i++)
         pages[i] = new QWidget(this);
 
-    uiOverview  = new Ui::YDollarOverview();     uiOverview->setupUi(pages[Overview]);
-    uiReceive   = new Ui::YDollarReceive();      uiReceive->setupUi(pages[Receive]);
-    uiSend      = new Ui::YDollarSend();         uiSend->setupUi(pages[Send]);
-    uiMint      = new Ui::YDollarMint();         uiMint->setupUi(pages[Mint]);
-    uiPositions = new Ui::YDollarPositions();    uiPositions->setupUi(pages[Vaults]);
-    uiTx        = new Ui::YDollarTransactions(); uiTx->setupUi(pages[Transactions]);
-    uiRedeem    = new Ui::YDollarRedeem();       uiRedeem->setupUi(pages[Redeem]);
-    uiSettings  = new Ui::YDollarSettings();     uiSettings->setupUi(pages[Settings]);
+    uiOverview  = new Ui::YellowbackOverview();     uiOverview->setupUi(pages[Overview]);
+    uiReceive   = new Ui::YellowbackReceive();      uiReceive->setupUi(pages[Receive]);
+    uiSend      = new Ui::YellowbackSend();         uiSend->setupUi(pages[Send]);
+    uiMint      = new Ui::YellowbackMint();         uiMint->setupUi(pages[Mint]);
+    uiPositions = new Ui::YellowbackPositions();    uiPositions->setupUi(pages[Vaults]);
+    uiTx        = new Ui::YellowbackTransactions(); uiTx->setupUi(pages[Transactions]);
+    uiRedeem    = new Ui::YellowbackRedeem();       uiRedeem->setupUi(pages[Redeem]);
+    uiSettings  = new Ui::YellowbackSettings();     uiSettings->setupUi(pages[Settings]);
 
     ui->subTabs->addTab(pages[Overview],     tr("Overview"));
     ui->subTabs->addTab(pages[Receive],      tr("Receive"));
@@ -88,13 +88,13 @@ void YDollarTab::setupPages() {
         if (QMessageBox::question(this, tr("Confirm backup"),
                 tr("Do you have a copy of wallet.dat made after your most recent mint, stored somewhere other than this computer?"),
                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
-            Settings::getInstance()->setYDollarBackupPending(false);
+            Settings::getInstance()->setYellowbackBackupPending(false);
             updateBackupNag();
         }
     });
 }
 
-void YDollarTab::setController(YDollarController* controller) {
+void YellowbackTab::setController(YellowbackController* controller) {
     ctl = controller;
     if (ctl == nullptr) return;
 
@@ -102,24 +102,24 @@ void YDollarTab::setController(YDollarController* controller) {
     uiTx->tblTransactions->setModel(ctl->transactionsModel());
     uiPositions->tblPositions->setModel(ctl->positionsModel());
 
-    QObject::connect(ctl, &YDollarController::availabilityChanged, this, [=, this](bool, const QString&) {
+    QObject::connect(ctl, &YellowbackController::availabilityChanged, this, [=, this](bool, const QString&) {
         updateBanner();
         updateMintGate();
     });
-    QObject::connect(ctl, &YDollarController::infoUpdated,         this, [=, this]() { updateBanner(); updateOverview(); });
-    QObject::connect(ctl, &YDollarController::statsUpdated,        this, [=, this]() { updateOverview(); updateMintGate(); });
-    QObject::connect(ctl, &YDollarController::balanceUpdated,      this, [=, this]() { updateBalances(); });
-    QObject::connect(ctl, &YDollarController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); });
-    QObject::connect(ctl, &YDollarController::transactionsUpdated, this, [=, this]() {
+    QObject::connect(ctl, &YellowbackController::infoUpdated,         this, [=, this]() { updateBanner(); updateOverview(); });
+    QObject::connect(ctl, &YellowbackController::statsUpdated,        this, [=, this]() { updateOverview(); updateMintGate(); });
+    QObject::connect(ctl, &YellowbackController::balanceUpdated,      this, [=, this]() { updateBalances(); });
+    QObject::connect(ctl, &YellowbackController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); });
+    QObject::connect(ctl, &YellowbackController::transactionsUpdated, this, [=, this]() {
         uiOverview->tblRecent->resizeColumnsToContents();
         uiTx->tblTransactions->resizeColumnsToContents();
     });
-    QObject::connect(ctl, &YDollarController::pendingChanged,      this, [=, this]() { updatePositions(); updateRedeemPage(); });
-    QObject::connect(ctl, &YDollarController::pendingExpired,      this, [=, this](const QString& vault) {
+    QObject::connect(ctl, &YellowbackController::pendingChanged,      this, [=, this]() { updatePositions(); updateRedeemPage(); });
+    QObject::connect(ctl, &YellowbackController::pendingExpired,      this, [=, this](const QString& vault) {
         auto r = QMessageBox::warning(this, tr("Redemption deadline passed"),
             tr("The redemption of vault %1 was not submitted within %2 blocks and can no longer be broadcast. "
-               "Abort it now to release the YDollar it reserved? You can then start over.")
-               .arg(vault).arg(YDollarRpc::REDEEM_DEADLINE),
+               "Abort it now to release the YED it reserved? You can then start over.")
+               .arg(vault).arg(YellowbackRpc::REDEEM_DEADLINE),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
         if (r == QMessageBox::Yes) abortPending(vault);
     });
@@ -135,9 +135,9 @@ void YDollarTab::setController(YDollarController* controller) {
 
 // ── Banner / enabling ─────────────────────────────────────────────────────────────────────
 
-void YDollarTab::updateBanner() {
+void YellowbackTab::updateBanner() {
     if (ctl == nullptr) {
-        ui->lblBanner->setText(tr("YDollar: not connected."));
+        ui->lblBanner->setText(tr("Yellowback: not connected."));
         ui->lblBanner->setVisible(true);
         setActionsEnabled(false);
         return;
@@ -145,11 +145,11 @@ void YDollarTab::updateBanner() {
     bool avail = ctl->isAvailable();
     ui->lblBanner->setVisible(!avail);
     if (!avail)
-        ui->lblBanner->setText(tr("YDollar unavailable: ") % ctl->unavailableReason());
+        ui->lblBanner->setText(tr("Yellowback unavailable: ") % ctl->unavailableReason());
     setActionsEnabled(avail);
 }
 
-void YDollarTab::setActionsEnabled(bool enabled) {
+void YellowbackTab::setActionsEnabled(bool enabled) {
     actionsEnabled = enabled;
     uiReceive->btnNewAddress->setEnabled(enabled);
     uiSend->btnSend->setEnabled(enabled);
@@ -161,13 +161,13 @@ void YDollarTab::setActionsEnabled(bool enabled) {
     uiSettings->btnVerify->setEnabled(enabled);
 }
 
-void YDollarTab::updateBackupNag() {
-    ui->wBackupNag->setVisible(Settings::getInstance()->getYDollarBackupPending());
+void YellowbackTab::updateBackupNag() {
+    ui->wBackupNag->setVisible(Settings::getInstance()->getYellowbackBackupPending());
 }
 
 // ── Overview ──────────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupOverview() {
+void YellowbackTab::setupOverview() {
     uiOverview->tblRecent->horizontalHeader()->setStretchLastSection(true);
     uiOverview->tblRecent->setContextMenuPolicy(Qt::CustomContextMenu);
     QObject::connect(uiOverview->tblRecent, &QTableView::customContextMenuRequested, [=, this](const QPoint& pos) {
@@ -175,9 +175,9 @@ void YDollarTab::setupOverview() {
     });
 }
 
-void YDollarTab::updateOverview() {
+void YellowbackTab::updateOverview() {
     if (ctl == nullptr) return;
-    using namespace YDollarRpc::Stats;
+    using namespace YellowbackRpc::Stats;
     const json& s = ctl->stats();
 
     uiOverview->lblNetwork->setText(ctl->network().isEmpty() ? "-" : ctl->network());
@@ -185,46 +185,46 @@ void YDollarTab::updateOverview() {
         (ctl->isSynced() ? tr(" (synced)") : tr(" (syncing)")));
     uiOverview->lblYecBalance->setText(Settings::getZECUSDDisplayFormat(ctl->yecBalance()));
 
-    if (YDollarJson::isNull(s, PRICE_MICRO_USD)) {
+    if (YellowbackJson::isNull(s, PRICE_MICRO_USD)) {
         uiOverview->lblYecPrice->setText(tr("no fresh price"));
         uiOverview->lblPriceAge->setText("-");
     } else {
-        double price = (double)YDollarJson::toInt(s, PRICE_MICRO_USD) / 1000000.0;
+        double price = (double)YellowbackJson::toInt(s, PRICE_MICRO_USD) / 1000000.0;
         uiOverview->lblYecPrice->setText("$" % QString::number(price, 'f', 4) % tr(" per YEC"));
-        qint64 age = YDollarJson::toInt(s, PRICE_AGE);
+        qint64 age = YellowbackJson::toInt(s, PRICE_AGE);
         uiOverview->lblPriceAge->setText(tr("%1 blocks (~%2 min), from height %3")
-            .arg(age).arg(age * YDollarRpc::SECONDS_PER_BLOCK / 60).arg(YDollarJson::toInt(s, PRICE_HEIGHT)));
+            .arg(age).arg(age * YellowbackRpc::SECONDS_PER_BLOCK / 60).arg(YellowbackJson::toInt(s, PRICE_HEIGHT)));
     }
 
-    qint64 health = YDollarJson::toInt(s, HEALTH_PCT);
+    qint64 health = YellowbackJson::toInt(s, HEALTH_PCT);
     uiOverview->lblHealth->setText(QString::number(health) % " %" %
         (health < 100 ? tr("  (below 100 %: emergency redemption ratio in effect, minting paused)") : ""));
-    uiOverview->lblDca->setText(QString::number((double)YDollarJson::toInt(s, DCA_BPS, 10000) / 10000.0, 'f', 2) % "x");
-    qint64 err = YDollarJson::toInt(s, ERR_BPS);
+    uiOverview->lblDca->setText(QString::number((double)YellowbackJson::toInt(s, DCA_BPS, 10000) / 10000.0, 'f', 2) % "x");
+    qint64 err = YellowbackJson::toInt(s, ERR_BPS);
     uiOverview->lblErr->setText(err > 0 ? tr("active: +%1 % burn required").arg((double)err / 100.0, 0, 'f', 2) : tr("inactive"));
 
     QString blocker = ctl->mintBlocker(0);
     uiOverview->lblMintStatus->setText(blocker.isEmpty() ? tr("open") : tr("paused: ") % blocker);
 
-    uiOverview->lblSupply->setText(YDollarFormat::cents(YDollarJson::toInt(s, SUPPLY_CENTS)) % " / " %
-                                   YDollarFormat::zec(YDollarJson::toInt(s, COLLATERAL_ZAT)));
-    uiOverview->lblVaults->setText(QString::number(YDollarJson::toInt(s, ACTIVE_VAULTS)) % " / " %
-                                   QString::number(YDollarJson::toInt(s, VOID_VAULTS)));
+    uiOverview->lblSupply->setText(YellowbackFormat::cents(YellowbackJson::toInt(s, SUPPLY_CENTS)) % " / " %
+                                   YellowbackFormat::zec(YellowbackJson::toInt(s, COLLATERAL_ZAT)));
+    uiOverview->lblVaults->setText(QString::number(YellowbackJson::toInt(s, ACTIVE_VAULTS)) % " / " %
+                                   QString::number(YellowbackJson::toInt(s, VOID_VAULTS)));
 
     uiMint->lblYecAvailable->setText(Settings::getZECDisplayFormat(ctl->yecBalance()));
 }
 
-void YDollarTab::updateBalances() {
+void YellowbackTab::updateBalances() {
     if (ctl == nullptr) return;
-    uiOverview->lblYdConfirmed->setText(YDollarFormat::cents(ctl->confirmedCents()));
-    uiOverview->lblYdUnconfirmed->setText(YDollarFormat::cents(ctl->unconfirmedCents()));
-    uiSend->lblAvailable->setText(YDollarFormat::cents(ctl->confirmedCents()) %
-        (ctl->unconfirmedCents() > 0 ? tr("  (+ %1 unconfirmed, not spendable yet)").arg(YDollarFormat::cents(ctl->unconfirmedCents())) : ""));
+    uiOverview->lblYedConfirmed->setText(YellowbackFormat::cents(ctl->confirmedCents()));
+    uiOverview->lblYedUnconfirmed->setText(YellowbackFormat::cents(ctl->unconfirmedCents()));
+    uiSend->lblAvailable->setText(YellowbackFormat::cents(ctl->confirmedCents()) %
+        (ctl->unconfirmedCents() > 0 ? tr("  (+ %1 unconfirmed, not spendable yet)").arg(YellowbackFormat::cents(ctl->unconfirmedCents())) : ""));
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupReceive() {
+void YellowbackTab::setupReceive() {
     QObject::connect(uiReceive->btnNewAddress, &QPushButton::clicked, [=, this]() { newReceiveAddress(); });
     QObject::connect(uiReceive->btnCopy, &QPushButton::clicked, [=, this]() {
         if (receiveAddress.isEmpty()) return;
@@ -240,27 +240,27 @@ void YDollarTab::setupReceive() {
     uiReceive->txtLabel->setValidator(v);
 }
 
-void YDollarTab::newReceiveAddress() {
+void YellowbackTab::newReceiveAddress() {
     if (ctl == nullptr) return;
     uiReceive->lblReceiveStatus->setText(tr("Creating address..."));
     ctl->getNewAddress(
         [=, this](const json& r) {
             QString addr = r.is_string() ? QString::fromStdString(r.get<json::string_t>())
-                                         : YDollarJson::toStr(r, YDollarRpc::ValidateAddress::ADDRESS);
+                                         : YellowbackJson::toStr(r, YellowbackRpc::ValidateAddress::ADDRESS);
             receiveAddress = addr;
             uiReceive->lblAddress->setText(addr);
             uiReceive->lblQr->setQrcodeString(addr);
-            uiReceive->lblReceiveStatus->setText(tr("This is a %1 YDollar address (prefix %2). Send only YDollar here.")
+            uiReceive->lblReceiveStatus->setText(tr("This is a %1 Yellowback address (prefix %2). Send only YED here.")
                 .arg(ctl->network()).arg(ctl->addressPrefix()));
         },
         [=, this](const QString& e) {
-            uiReceive->lblReceiveStatus->setText(tr("yd_getnewaddress failed: ") % e);
+            uiReceive->lblReceiveStatus->setText(tr("yed_getnewaddress failed: ") % e);
         });
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────────────────
 
-bool YDollarTab::parseDollars(const QString& text, qint64* cents) {
+bool YellowbackTab::parseDollars(const QString& text, qint64* cents) {
     QString t = text.trimmed();
     t.remove('$').remove(',').remove(' ');
     static const QRegularExpression re("^(\\d{1,9})(?:\\.(\\d{1,2}))?$");
@@ -277,7 +277,7 @@ bool YDollarTab::parseDollars(const QString& text, qint64* cents) {
     return true;
 }
 
-void YDollarTab::setupSend() {
+void YellowbackTab::setupSend() {
     QObject::connect(uiSend->btnClear, &QPushButton::clicked, [=, this]() {
         uiSend->txtRecipient->clear();
         uiSend->txtAmount->clear();
@@ -291,62 +291,62 @@ void YDollarTab::setupSend() {
         QString addr = uiSend->txtRecipient->text().trimmed();
         if (addr.isEmpty()) { uiSend->lblSendHint->clear(); return; }
         if (ctl->isShieldedAddress(addr))
-            uiSend->lblSendHint->setText(tr("That is a Ycash address, not a YDollar address. YDollar cannot be sent to s1..., ys... or z... addresses; ask the recipient for their YDollar (%1...) address.").arg(ctl->addressPrefix()));
-        else if (!ctl->looksLikeYDollarAddress(addr))
-            uiSend->lblSendHint->setText(tr("A %1 YDollar address starts with %2.").arg(ctl->network()).arg(ctl->addressPrefix()));
+            uiSend->lblSendHint->setText(tr("That is a Ycash address, not a Yellowback address. YED cannot be sent to s1..., ys... or z... addresses; ask the recipient for their Yellowback (%1...) address.").arg(ctl->addressPrefix()));
+        else if (!ctl->looksLikeYellowbackAddress(addr))
+            uiSend->lblSendHint->setText(tr("A %1 Yellowback address starts with %2.").arg(ctl->network()).arg(ctl->addressPrefix()));
         else
             uiSend->lblSendHint->clear();
     };
     QObject::connect(uiSend->txtRecipient, &QLineEdit::textChanged, validateLive);
 }
 
-void YDollarTab::doSend() {
+void YellowbackTab::doSend() {
     if (ctl == nullptr || !actionsEnabled) return;
     QString addr = uiSend->txtRecipient->text().trimmed();
     qint64 cents = 0;
 
     if (addr.isEmpty()) { uiSend->lblSendHint->setText(tr("Enter a recipient.")); return; }
     if (ctl->isShieldedAddress(addr)) {
-        uiSend->lblSendHint->setText(tr("Refused: %1 is a Ycash address. YDollar can only be sent to a YDollar (%2...) address.").arg(addr).arg(ctl->addressPrefix()));
+        uiSend->lblSendHint->setText(tr("Refused: %1 is a Ycash address. YED can only be sent to a Yellowback (%2...) address.").arg(addr).arg(ctl->addressPrefix()));
         return;
     }
-    if (!ctl->looksLikeYDollarAddress(addr)) {
-        uiSend->lblSendHint->setText(tr("Refused: not a %1 YDollar address (expected prefix %2).").arg(ctl->network()).arg(ctl->addressPrefix()));
+    if (!ctl->looksLikeYellowbackAddress(addr)) {
+        uiSend->lblSendHint->setText(tr("Refused: not a %1 Yellowback address (expected prefix %2).").arg(ctl->network()).arg(ctl->addressPrefix()));
         return;
     }
     if (!parseDollars(uiSend->txtAmount->text(), &cents) || cents <= 0) {
         uiSend->lblSendHint->setText(tr("Enter an amount in dollars, e.g. 12.50."));
         return;
     }
-    if (cents < YDollarRpc::MIN_OUTPUT_CENTS) {
-        uiSend->lblSendHint->setText(tr("The smallest YDollar payment is %1.").arg(YDollarFormat::cents(YDollarRpc::MIN_OUTPUT_CENTS)));
+    if (cents < YellowbackRpc::MIN_OUTPUT_CENTS) {
+        uiSend->lblSendHint->setText(tr("The smallest YED payment is %1.").arg(YellowbackFormat::cents(YellowbackRpc::MIN_OUTPUT_CENTS)));
         return;
     }
     if (cents > ctl->confirmedCents()) {
-        uiSend->lblSendHint->setText(tr("Only %1 is confirmed and spendable.").arg(YDollarFormat::cents(ctl->confirmedCents())));
+        uiSend->lblSendHint->setText(tr("Only %1 is confirmed and spendable.").arg(YellowbackFormat::cents(ctl->confirmedCents())));
         return;
     }
     // Change floor (plan C20): the node refuses when change would be under $1.00. Say so first.
     qint64 change = ctl->confirmedCents() - cents;
-    if (change > 0 && change < YDollarRpc::MIN_OUTPUT_CENTS) {
+    if (change > 0 && change < YellowbackRpc::MIN_OUTPUT_CENTS) {
         uiSend->lblSendHint->setText(tr("This amount would leave %1 of change, below the $1.00 minimum. Send exactly %2 (everything) or at most %3.")
-            .arg(YDollarFormat::cents(change))
-            .arg(YDollarFormat::cents(ctl->confirmedCents()))
-            .arg(YDollarFormat::cents(ctl->confirmedCents() - YDollarRpc::MIN_OUTPUT_CENTS)));
+            .arg(YellowbackFormat::cents(change))
+            .arg(YellowbackFormat::cents(ctl->confirmedCents()))
+            .arg(YellowbackFormat::cents(ctl->confirmedCents() - YellowbackRpc::MIN_OUTPUT_CENTS)));
         return;
     }
     uiSend->lblSendHint->clear();
 
     ctl->validateAddress(addr,
         [=, this](const json& v) {
-            if (!YDollarJson::toBool(v, YDollarRpc::ValidateAddress::ISVALID)) {
+            if (!YellowbackJson::toBool(v, YellowbackRpc::ValidateAddress::ISVALID)) {
                 uiSend->lblSendHint->setText(tr("The node rejected this address as invalid."));
                 return;
             }
-            QString text = tr("Send %1 of YDollar to\n%2\n\nThe YEC fee is paid from your transparent YEC. "
+            QString text = tr("Send %1 of YED to\n%2\n\nThe YEC fee is paid from your transparent YEC. "
                               "This transfer is transparent and cannot be undone.")
-                              .arg(YDollarFormat::cents(cents)).arg(addr);
-            if (QMessageBox::question(this, tr("Confirm YDollar transfer"), text,
+                              .arg(YellowbackFormat::cents(cents)).arg(addr);
+            if (QMessageBox::question(this, tr("Confirm Yellowback transfer"), text,
                     QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
                 return;
 
@@ -355,33 +355,33 @@ void YDollarTab::doSend() {
             ctl->send(addr, cents,
                 [=, this](const json& r) {
                     uiSend->btnSend->setEnabled(actionsEnabled);
-                    QString txid = YDollarJson::toStr(r, YDollarRpc::SendResult::TXID);
+                    QString txid = YellowbackJson::toStr(r, YellowbackRpc::SendResult::TXID);
                     uiSend->lblSendStatus->setText(tr("Sent. txid: ") % txid);
                     uiSend->txtAmount->clear();
                     ctl->refresh(true);
                 },
                 [=, this](const QString& e) {
                     uiSend->btnSend->setEnabled(actionsEnabled);
-                    QString msg = tr("yd_send failed: ") % e;
-                    if (e.contains(YDollarRpc::Errors::CHANGE_FLOOR, Qt::CaseInsensitive))
+                    QString msg = tr("yed_send failed: ") % e;
+                    if (e.contains(YellowbackRpc::Errors::CHANGE_FLOOR, Qt::CaseInsensitive))
                         msg += tr("\n\nThe change left over would be below $1.00. Send exactly %1 (everything) or at most %2.")
-                            .arg(YDollarFormat::cents(ctl->confirmedCents()))
-                            .arg(YDollarFormat::cents(ctl->confirmedCents() - YDollarRpc::MIN_OUTPUT_CENTS));
+                            .arg(YellowbackFormat::cents(ctl->confirmedCents()))
+                            .arg(YellowbackFormat::cents(ctl->confirmedCents() - YellowbackRpc::MIN_OUTPUT_CENTS));
                     uiSend->lblSendStatus->setText(msg);
-                    QMessageBox::critical(this, tr("YDollar transfer failed"), msg);
+                    QMessageBox::critical(this, tr("Yellowback transfer failed"), msg);
                 });
         },
         [=, this](const QString& e) {
-            uiSend->lblSendHint->setText(tr("yd_validateaddress failed: ") % e);
+            uiSend->lblSendHint->setText(tr("yed_validateaddress failed: ") % e);
         });
 }
 
 // ── Mint ──────────────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupMint() {
-    for (int t = 0; t < YDollarRpc::TIER_COUNT; t++)
+void YellowbackTab::setupMint() {
+    for (int t = 0; t < YellowbackRpc::TIER_COUNT; t++)
         uiMint->cmbTier->addItem(tr("Tier %1: %2 lock, %3 collateral").arg(t)
-            .arg(YDollarFormat::tierName(t)).arg(YDollarFormat::tierRatio(t)), t);
+            .arg(YellowbackFormat::tierName(t)).arg(YellowbackFormat::tierRatio(t)), t);
 
     estimateTimer = new QTimer(this);
     estimateTimer->setSingleShot(true);
@@ -396,7 +396,7 @@ void YDollarTab::setupMint() {
     uiMint->btnMint->setEnabled(false);
 }
 
-void YDollarTab::updateMintGate() {
+void YellowbackTab::updateMintGate() {
     if (ctl == nullptr) return;
     qint64 cents = 0;
     bool haveAmount = parseDollars(uiMint->txtAmount->text(), &cents);
@@ -406,7 +406,7 @@ void YDollarTab::updateMintGate() {
     uiMint->btnMint->setEnabled(actionsEnabled && blocker.isEmpty() && estimateZat >= 0 && haveAmount && cents == estimateCents);
 }
 
-void YDollarTab::requestEstimate() {
+void YellowbackTab::requestEstimate() {
     if (ctl == nullptr) return;
     qint64 cents = 0;
     int tier = uiMint->cmbTier->currentData().toInt();
@@ -414,16 +414,16 @@ void YDollarTab::requestEstimate() {
         estimateZat = -1;
         uiMint->lblCollateral->setText("-");
         uiMint->lblUnlock->setText("-");
-        uiMint->lblRatio->setText(YDollarFormat::tierRatio(tier));
+        uiMint->lblRatio->setText(YellowbackFormat::tierRatio(tier));
         uiMint->lblPrice->setText("-");
         uiMint->lblMintHint->clear();
         updateMintGate();
         return;
     }
-    if (cents < YDollarRpc::MIN_MINT_CENTS || cents > YDollarRpc::MAX_MINT_CENTS) {
+    if (cents < YellowbackRpc::MIN_MINT_CENTS || cents > YellowbackRpc::MAX_MINT_CENTS) {
         estimateZat = -1;
         uiMint->lblMintHint->setText(tr("A mint must be between %1 and %2.")
-            .arg(YDollarFormat::cents(YDollarRpc::MIN_MINT_CENTS)).arg(YDollarFormat::cents(YDollarRpc::MAX_MINT_CENTS)));
+            .arg(YellowbackFormat::cents(YellowbackRpc::MIN_MINT_CENTS)).arg(YellowbackFormat::cents(YellowbackRpc::MAX_MINT_CENTS)));
         updateMintGate();
         return;
     }
@@ -433,34 +433,34 @@ void YDollarTab::requestEstimate() {
     ctl->estimateCollateral(cents, tier,
         [=, this](const json& e) {
             if (seq != estimateSeq) return;      // a newer request is in flight
-            using namespace YDollarRpc::Estimate;
+            using namespace YellowbackRpc::Estimate;
             estimateCents = cents;
             estimateTier  = tier;
-            estimateZat   = YDollarJson::toInt(e, REQUIRED_ZAT, -1);
-            uiMint->lblCollateral->setText(YDollarFormat::zec(estimateZat) %
-                tr("  (%1 % ratio x %2 DCA)").arg(YDollarJson::toInt(e, RATIO_PCT))
-                    .arg((double)YDollarJson::toInt(e, DCA_BPS, 10000) / 10000.0, 0, 'f', 2));
-            uiMint->lblRatio->setText(QString::number(YDollarJson::toInt(e, RATIO_PCT)) % " %");
-            uiMint->lblPrice->setText("$" % QString::number((double)YDollarJson::toInt(e, PRICE_MICRO_USD) / 1000000.0, 'f', 4) % tr(" per YEC"));
-            int unlock = (int)YDollarJson::toInt(e, UNLOCK_HEIGHT);
-            uiMint->lblUnlock->setText(YDollarFormat::heightWithEstimate(unlock, ctl->height()) %
-                tr("  — %1 blocks; dates are estimates at 75 s/block").arg(YDollarJson::toInt(e, LOCK_BLOCKS)));
+            estimateZat   = YellowbackJson::toInt(e, REQUIRED_ZAT, -1);
+            uiMint->lblCollateral->setText(YellowbackFormat::zec(estimateZat) %
+                tr("  (%1 % ratio x %2 DCA)").arg(YellowbackJson::toInt(e, RATIO_PCT))
+                    .arg((double)YellowbackJson::toInt(e, DCA_BPS, 10000) / 10000.0, 0, 'f', 2));
+            uiMint->lblRatio->setText(QString::number(YellowbackJson::toInt(e, RATIO_PCT)) % " %");
+            uiMint->lblPrice->setText("$" % QString::number((double)YellowbackJson::toInt(e, PRICE_MICRO_USD) / 1000000.0, 'f', 4) % tr(" per YEC"));
+            int unlock = (int)YellowbackJson::toInt(e, UNLOCK_HEIGHT);
+            uiMint->lblUnlock->setText(YellowbackFormat::heightWithEstimate(unlock, ctl->height()) %
+                tr("  — %1 blocks; dates are estimates at 75 s/block").arg(YellowbackJson::toInt(e, LOCK_BLOCKS)));
             double haveZec = ctl->yecBalance();
             if ((double)estimateZat / 100000000.0 > haveZec)
                 uiMint->lblMintHint->setText(tr("You have %1 of transparent YEC; this mint needs %2 plus the fee.")
-                    .arg(Settings::getZECDisplayFormat(haveZec)).arg(YDollarFormat::zec(estimateZat)));
+                    .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat)));
             updateMintGate();
         },
         [=, this](const QString& err) {
             if (seq != estimateSeq) return;
             estimateZat = -1;
             uiMint->lblCollateral->setText("-");
-            uiMint->lblMintHint->setText(tr("yd_estimatecollateral failed: ") % err);
+            uiMint->lblMintHint->setText(tr("yed_estimatecollateral failed: ") % err);
             updateMintGate();
         });
 }
 
-void YDollarTab::doMint() {
+void YellowbackTab::doMint() {
     if (ctl == nullptr || !actionsEnabled || estimateZat < 0) return;
     qint64 cents = estimateCents;
     int tier = estimateTier;
@@ -472,15 +472,15 @@ void YDollarTab::doMint() {
         return;
     }
 
-    QString text = tr("Mint %1 of YDollar?\n\n"
+    QString text = tr("Mint %1 of Yellowback?\n\n"
                       "Collateral: about %2 of YEC, locked in a vault until height %3 (%4 lock). "
                       "The exact requirement is fixed when your node signs the transaction, using the price "
                       "and multiplier at that moment, and may differ slightly from this estimate.\n\n"
                       "Until the unlock height the collateral cannot leave the vault. After it, releasing "
-                      "the collateral requires burning the required YDollar and the federation's co-signature.\n\n"
+                      "the collateral requires burning the required Yellowback and the federation's co-signature.\n\n"
                       "The vault's owner key lives only in this node's wallet.dat. Back it up after minting.")
-                      .arg(YDollarFormat::cents(cents)).arg(YDollarFormat::zec(estimateZat))
-                      .arg(uiMint->lblUnlock->text().section(' ', 0, 0)).arg(YDollarFormat::tierName(tier));
+                      .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(estimateZat))
+                      .arg(uiMint->lblUnlock->text().section(' ', 0, 0)).arg(YellowbackFormat::tierName(tier));
     if (QMessageBox::question(this, tr("Confirm mint"), text, QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
         return;
 
@@ -488,13 +488,13 @@ void YDollarTab::doMint() {
     uiMint->lblMintStatus->setText(tr("Minting..."));
     ctl->mint(cents, tier,
         [=, this](const json& r) {
-            using namespace YDollarRpc::MintResult;
+            using namespace YellowbackRpc::MintResult;
             uiMint->lblMintStatus->setText(tr("Mint submitted. txid: %1\nVault: %2, lock height %3, collateral %4")
-                .arg(YDollarJson::toStr(r, TXID)).arg(YDollarJson::toStr(r, VAULT))
-                .arg(YDollarJson::toInt(r, LOCK_HEIGHT)).arg(YDollarFormat::zec(YDollarJson::toInt(r, COLLATERAL_ZAT))));
+                .arg(YellowbackJson::toStr(r, TXID)).arg(YellowbackJson::toStr(r, VAULT))
+                .arg(YellowbackJson::toInt(r, LOCK_HEIGHT)).arg(YellowbackFormat::zec(YellowbackJson::toInt(r, COLLATERAL_ZAT))));
             uiMint->txtAmount->clear();
             estimateZat = -1;
-            Settings::getInstance()->setYDollarBackupPending(true);
+            Settings::getInstance()->setYellowbackBackupPending(true);
             updateBackupNag();
             ctl->refresh(true);
 
@@ -508,15 +508,15 @@ void YDollarTab::doMint() {
             updateMintGate();
         },
         [=, this](const QString& e) {
-            uiMint->lblMintStatus->setText(tr("yd_mint failed: ") % e);
-            QMessageBox::critical(this, tr("Mint failed"), tr("yd_mint failed: ") % e);
+            uiMint->lblMintStatus->setText(tr("yed_mint failed: ") % e);
+            QMessageBox::critical(this, tr("Mint failed"), tr("yed_mint failed: ") % e);
             updateMintGate();
         });
 }
 
 // ── Vaults (positions) ────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupPositions() {
+void YellowbackTab::setupPositions() {
     uiPositions->tblPositions->horizontalHeader()->setStretchLastSection(true);
     uiPositions->btnRedeem->setEnabled(false);
     uiPositions->btnAbortPending->setEnabled(false);
@@ -530,7 +530,7 @@ void YDollarTab::setupPositions() {
         if (!p->canRedeem) {
             QMessageBox::information(this, tr("Not redeemable yet"),
                 tr("Vault %1 cannot be redeemed now (status %2, unlock height %3).")
-                    .arg(p->vaultTxid).arg(p->status).arg(YDollarFormat::heightWithEstimate(p->unlockHeight, ctl->height())));
+                    .arg(p->vaultTxid).arg(p->status).arg(YellowbackFormat::heightWithEstimate(p->unlockHeight, ctl->height())));
             return;
         }
         startRedemption(p->vaultTxid);
@@ -550,7 +550,7 @@ void YDollarTab::setupPositions() {
     });
 }
 
-void YDollarTab::updatePositions() {
+void YellowbackTab::updatePositions() {
     if (ctl == nullptr) return;
     uiPositions->tblPositions->resizeColumnsToContents();
 
@@ -565,7 +565,7 @@ void YDollarTab::updatePositions() {
                      .arg(it.key()).arg(deadline).arg(qMax(0, deadline - ctl->height()));
         }
         uiPositions->lblPending->setText(tr("Redemption in progress: ") % parts.join("; ") %
-            tr(". The YDollar it burns is reserved until it is submitted or aborted."));
+            tr(". The YED it burns is reserved until it is submitted or aborted."));
     }
 
     // Selection-dependent buttons are re-evaluated whenever the selection changes
@@ -577,44 +577,44 @@ void YDollarTab::updatePositions() {
             bool have = p != nullptr;
             uiPositions->btnRedeem->setEnabled(actionsEnabled && have && p->canRedeem);
             uiPositions->btnAbortPending->setEnabled(actionsEnabled && have && ctl->hasPendingRedemption(p->vaultTxid));
-            uiPositions->btnWhyVoid->setEnabled(actionsEnabled && have && p->status == YDollarRpc::Position::STATUS_VOID);
+            uiPositions->btnWhyVoid->setEnabled(actionsEnabled && have && p->status == YellowbackRpc::Position::STATUS_VOID);
         });
     }
 }
 
-void YDollarTab::explainVoid(const QString& vaultTxid) {
+void YellowbackTab::explainVoid(const QString& vaultTxid) {
     if (ctl == nullptr) return;
     ctl->getTxInfo(vaultTxid,
         [=, this](const json& info) {
-            QString verdict = YDollarJson::toStr(info, YDollarRpc::Transaction::VERDICT, tr("(no verdict returned)"));
+            QString verdict = YellowbackJson::toStr(info, YellowbackRpc::Transaction::VERDICT, tr("(no verdict returned)"));
             QMessageBox::information(this, tr("Why this vault is VOID"),
-                tr("The YDollar index recorded the mint %1 with verdict:\n\n%2\n\n"
-                   "A VOID mint created no YDollar. Its collateral is still locked until the unlock height "
+                tr("The Yellowback index recorded the mint %1 with verdict:\n\n%2\n\n"
+                   "A VOID mint created no YED. Its collateral is still locked until the unlock height "
                    "and is then returned with no burn required (redeem it like any other vault; the required burn is zero).")
                    .arg(vaultTxid).arg(verdict));
         },
         [=, this](const QString& e) {
-            QMessageBox::warning(this, tr("yd_gettxinfo failed"), e);
+            QMessageBox::warning(this, tr("yed_gettxinfo failed"), e);
         });
 }
 
-void YDollarTab::abortPending(const QString& vaultTxid) {
+void YellowbackTab::abortPending(const QString& vaultTxid) {
     if (ctl == nullptr) return;
     ctl->abortRedeem(vaultTxid,
         [=, this](const json& r) {
             ctl->removePendingRedemption(vaultTxid);
-            if (YDollarJson::toBool(r, YDollarRpc::AbortResult::ABORTED))
-                uiPositions->lblPending->setText(tr("Redemption of vault %1 aborted; its YDollar is available again.").arg(vaultTxid));
+            if (YellowbackJson::toBool(r, YellowbackRpc::AbortResult::ABORTED))
+                uiPositions->lblPending->setText(tr("Redemption of vault %1 aborted; its YED is available again.").arg(vaultTxid));
             ctl->refresh(true);
         },
         [=, this](const QString& e) {
-            QMessageBox::warning(this, tr("yd_abortredeem failed"), e);
+            QMessageBox::warning(this, tr("yed_abortredeem failed"), e);
         });
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupTransactions() {
+void YellowbackTab::setupTransactions() {
     uiTx->tblTransactions->horizontalHeader()->setStretchLastSection(true);
     uiTx->tblTransactions->setContextMenuPolicy(Qt::CustomContextMenu);
     QObject::connect(uiTx->tblTransactions, &QTableView::customContextMenuRequested, [=, this](const QPoint& pos) {
@@ -622,7 +622,7 @@ void YDollarTab::setupTransactions() {
     });
 }
 
-void YDollarTab::showTxContextMenu(QTableView* table, const QPoint& pos) {
+void YellowbackTab::showTxContextMenu(QTableView* table, const QPoint& pos) {
     if (ctl == nullptr) return;
     auto index = table->indexAt(pos);
     if (!index.isValid()) return;
@@ -633,24 +633,24 @@ void YDollarTab::showTxContextMenu(QTableView* table, const QPoint& pos) {
     QMenu menu(this);
     menu.addAction(tr("Copy txid"), [=]() { QGuiApplication::clipboard()->setText(txid); });
     menu.addAction(tr("View on block explorer"), [=]() { Settings::openTxInExplorer(txid); });
-    menu.addAction(tr("Details (yd_gettxinfo)"), [=, this]() {
+    menu.addAction(tr("Details (yed_gettxinfo)"), [=, this]() {
         ctl->getTxInfo(txid,
             [=, this](const json& info) {
                 QString body = QString::fromStdString(info.dump(2));
                 QMessageBox box(this);
-                box.setWindowTitle(tr("YDollar transaction ") % txid.left(12) % "...");
-                box.setText(tr("Type: %1    Verdict: %2").arg(YDollarFormat::typeLabel(type)).arg(verdict));
+                box.setWindowTitle(tr("Yellowback transaction ") % txid.left(12) % "...");
+                box.setText(tr("Type: %1    Verdict: %2").arg(YellowbackFormat::typeLabel(type)).arg(verdict));
                 box.setDetailedText(body);
                 box.exec();
             },
-            [=, this](const QString& e) { QMessageBox::warning(this, tr("yd_gettxinfo failed"), e); });
+            [=, this](const QString& e) { QMessageBox::warning(this, tr("yed_gettxinfo failed"), e); });
     });
     menu.exec(table->viewport()->mapToGlobal(pos));
 }
 
 // ── Redeem page ───────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupRedeem() {
+void YellowbackTab::setupRedeem() {
     QObject::connect(uiRedeem->cmbVault, &QComboBox::currentIndexChanged, [=, this](int) { updateRedeemPage(); });
     QObject::connect(uiRedeem->btnStart, &QPushButton::clicked, [=, this]() {
         QString vault = uiRedeem->cmbVault->currentData().toString();
@@ -662,7 +662,7 @@ void YDollarTab::setupRedeem() {
     });
 }
 
-void YDollarTab::updateRedeemPage() {
+void YellowbackTab::updateRedeemPage() {
     if (ctl == nullptr) return;
     QString keep = uiRedeem->cmbVault->currentData().toString();
     auto list = ctl->positionsModel()->redeemable();
@@ -671,46 +671,46 @@ void YDollarTab::updateRedeemPage() {
     uiRedeem->cmbVault->clear();
     for (auto& p : list) {
         uiRedeem->cmbVault->addItem(tr("%1  —  %2 minted, %3 collateral, %4")
-            .arg(p.vaultTxid.left(16) % "...").arg(YDollarFormat::cents(p.mintedCents))
-            .arg(YDollarFormat::zec(p.collateralZat)).arg(p.status), p.vaultTxid);
+            .arg(p.vaultTxid.left(16) % "...").arg(YellowbackFormat::cents(p.mintedCents))
+            .arg(YellowbackFormat::zec(p.collateralZat)).arg(p.status), p.vaultTxid);
     }
     int i = uiRedeem->cmbVault->findData(keep);
     if (i >= 0) uiRedeem->cmbVault->setCurrentIndex(i);
     uiRedeem->cmbVault->blockSignals(false);
 
-    int endpoints = Settings::getInstance()->getYDollarEndpoints().size();
+    int endpoints = Settings::getInstance()->getYellowbackEndpoints().size();
     uiRedeem->lblOperators->setText(endpoints == 0
         ? tr("none — add the operators' /cosign URLs on the Settings page first")
         : tr("%1 endpoint(s)").arg(endpoints));
 
     QString vault = uiRedeem->cmbVault->currentData().toString();
-    const YDollarPosition* sel = nullptr;
+    const YellowbackPosition* sel = nullptr;
     for (auto& p : list) if (p.vaultTxid == vault) { sel = &p; break; }
     if (sel == nullptr) {
         uiRedeem->lblBurn->setText("-");
         uiRedeem->lblCollateral->setText("-");
         uiRedeem->lblRedeemHint->setText(list.isEmpty() ? tr("No vault of yours is redeemable right now.") : QString());
     } else {
-        uiRedeem->lblBurn->setText(YDollarFormat::cents(sel->requiredBurnCents) %
+        uiRedeem->lblBurn->setText(YellowbackFormat::cents(sel->requiredBurnCents) %
             (sel->requiredBurnCents > sel->mintedCents ? tr("  (more than minted: emergency redemption ratio)") : ""));
-        uiRedeem->lblCollateral->setText(YDollarFormat::zec(sel->collateralZat));
+        uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat));
         if (ctl->hasPendingRedemption(vault))
             uiRedeem->lblRedeemHint->setText(tr("A redemption of this vault is already in progress (see Vaults)."));
         else if (sel->requiredBurnCents > ctl->confirmedCents())
-            uiRedeem->lblRedeemHint->setText(tr("You need %1 of confirmed YDollar to burn but have %2.")
-                .arg(YDollarFormat::cents(sel->requiredBurnCents)).arg(YDollarFormat::cents(ctl->confirmedCents())));
+            uiRedeem->lblRedeemHint->setText(tr("You need %1 of confirmed YED to burn but have %2.")
+                .arg(YellowbackFormat::cents(sel->requiredBurnCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())));
         else
             uiRedeem->lblRedeemHint->clear();
     }
 }
 
-void YDollarTab::startRedemption(const QString& vaultTxid) {
+void YellowbackTab::startRedemption(const QString& vaultTxid) {
     if (ctl == nullptr || !actionsEnabled) return;
     if (ctl->hasPendingRedemption(vaultTxid)) {
         QMessageBox::information(this, tr("Already in progress"), tr("A redemption of this vault is already pending. Abort it from the Vaults page to start over."));
         return;
     }
-    const YDollarPosition* sel = nullptr;
+    const YellowbackPosition* sel = nullptr;
     for (int r = 0; ; r++) {
         auto p = ctl->positionsModel()->positionAt(r);
         if (p == nullptr) break;
@@ -718,29 +718,29 @@ void YDollarTab::startRedemption(const QString& vaultTxid) {
     }
     if (sel == nullptr) return;
 
-    YDollarRedeemWizard wizard(ctl, *sel, this);
+    YellowbackRedeemWizard wizard(ctl, *sel, this);
     wizard.exec();
     ctl->refresh(true);
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────────────────
 
-void YDollarTab::setupSettings() {
+void YellowbackTab::setupSettings() {
     updateSettingsPage();
     QObject::connect(uiSettings->btnSave,   &QPushButton::clicked, [=, this]() { saveSettings(); });
     QObject::connect(uiSettings->btnVerify, &QPushButton::clicked, [=, this]() { verifyEndpoints(); });
 }
 
-void YDollarTab::updateSettingsPage() {
+void YellowbackTab::updateSettingsPage() {
     auto s = Settings::getInstance();
-    uiSettings->txtEndpoints->setPlainText(s->getYDollarEndpoints().join("\n"));
-    uiSettings->chkUnitCents->setChecked(s->getYDollarUnitCents());
-    uiSettings->chkAdvanced->setChecked(s->getYDollarAdvanced());
-    uiSettings->lblRpcVersion->setText(tr("This YecWallet understands YDollar RPC version %1.").arg(Settings::getYDollarRpcVersion()) %
+    uiSettings->txtEndpoints->setPlainText(s->getYellowbackEndpoints().join("\n"));
+    uiSettings->chkUnitCents->setChecked(s->getYellowbackUnitCents());
+    uiSettings->chkAdvanced->setChecked(s->getYellowbackAdvanced());
+    uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC version %1.").arg(Settings::getYellowbackRpcVersion()) %
         (ctl != nullptr && ctl->isVersionOk() ? tr(" The node matches.") : ""));
 }
 
-void YDollarTab::saveSettings() {
+void YellowbackTab::saveSettings() {
     auto s = Settings::getInstance();
     QStringList urls;
     for (auto line : uiSettings->txtEndpoints->toPlainText().split('\n')) {
@@ -757,9 +757,9 @@ void YDollarTab::saveSettings() {
         }
         urls << line;
     }
-    s->setYDollarEndpoints(urls);
-    s->setYDollarUnitCents(uiSettings->chkUnitCents->isChecked());
-    s->setYDollarAdvanced(uiSettings->chkAdvanced->isChecked());
+    s->setYellowbackEndpoints(urls);
+    s->setYellowbackUnitCents(uiSettings->chkUnitCents->isChecked());
+    s->setYellowbackAdvanced(uiSettings->chkAdvanced->isChecked());
     uiSettings->lblEndpointsStatus->setText(tr("Saved (%1 endpoint(s)).").arg(urls.size()));
     if (ctl != nullptr) {
         updateBalances();
@@ -769,23 +769,23 @@ void YDollarTab::saveSettings() {
     updateRedeemPage();
 }
 
-void YDollarTab::verifyEndpoints() {
+void YellowbackTab::verifyEndpoints() {
     if (ctl == nullptr) return;
     int endpoints = 0;
     for (auto line : uiSettings->txtEndpoints->toPlainText().split('\n'))
         if (!line.trimmed().isEmpty()) endpoints++;
     ctl->getRoster(
         [=, this](const json& r) {
-            using namespace YDollarRpc::Roster;
-            int k = (int)YDollarJson::toInt(r, K), n = (int)YDollarJson::toInt(r, N);
+            using namespace YellowbackRpc::Roster;
+            int k = (int)YellowbackJson::toInt(r, K), n = (int)YellowbackJson::toInt(r, N);
             QString msg = tr("Current roster #%1: %2 of %3 signatures needed; %4 endpoint(s) configured.")
-                .arg(YDollarJson::toInt(r, INDEX)).arg(k).arg(n).arg(endpoints);
+                .arg(YellowbackJson::toInt(r, INDEX)).arg(k).arg(n).arg(endpoints);
             if (endpoints < k) msg += tr(" That is fewer than %1 — a redemption cannot complete.").arg(k);
-            if (Settings::getInstance()->getYDollarAdvanced())
-                msg += "\n" % tr("Roster address: ") % YDollarJson::toStr(r, ADDRESS) % "\n" % tr("Script: ") % YDollarJson::toStr(r, SCRIPT_HEX);
+            if (Settings::getInstance()->getYellowbackAdvanced())
+                msg += "\n" % tr("Roster address: ") % YellowbackJson::toStr(r, ADDRESS) % "\n" % tr("Script: ") % YellowbackJson::toStr(r, SCRIPT_HEX);
             uiSettings->lblEndpointsStatus->setText(msg);
         },
         [=, this](const QString& e) {
-            uiSettings->lblEndpointsStatus->setText(tr("yd_getroster failed: ") % e);
+            uiSettings->lblEndpointsStatus->setText(tr("yed_getroster failed: ") % e);
         });
 }

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>YDollarPositions</class>
- <widget class="QWidget" name="YDollarPositions">
+ <class>YellowbackPositions</class>
+ <widget class="QWidget" name="YellowbackPositions">
   <layout class="QVBoxLayout" name="positionsLayout">
    <item>
     <widget class="QLabel" name="lblPositionsIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>One row per vault you own. "Required burn now" is the YDollar that must be destroyed to release the collateral at the current system health; below 100 % health it can exceed the amount minted. VOID vaults created no YDollar and return their collateral at the unlock height with no burn.</string></property>
+     <property name="text"><string>One row per vault you own. "Required burn now" is the YED that must be destroyed to release the collateral at the current system health; below 100 % health it can exceed the amount minted. VOID vaults created no YED and return their collateral at the unlock height with no burn.</string></property>
     </widget>
    </item>
    <item>

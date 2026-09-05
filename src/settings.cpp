@@ -1,6 +1,6 @@
 #include "mainwindow.h"
 #include "settings.h"
-#include "ydollarrpc.h"
+#include "yellowbackrpc.h"
 
 Settings* Settings::instance = nullptr;
 
@@ -116,40 +116,40 @@ double Settings::getZECPrice() {
     return zecPrice; 
 }
 
-QStringList Settings::getYDollarEndpoints() {
-    return QSettings().value("ydollar/endpoints", QStringList()).toStringList();
+QStringList Settings::getYellowbackEndpoints() {
+    return QSettings().value("yellowback/endpoints", QStringList()).toStringList();
 }
 
-void Settings::setYDollarEndpoints(const QStringList& urls) {
-    QSettings().setValue("ydollar/endpoints", urls);
+void Settings::setYellowbackEndpoints(const QStringList& urls) {
+    QSettings().setValue("yellowback/endpoints", urls);
 }
 
-bool Settings::getYDollarUnitCents() {
-    return QSettings().value("ydollar/unitcents", false).toBool();
+bool Settings::getYellowbackUnitCents() {
+    return QSettings().value("yellowback/unitcents", false).toBool();
 }
 
-void Settings::setYDollarUnitCents(bool cents) {
-    QSettings().setValue("ydollar/unitcents", cents);
+void Settings::setYellowbackUnitCents(bool cents) {
+    QSettings().setValue("yellowback/unitcents", cents);
 }
 
-bool Settings::getYDollarAdvanced() {
-    return QSettings().value("ydollar/advanced", false).toBool();
+bool Settings::getYellowbackAdvanced() {
+    return QSettings().value("yellowback/advanced", false).toBool();
 }
 
-void Settings::setYDollarAdvanced(bool advanced) {
-    QSettings().setValue("ydollar/advanced", advanced);
+void Settings::setYellowbackAdvanced(bool advanced) {
+    QSettings().setValue("yellowback/advanced", advanced);
 }
 
-bool Settings::getYDollarBackupPending() {
-    return QSettings().value("ydollar/backuppending", false).toBool();
+bool Settings::getYellowbackBackupPending() {
+    return QSettings().value("yellowback/backuppending", false).toBool();
 }
 
-void Settings::setYDollarBackupPending(bool pending) {
-    QSettings().setValue("ydollar/backuppending", pending);
+void Settings::setYellowbackBackupPending(bool pending) {
+    QSettings().setValue("yellowback/backuppending", pending);
 }
 
-int Settings::getYDollarRpcVersion() {
-    return YDollarRpc::RPC_VERSION;
+int Settings::getYellowbackRpcVersion() {
+    return YellowbackRpc::RPC_VERSION;
 }
 
 bool Settings::getAutoShield() {

@@ -14,7 +14,7 @@
 using json = nlohmann::json;
 
 class RescanProgress;
-class YDollarController;
+class YellowbackController;
 
 struct WatchedTx {
     QString opid;
@@ -67,7 +67,7 @@ public:
     void addNewTxToWatch(const QString& newOpid, WatchedTx wtx); 
 
     const TxTableModel*               getTransactionsModel() { return transactionsTableModel; }
-    YDollarController*                getYDollar() { return ydollar; }
+    YellowbackController*                getYellowback() { return yellowback; }
 
     void shutdownZcashd();
     void noConnection();
@@ -124,7 +124,7 @@ private:
 
     DataModel*                  model;
     ZcashdRPC*                  zrpc;
-    YDollarController*          ydollar                     = nullptr;
+    YellowbackController*          yellowback                     = nullptr;
 
     QTimer*                     timer;
     QTimer*                     txTimer;

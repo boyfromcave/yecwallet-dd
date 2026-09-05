@@ -1,39 +1,39 @@
-#ifndef YDOLLARTAB_H
-#define YDOLLARTAB_H
+#ifndef YELLOWBACKTAB_H
+#define YELLOWBACKTAB_H
 
 #include "precompiled.h"
 
 class MainWindow;
-class YDollarController;
+class YellowbackController;
 
 namespace Ui {
-    class YDollarTab;
-    class YDollarOverview;
-    class YDollarReceive;
-    class YDollarSend;
-    class YDollarMint;
-    class YDollarPositions;
-    class YDollarTransactions;
-    class YDollarRedeem;
-    class YDollarSettings;
+    class YellowbackTab;
+    class YellowbackOverview;
+    class YellowbackReceive;
+    class YellowbackSend;
+    class YellowbackMint;
+    class YellowbackPositions;
+    class YellowbackTransactions;
+    class YellowbackRedeem;
+    class YellowbackSettings;
 }
 
-// The YDollar tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
+// The Yellowback tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
 // in the order Overview, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings
-// (plan §4.7). Every action goes through YDollarController; nothing here touches keys or
+// (plan §4.7). Every action goes through YellowbackController; nothing here touches keys or
 // the network except the redemption wizard it opens.
 //
 // `main` may be null and the controller may never be set: the tab then renders with every
 // action disabled. That is what the QTest target relies on.
-class YDollarTab : public QWidget {
+class YellowbackTab : public QWidget {
     Q_OBJECT
 
 public:
-    explicit YDollarTab(MainWindow* main, QWidget* parent = nullptr);
-    ~YDollarTab();
+    explicit YellowbackTab(MainWindow* main, QWidget* parent = nullptr);
+    ~YellowbackTab();
 
-    void setController(YDollarController* controller);
-    YDollarController* controller() { return ctl; }
+    void setController(YellowbackController* controller);
+    YellowbackController* controller() { return ctl; }
 
     // Sub-page indices in subTabs
     enum Page { Overview = 0, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings, PageCount };
@@ -75,17 +75,17 @@ private:
     void showTxContextMenu(QTableView* table, const QPoint& pos);
 
     MainWindow*          main = nullptr;
-    YDollarController*   ctl  = nullptr;
+    YellowbackController*   ctl  = nullptr;
 
-    Ui::YDollarTab*          ui           = nullptr;
-    Ui::YDollarOverview*     uiOverview   = nullptr;
-    Ui::YDollarReceive*      uiReceive    = nullptr;
-    Ui::YDollarSend*         uiSend       = nullptr;
-    Ui::YDollarMint*         uiMint       = nullptr;
-    Ui::YDollarPositions*    uiPositions  = nullptr;
-    Ui::YDollarTransactions* uiTx         = nullptr;
-    Ui::YDollarRedeem*       uiRedeem     = nullptr;
-    Ui::YDollarSettings*     uiSettings   = nullptr;
+    Ui::YellowbackTab*          ui           = nullptr;
+    Ui::YellowbackOverview*     uiOverview   = nullptr;
+    Ui::YellowbackReceive*      uiReceive    = nullptr;
+    Ui::YellowbackSend*         uiSend       = nullptr;
+    Ui::YellowbackMint*         uiMint       = nullptr;
+    Ui::YellowbackPositions*    uiPositions  = nullptr;
+    Ui::YellowbackTransactions* uiTx         = nullptr;
+    Ui::YellowbackRedeem*       uiRedeem     = nullptr;
+    Ui::YellowbackSettings*     uiSettings   = nullptr;
     QWidget*                 pages[PageCount] = {};
 
     bool     actionsEnabled   = false;
@@ -97,4 +97,4 @@ private:
     QString  receiveAddress;
 };
 
-#endif // YDOLLARTAB_H
+#endif // YELLOWBACKTAB_H

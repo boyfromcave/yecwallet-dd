@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>YDollarOverview</class>
- <widget class="QWidget" name="YDollarOverview">
+ <class>YellowbackOverview</class>
+ <widget class="QWidget" name="YellowbackOverview">
   <layout class="QVBoxLayout" name="overviewLayout">
    <item>
     <layout class="QHBoxLayout" name="groupsLayout">
      <item>
       <widget class="QGroupBox" name="grpBalance">
-       <property name="title"><string>Your YDollar</string></property>
+       <property name="title"><string>Your YED</string></property>
        <layout class="QFormLayout" name="balanceForm">
         <item row="0" column="0"><widget class="QLabel" name="l1"><property name="text"><string>Confirmed</string></property></widget></item>
-        <item row="0" column="1"><widget class="QLabel" name="lblYdConfirmed"><property name="text"><string>-</string></property><property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property></widget></item>
+        <item row="0" column="1"><widget class="QLabel" name="lblYedConfirmed"><property name="text"><string>-</string></property><property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property></widget></item>
         <item row="1" column="0"><widget class="QLabel" name="l2"><property name="text"><string>Unconfirmed (not yet spendable)</string></property></widget></item>
-        <item row="1" column="1"><widget class="QLabel" name="lblYdUnconfirmed"><property name="text"><string>-</string></property></widget></item>
+        <item row="1" column="1"><widget class="QLabel" name="lblYedUnconfirmed"><property name="text"><string>-</string></property></widget></item>
         <item row="2" column="0"><widget class="QLabel" name="l3"><property name="text"><string>YEC (transparent)</string></property></widget></item>
         <item row="2" column="1"><widget class="QLabel" name="lblYecBalance"><property name="text"><string>-</string></property></widget></item>
         <item row="3" column="0"><widget class="QLabel" name="l4"><property name="text"><string>Network</string></property></widget></item>
@@ -24,7 +24,7 @@
      </item>
      <item>
       <widget class="QGroupBox" name="grpSystem">
-       <property name="title"><string>YDollar system</string></property>
+       <property name="title"><string>Yellowback system</string></property>
        <layout class="QFormLayout" name="systemForm">
         <item row="0" column="0"><widget class="QLabel" name="s1"><property name="text"><string>YEC price (federation)</string></property></widget></item>
         <item row="0" column="1"><widget class="QLabel" name="lblYecPrice"><property name="text"><string>-</string></property></widget></item>
@@ -48,7 +48,7 @@
     </layout>
    </item>
    <item>
-    <widget class="QLabel" name="lblRecentTitle"><property name="text"><string>Recent YDollar transactions</string></property></widget>
+    <widget class="QLabel" name="lblRecentTitle"><property name="text"><string>Recent Yellowback transactions</string></property></widget>
    </item>
    <item>
     <widget class="QTableView" name="tblRecent">
@@ -59,7 +59,7 @@
    <item>
     <widget class="QLabel" name="lblTrust">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>YDollar is a federated, over-collateralised digital dollar on Ycash. It is transparent: YDollar balances and transfers are visible on the chain, and collateral is released only with the federation's co-signature. It is not a shielded asset.</string></property>
+     <property name="text"><string>Yellowback is a federated, over-collateralised digital dollar on Ycash. It is transparent: YED balances and transfers are visible on the chain, and collateral is released only with the federation's co-signature. It is not a shielded asset.</string></property>
     </widget>
    </item>
   </layout>

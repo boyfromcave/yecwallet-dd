@@ -1,20 +1,20 @@
-#ifndef YDOLLARREDEEMWIZARD_H
-#define YDOLLARREDEEMWIZARD_H
+#ifndef YELLOWBACKREDEEMWIZARD_H
+#define YELLOWBACKREDEEMWIZARD_H
 
 #include "precompiled.h"
-#include "ydollarmodels.h"
+#include "yellowbackmodels.h"
 #include <QWizard>
 #include <QWizardPage>
 #include <QListWidget>
 #include <QProgressBar>
 
-class YDollarController;
+class YellowbackController;
 
 // A QWizardPage whose "Next" is gated by an explicit flag.
-class YDollarWizardPage : public QWizardPage {
+class YellowbackWizardPage : public QWizardPage {
     Q_OBJECT
 public:
-    explicit YDollarWizardPage(QWidget* parent = nullptr) : QWizardPage(parent) {}
+    explicit YellowbackWizardPage(QWidget* parent = nullptr) : QWizardPage(parent) {}
     bool isComplete() const override { return ok; }
     void setOk(bool v) { if (ok != v) { ok = v; emit completeChanged(); } }
 private:
@@ -24,21 +24,21 @@ private:
 // The redemption wizard (plan §4.7 Redeem row, §5 "Redemption client", D16):
 //
 //   1 Review     burn, collateral returned, roster k-of-n, configured operators
-//   2 Collect    yd_redeem on the local node -> POST the hex to each operator's /cosign endpoint
+//   2 Collect    yed_redeem on the local node -> POST the hex to each operator's /cosign endpoint
 //                (HTTPS, through the app's existing QNetworkAccessManager) until k signatures;
 //                transient refusals (RED-0, RED-2) retried after the next block; a countdown
-//                to the 36-block deadline; abort at any time via yd_abortredeem
-//   3 Submit     yd_submitredeem on the local node, which re-verifies every signature (SUB-1)
+//                to the 36-block deadline; abort at any time via yed_abortredeem
+//   3 Submit     yed_submitredeem on the local node, which re-verifies every signature (SUB-1)
 //
 // This is the only code in the wallet that talks to anything other than the local node. It
 // never sees a private key: the node signs, the operators add their signatures, the node
 // verifies the result before broadcasting.
-class YDollarRedeemWizard : public QWizard {
+class YellowbackRedeemWizard : public QWizard {
     Q_OBJECT
 
 public:
-    YDollarRedeemWizard(YDollarController* ctl, const YDollarPosition& position, QWidget* parent = nullptr);
-    ~YDollarRedeemWizard();
+    YellowbackRedeemWizard(YellowbackController* ctl, const YellowbackPosition& position, QWidget* parent = nullptr);
+    ~YellowbackRedeemWizard();
 
     void reject() override;
     bool submitted() const { return didSubmit; }
@@ -59,27 +59,27 @@ private:
     void buildCollectPage();
     void buildSubmitPage();
 
-    void startRedeem();            // yd_redeem
+    void startRedeem();            // yed_redeem
     void postNext();               // find the next operator to try and POST
     void handleCosignReply(int opIndex, QNetworkReply* reply);
     void tick();                   // 1-second countdown / retry scheduler
     void finishCollecting();
-    void doSubmit();               // yd_submitredeem
+    void doSubmit();               // yed_submitredeem
     void abortRedemption(bool silent);
     void refreshOperatorList();
     QString deadlineText() const;
 
-    YDollarController*  ctl;
-    YDollarPosition     pos;
+    YellowbackController*  ctl;
+    YellowbackPosition     pos;
 
     // Review
-    YDollarWizardPage*  pgReview   = nullptr;
+    YellowbackWizardPage*  pgReview   = nullptr;
     QLabel*             lblReview  = nullptr;
     int                 rosterK    = 0;
     int                 rosterN    = 0;
 
     // Collect
-    YDollarWizardPage*  pgCollect  = nullptr;
+    YellowbackWizardPage*  pgCollect  = nullptr;
     QLabel*             lblProgress = nullptr;
     QLabel*             lblDeadline = nullptr;
     QLabel*             lblCollectStatus = nullptr;
@@ -93,17 +93,17 @@ private:
     int                 expiryHeight = 0;
     int                 deadlineHeight = 0;
     qint64              requiredBurnCents = 0;
-    bool                redeemIssued = false;   // yd_redeem succeeded (pending record exists)
+    bool                redeemIssued = false;   // yed_redeem succeeded (pending record exists)
     bool                posting      = false;   // a POST is in flight
     bool                collecting   = false;
     bool                aborted      = false;
 
     // Submit
-    YDollarWizardPage*  pgSubmit   = nullptr;
+    YellowbackWizardPage*  pgSubmit   = nullptr;
     QLabel*             lblSubmit  = nullptr;
     QPushButton*        btnSubmit  = nullptr;
     bool                didSubmit  = false;
     QString             submittedTxid;
 };
 
-#endif // YDOLLARREDEEMWIZARD_H
+#endif // YELLOWBACKREDEEMWIZARD_H

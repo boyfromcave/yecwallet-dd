@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>YDollarReceive</class>
- <widget class="QWidget" name="YDollarReceive">
+ <class>YellowbackReceive</class>
+ <widget class="QWidget" name="YellowbackReceive">
   <layout class="QVBoxLayout" name="receiveLayout">
    <item>
     <widget class="QLabel" name="lblReceiveIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Send only YDollar to this address. It is a transparent address (not shielded): anyone can see the YDollar it receives. A fresh address is created each time you press New address.</string></property>
+     <property name="text"><string>Send only YED to this address. It is a transparent address (not shielded): anyone can see the YED it receives. A fresh address is created each time you press New address.</string></property>
     </widget>
    </item>
    <item>

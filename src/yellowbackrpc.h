@@ -1,41 +1,41 @@
-#ifndef YDOLLARRPC_H
-#define YDOLLARRPC_H
+#ifndef YELLOWBACKRPC_H
+#define YELLOWBACKRPC_H
 
 #include <QtGlobal>
 
-// The YDollar RPC contract, as the wallet depends on it.
+// The Yellowback RPC contract, as the wallet depends on it.
 //
-// Every yd_* method name, every result field and every error identifier the wallet reads is
+// Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
-// ycash-dd/doc/ydollar-rpc.md in one place when that document is frozen (plan §4.4, §4.7
+// ycash-dd/doc/yellowback-rpc.md in one place when that document is frozen (plan §4.4, §4.7
 // cross-cutting rule 1). Nothing else crosses the node/wallet boundary.
 
-namespace YDollarRpc {
+namespace YellowbackRpc {
 
-// The rpcversion this build of the wallet understands. yd_getinfo.rpcversion must equal it.
+// The rpcversion this build of the wallet understands. yed_getinfo.rpcversion must equal it.
 constexpr int RPC_VERSION = 1;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
-constexpr const char* GETINFO             = "yd_getinfo";
-constexpr const char* GETSTATS            = "yd_getstats";
-constexpr const char* GETROSTER           = "yd_getroster";
-constexpr const char* GETVAULT            = "yd_getvault";
-constexpr const char* GETTXINFO           = "yd_gettxinfo";
-constexpr const char* ESTIMATECOLLATERAL  = "yd_estimatecollateral";
+constexpr const char* GETINFO             = "yed_getinfo";
+constexpr const char* GETSTATS            = "yed_getstats";
+constexpr const char* GETROSTER           = "yed_getroster";
+constexpr const char* GETVAULT            = "yed_getvault";
+constexpr const char* GETTXINFO           = "yed_gettxinfo";
+constexpr const char* ESTIMATECOLLATERAL  = "yed_estimatecollateral";
 
 // ── Methods (wallet context) ──────────────────────────────────────────────────────────────
-constexpr const char* GETNEWADDRESS       = "yd_getnewaddress";
-constexpr const char* VALIDATEADDRESS     = "yd_validateaddress";
-constexpr const char* GETBALANCE          = "yd_getbalance";
-constexpr const char* MINT                = "yd_mint";
-constexpr const char* SEND                = "yd_send";
-constexpr const char* REDEEM              = "yd_redeem";
-constexpr const char* SUBMITREDEEM        = "yd_submitredeem";
-constexpr const char* ABORTREDEEM         = "yd_abortredeem";
-constexpr const char* LISTPOSITIONS       = "yd_listpositions";
-constexpr const char* LISTTRANSACTIONS    = "yd_listtransactions";
+constexpr const char* GETNEWADDRESS       = "yed_getnewaddress";
+constexpr const char* VALIDATEADDRESS     = "yed_validateaddress";
+constexpr const char* GETBALANCE          = "yed_getbalance";
+constexpr const char* MINT                = "yed_mint";
+constexpr const char* SEND                = "yed_send";
+constexpr const char* REDEEM              = "yed_redeem";
+constexpr const char* SUBMITREDEEM        = "yed_submitredeem";
+constexpr const char* ABORTREDEEM         = "yed_abortredeem";
+constexpr const char* LISTPOSITIONS       = "yed_listpositions";
+constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
 
-// ── yd_getinfo result ─────────────────────────────────────────────────────────────────────
+// ── yed_getinfo result ─────────────────────────────────────────────────────────────────────
 namespace Info {
     constexpr const char* ENABLED          = "enabled";
     constexpr const char* RPCVERSION       = "rpcversion";
@@ -49,7 +49,7 @@ namespace Info {
     constexpr const char* ROSTER_INDEX     = "rosterIndex";
 }
 
-// ── yd_getstats result ────────────────────────────────────────────────────────────────────
+// ── yed_getstats result ────────────────────────────────────────────────────────────────────
 namespace Stats {
     constexpr const char* SUPPLY_CENTS     = "supplyCents";
     constexpr const char* COLLATERAL_ZAT   = "collateralZat";
@@ -66,13 +66,13 @@ namespace Stats {
     constexpr const char* SUPPLY_CAP_CENTS = "supplyCapCents"; // optional; absent or 0 = no cap
 }
 
-// ── yd_getbalance result ──────────────────────────────────────────────────────────────────
+// ── yed_getbalance result ──────────────────────────────────────────────────────────────────
 namespace Balance {
     constexpr const char* CONFIRMED_CENTS   = "confirmedCents";
     constexpr const char* UNCONFIRMED_CENTS = "unconfirmedCents";
 }
 
-// ── yd_listpositions element ──────────────────────────────────────────────────────────────
+// ── yed_listpositions element ──────────────────────────────────────────────────────────────
 namespace Position {
     constexpr const char* VAULT_TXID        = "vaultTxid";
     constexpr const char* STATUS            = "status";        // "ACTIVE" | "VOID" | "CLOSED"
@@ -91,15 +91,15 @@ namespace Position {
     constexpr const char* STATUS_CLOSED     = "CLOSED";
 }
 
-// ── yd_listtransactions element ───────────────────────────────────────────────────────────
+// ── yed_listtransactions element ───────────────────────────────────────────────────────────
 namespace Transaction {
     constexpr const char* TXID              = "txid";
     constexpr const char* HEIGHT            = "height";
     constexpr const char* CONFIRMATIONS     = "confirmations";
     constexpr const char* TYPE              = "type";          // mint | send | receive | burn | redeem
     constexpr const char* VERDICT           = "verdict";
-    constexpr const char* YD_IN             = "ydIn";
-    constexpr const char* YD_OUT            = "ydOut";
+    constexpr const char* YD_IN             = "yedIn";
+    constexpr const char* YD_OUT            = "yedOut";
     constexpr const char* BURNED            = "burned";
     constexpr const char* AMOUNT_CENTS      = "amountCents";
     constexpr const char* EXPIRED           = "expired";
@@ -111,7 +111,7 @@ namespace Transaction {
     constexpr const char* TYPE_REDEEM       = "redeem";
 }
 
-// ── yd_estimatecollateral result ──────────────────────────────────────────────────────────
+// ── yed_estimatecollateral result ──────────────────────────────────────────────────────────
 namespace Estimate {
     constexpr const char* REQUIRED_ZAT      = "requiredZat";
     constexpr const char* PRICE_MICRO_USD   = "priceMicroUsd";
@@ -121,7 +121,7 @@ namespace Estimate {
     constexpr const char* UNLOCK_HEIGHT     = "unlockHeight";
 }
 
-// ── yd_getroster result ───────────────────────────────────────────────────────────────────
+// ── yed_getroster result ───────────────────────────────────────────────────────────────────
 namespace Roster {
     constexpr const char* K                 = "k";
     constexpr const char* N                 = "n";
@@ -132,7 +132,7 @@ namespace Roster {
     constexpr const char* PREVIOUS          = "previous";
 }
 
-// ── yd_mint result ────────────────────────────────────────────────────────────────────────
+// ── yed_mint result ────────────────────────────────────────────────────────────────────────
 namespace MintResult {
     constexpr const char* TXID              = "txid";
     constexpr const char* VAULT             = "vault";
@@ -140,12 +140,12 @@ namespace MintResult {
     constexpr const char* COLLATERAL_ZAT    = "collateralZat";
 }
 
-// ── yd_send / yd_submitredeem result ──────────────────────────────────────────────────────
+// ── yed_send / yed_submitredeem result ──────────────────────────────────────────────────────
 namespace SendResult {
     constexpr const char* TXID              = "txid";
 }
 
-// ── yd_redeem result ──────────────────────────────────────────────────────────────────────
+// ── yed_redeem result ──────────────────────────────────────────────────────────────────────
 namespace RedeemResult {
     constexpr const char* HEX               = "hex";
     constexpr const char* VAULT             = "vault";
@@ -154,12 +154,12 @@ namespace RedeemResult {
     constexpr const char* EXPIRY_HEIGHT     = "expiryHeight";
 }
 
-// ── yd_abortredeem result ─────────────────────────────────────────────────────────────────
+// ── yed_abortredeem result ─────────────────────────────────────────────────────────────────
 namespace AbortResult {
     constexpr const char* ABORTED           = "aborted";
 }
 
-// ── yd_validateaddress result ─────────────────────────────────────────────────────────────
+// ── yed_validateaddress result ─────────────────────────────────────────────────────────────
 namespace ValidateAddress {
     constexpr const char* ISVALID           = "isvalid";
     constexpr const char* ISMINE            = "ismine";
@@ -168,10 +168,10 @@ namespace ValidateAddress {
 
 // ── Error identifiers the wallet recognises (matched as substrings of error.message) ──────
 namespace Errors {
-    // JSON-RPC: the node has no yd_* methods (experimentalfeatures / ydollar not set)
+    // JSON-RPC: the node has no yed_* methods (experimentalfeatures / yellowback not set)
     constexpr const char* METHOD_NOT_FOUND  = "Method not found";
     constexpr int         METHOD_NOT_FOUND_CODE = -32601;
-    // yd_send: the change output would be below MIN_OUTPUT (plan C20)
+    // yed_send: the change output would be below MIN_OUTPUT (plan C20)
     constexpr const char* CHANGE_FLOOR      = "change";
     // Co-signer refusals that are transient (plan E2): retried after the next block
     constexpr const char* RED_0             = "RED-0";
@@ -204,4 +204,4 @@ constexpr int    TIER_COUNT          = 5;
 
 }
 
-#endif // YDOLLARRPC_H
+#endif // YELLOWBACKRPC_H

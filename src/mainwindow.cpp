@@ -22,7 +22,7 @@
 #include "senttxstore.h"
 #include "connection.h"
 #include "requestdialog.h"
-#include "ydollartab.h"
+#include "yellowbacktab.h"
 #include <QRegularExpression>
 
 using json = nlohmann::json;
@@ -143,10 +143,10 @@ MainWindow::MainWindow(QWidget *parent) :
     setupBalancesTab();
     setupTurnstileDialog();
     setupZcashdTab();
-    setupYDollarTab();
+    setupYellowbackTab();
 
     rpc = new Controller(this);
-    ydollarTab->setController(rpc->getYDollar());
+    yellowbackTab->setController(rpc->getYellowback());
 
     restoreSavedStates();
 }
@@ -1231,11 +1231,11 @@ void MainWindow::setupBalancesTab() {
     });
 }
 
-// The YDollar tab sits after Transactions (index 4); the ycashd console tab, when the embedded
+// The Yellowback tab sits after Transactions (index 4); the ycashd console tab, when the embedded
 // node is running, is appended after it (Controller::setEZcashd).
-void MainWindow::setupYDollarTab() {
-    ydollarTab = new YDollarTab(this, this);
-    ui->tabWidget->addTab(ydollarTab, tr("YDollar"));
+void MainWindow::setupYellowbackTab() {
+    yellowbackTab = new YellowbackTab(this, this);
+    ui->tabWidget->addTab(yellowbackTab, tr("Yellowback"));
 }
 
 void MainWindow::setupZcashdTab() {    

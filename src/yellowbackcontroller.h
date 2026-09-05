@@ -1,8 +1,8 @@
-#ifndef YDOLLARCONTROLLER_H
-#define YDOLLARCONTROLLER_H
+#ifndef YELLOWBACKCONTROLLER_H
+#define YELLOWBACKCONTROLLER_H
 
 #include "precompiled.h"
-#include "ydollarmodels.h"
+#include "yellowbackmodels.h"
 
 using json = nlohmann::json;
 
@@ -10,21 +10,21 @@ class MainWindow;
 class Controller;
 class Connection;
 
-// Issues every yd_* call through the existing Connection (plan §4.7, mapping.md §12).
+// Issues every yed_* call through the existing Connection (plan §4.7, mapping.md §12).
 //
 // Lifecycle, all driven by the stock Controller:
-//   - Controller::setConnection      -> onConnected()  : yd_getinfo, rpcversion check, conf repair offer
+//   - Controller::setConnection      -> onConnected()  : yed_getinfo, rpcversion check, conf repair offer
 //   - Controller::getInfoThenRefresh -> refresh()      : on the "block changed" branch
 //   - Controller::watchTxStatus      -> watchPending() : pending redemptions on the quick txTimer
 //
 // It never holds key material and never talks to anything but the local node; the redemption
-// wizard (ydollarredeemwizard.cpp) is the one place that reaches operator endpoints.
-class YDollarController : public QObject {
+// wizard (yellowbackredeemwizard.cpp) is the one place that reaches operator endpoints.
+class YellowbackController : public QObject {
     Q_OBJECT
 
 public:
-    YDollarController(MainWindow* main, Controller* rpc);
-    ~YDollarController();
+    YellowbackController(MainWindow* main, Controller* rpc);
+    ~YellowbackController();
 
     // ── Lifecycle hooks ───────────────────────────────────────────────────────────────────
     void onConnected();
@@ -32,7 +32,7 @@ public:
     bool watchPending();                          // true while a redemption is pending
 
     // ── Availability (status banner) ──────────────────────────────────────────────────────
-    // "available" means: node answers yd_getinfo, enabled, rpcversion matches, synced and healthy.
+    // "available" means: node answers yed_getinfo, enabled, rpcversion matches, synced and healthy.
     bool    isAvailable() const { return available; }
     QString unavailableReason() const { return reason; }
     bool    isEnabled() const { return enabled; }
@@ -44,16 +44,16 @@ public:
     int     height() const { return indexHeight; }
     int     startHeight() const { return indexStartHeight; }
     QString network() const { return net; }       // "main" | "test" | "regtest" (never getinfo.testnet)
-    QString addressPrefix() const;                // yd | yt | yr
-    bool    looksLikeYDollarAddress(const QString& addr) const;
+    QString addressPrefix() const;                // ye | yt | yr
+    bool    looksLikeYellowbackAddress(const QString& addr) const;
     bool    isShieldedAddress(const QString& addr) const;   // s1..., ys..., z... (refused)
     const json& stats() const { return statsJson; }
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
     double  yecBalance() const;                   // from the stock DataModel
 
-    YDollarPositionsModel* positionsModel() { return positions; }
-    YDollarTxModel*        transactionsModel() { return transactions; }
+    YellowbackPositionsModel* positionsModel() { return positions; }
+    YellowbackTxModel*        transactionsModel() { return transactions; }
 
     // ── Mint gate: empty string when a mint of `cents` is allowed, else the reason ─────────
     QString mintBlocker(qint64 cents) const;
@@ -76,7 +76,7 @@ public:
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
 
-    // ── Pending redemptions (yd_redeem issued, yd_submitredeem not yet) ───────────────────
+    // ── Pending redemptions (yed_redeem issued, yed_submitredeem not yet) ───────────────────
     void addPendingRedemption(const QString& vaultTxid, int expiryHeight);
     void removePendingRedemption(const QString& vaultTxid);
     bool hasPendingRedemption(const QString& vaultTxid) const { return pending.contains(vaultTxid); }
@@ -111,8 +111,8 @@ private:
     MainWindow*   main;
     Controller*   rpc;
 
-    YDollarPositionsModel* positions    = nullptr;
-    YDollarTxModel*        transactions = nullptr;
+    YellowbackPositionsModel* positions    = nullptr;
+    YellowbackTxModel*        transactions = nullptr;
 
     bool    available   = false;
     bool    enabled     = false;
@@ -132,4 +132,4 @@ private:
     QMap<QString, int> pending;                   // vaultTxid -> expiryHeight
 };
 
-#endif // YDOLLARCONTROLLER_H
+#endif // YELLOWBACKCONTROLLER_H

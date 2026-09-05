@@ -1,6 +1,6 @@
-#include "ydollarredeemwizard.h"
-#include "ydollarcontroller.h"
-#include "ydollarrpc.h"
+#include "yellowbackredeemwizard.h"
+#include "yellowbackcontroller.h"
+#include "yellowbackrpc.h"
 #include "connection.h"
 #include "settings.h"
 
@@ -8,7 +8,7 @@
 
 using json = nlohmann::json;
 
-YDollarRedeemWizard::YDollarRedeemWizard(YDollarController* ctl, const YDollarPosition& position, QWidget* parent)
+YellowbackRedeemWizard::YellowbackRedeemWizard(YellowbackController* ctl, const YellowbackPosition& position, QWidget* parent)
     : QWizard(parent), ctl(ctl), pos(position) {
     setWindowTitle(tr("Redeem vault ") % pos.vaultTxid.left(16) % "...");
     setWizardStyle(QWizard::ModernStyle);
@@ -18,7 +18,7 @@ YDollarRedeemWizard::YDollarRedeemWizard(YDollarController* ctl, const YDollarPo
     setButtonText(QWizard::CancelButton, tr("Abort"));
     setMinimumSize(640, 480);
 
-    for (auto& url : Settings::getInstance()->getYDollarEndpoints()) {
+    for (auto& url : Settings::getInstance()->getYellowbackEndpoints()) {
         Operator op;
         op.url = url;
         op.status = tr("waiting");
@@ -39,14 +39,14 @@ YDollarRedeemWizard::YDollarRedeemWizard(YDollarController* ctl, const YDollarPo
     });
 }
 
-YDollarRedeemWizard::~YDollarRedeemWizard() {
+YellowbackRedeemWizard::~YellowbackRedeemWizard() {
     timer->stop();
 }
 
 // ── Page 1: review ────────────────────────────────────────────────────────────────────────
 
-void YDollarRedeemWizard::buildReviewPage() {
-    pgReview = new YDollarWizardPage(this);
+void YellowbackRedeemWizard::buildReviewPage() {
+    pgReview = new YellowbackWizardPage(this);
     pgReview->setTitle(tr("1. Review"));
     pgReview->setSubTitle(tr("What this redemption will do"));
     auto layout = new QVBoxLayout(pgReview);
@@ -60,20 +60,20 @@ void YDollarRedeemWizard::buildReviewPage() {
     QString text = tr("<b>Vault</b> %1<br>"
                       "<b>Status</b> %2<br>"
                       "<b>Minted</b> %3<br>"
-                      "<b>YDollar to burn now</b> %4%5<br>"
+                      "<b>YED to burn now</b> %4%5<br>"
                       "<b>Collateral returned to you</b> %6<br><br>")
-                      .arg(pos.vaultTxid).arg(pos.status).arg(YDollarFormat::cents(pos.mintedCents))
-                      .arg(YDollarFormat::cents(pos.requiredBurnCents))
+                      .arg(pos.vaultTxid).arg(pos.status).arg(YellowbackFormat::cents(pos.mintedCents))
+                      .arg(YellowbackFormat::cents(pos.requiredBurnCents))
                       .arg(pos.requiredBurnCents > pos.mintedCents ? tr(" (more than minted: emergency redemption ratio in effect)") : "")
-                      .arg(YDollarFormat::zec(pos.collateralZat));
-    text += tr("Pressing Next asks your node to build and sign the redemption (yd_redeem). From then on the "
-               "YDollar to be burned is reserved until the redemption is submitted or aborted. The signed "
+                      .arg(YellowbackFormat::zec(pos.collateralZat));
+    text += tr("Pressing Next asks your node to build and sign the redemption (yed_redeem). From then on the "
+               "Yellowback to be burned is reserved until the redemption is submitted or aborted. The signed "
                "transaction is then sent to the federation operators for co-signatures, and finally your node "
                "checks every signature before broadcasting it. The whole thing must finish within %1 blocks "
                "(about %2 minutes); otherwise you abort and start over.<br><br>")
-               .arg(YDollarRpc::REDEEM_DEADLINE).arg(YDollarRpc::REDEEM_DEADLINE * YDollarRpc::SECONDS_PER_BLOCK / 60);
+               .arg(YellowbackRpc::REDEEM_DEADLINE).arg(YellowbackRpc::REDEEM_DEADLINE * YellowbackRpc::SECONDS_PER_BLOCK / 60);
     if (operators.isEmpty()) {
-        text += tr("<b>No operator endpoints are configured.</b> Add them on the YDollar Settings page first.");
+        text += tr("<b>No operator endpoints are configured.</b> Add them on the Yellowback Settings page first.");
         lblReview->setText(text);
         pgReview->setOk(false);
         return;
@@ -84,12 +84,12 @@ void YDollarRedeemWizard::buildReviewPage() {
 
     ctl->getRoster(
         [=, this](const json& r) {
-            using namespace YDollarRpc::Roster;
-            rosterK = (int)YDollarJson::toInt(r, K);
-            rosterN = (int)YDollarJson::toInt(r, N);
+            using namespace YellowbackRpc::Roster;
+            rosterK = (int)YellowbackJson::toInt(r, K);
+            rosterN = (int)YellowbackJson::toInt(r, N);
             QString t = text;
             t.replace(tr("Roster: checking..."),
-                      tr("Roster #%1: %2 of %3 signatures needed.").arg(YDollarJson::toInt(r, INDEX)).arg(rosterK).arg(rosterN));
+                      tr("Roster #%1: %2 of %3 signatures needed.").arg(YellowbackJson::toInt(r, INDEX)).arg(rosterK).arg(rosterN));
             if (operators.size() < rosterK) {
                 t += tr("<br><b>Only %1 endpoint(s) configured but %2 signatures are needed.</b> Add more on the Settings page.")
                         .arg(operators.size()).arg(rosterK);
@@ -98,8 +98,8 @@ void YDollarRedeemWizard::buildReviewPage() {
                 return;
             }
             if (pos.requiredBurnCents > ctl->confirmedCents()) {
-                t += tr("<br><b>You have %1 of confirmed YDollar but %2 must be burned.</b>")
-                        .arg(YDollarFormat::cents(ctl->confirmedCents())).arg(YDollarFormat::cents(pos.requiredBurnCents));
+                t += tr("<br><b>You have %1 of confirmed YED but %2 must be burned.</b>")
+                        .arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(YellowbackFormat::cents(pos.requiredBurnCents));
                 lblReview->setText(t);
                 pgReview->setOk(false);
                 return;
@@ -108,15 +108,15 @@ void YDollarRedeemWizard::buildReviewPage() {
             pgReview->setOk(true);
         },
         [=, this](const QString& e) {
-            lblReview->setText(text % tr("<br><b>yd_getroster failed:</b> ") % e);
+            lblReview->setText(text % tr("<br><b>yed_getroster failed:</b> ") % e);
             pgReview->setOk(false);
         });
 }
 
 // ── Page 2: collect co-signatures ─────────────────────────────────────────────────────────
 
-void YDollarRedeemWizard::buildCollectPage() {
-    pgCollect = new YDollarWizardPage(this);
+void YellowbackRedeemWizard::buildCollectPage() {
+    pgCollect = new YellowbackWizardPage(this);
     pgCollect->setTitle(tr("2. Collect co-signatures"));
     pgCollect->setSubTitle(tr("Your node has signed; the federation operators add theirs"));
     pgCollect->setCommitPage(true);
@@ -134,7 +134,7 @@ void YDollarRedeemWizard::buildCollectPage() {
     txtHex = new QPlainTextEdit(pgCollect);
     txtHex->setReadOnly(true);
     txtHex->setMaximumHeight(90);
-    txtHex->setVisible(Settings::getInstance()->getYDollarAdvanced());
+    txtHex->setVisible(Settings::getInstance()->getYellowbackAdvanced());
 
     layout->addWidget(lblProgress);
     layout->addWidget(progress);
@@ -146,7 +146,7 @@ void YDollarRedeemWizard::buildCollectPage() {
     refreshOperatorList();
 }
 
-void YDollarRedeemWizard::refreshOperatorList() {
+void YellowbackRedeemWizard::refreshOperatorList() {
     lstOperators->clear();
     for (auto& op : operators)
         lstOperators->addItem(op.url % "  —  " % op.status);
@@ -158,35 +158,35 @@ void YDollarRedeemWizard::refreshOperatorList() {
     if (txtHex->isVisible()) txtHex->setPlainText(hex);
 }
 
-QString YDollarRedeemWizard::deadlineText() const {
+QString YellowbackRedeemWizard::deadlineText() const {
     int left = deadlineHeight - ctl->height();
     if (left <= 0) return tr("Deadline passed (height %1).").arg(deadlineHeight);
     return tr("Submit by height %1: %2 blocks left (about %3 minutes). Current index height %4.")
-            .arg(deadlineHeight).arg(left).arg(left * YDollarRpc::SECONDS_PER_BLOCK / 60).arg(ctl->height());
+            .arg(deadlineHeight).arg(left).arg(left * YellowbackRpc::SECONDS_PER_BLOCK / 60).arg(ctl->height());
 }
 
-void YDollarRedeemWizard::startRedeem() {
+void YellowbackRedeemWizard::startRedeem() {
     collecting = true;
-    lblCollectStatus->setText(tr("Calling yd_redeem..."));
+    lblCollectStatus->setText(tr("Calling yed_redeem..."));
     ctl->redeem(pos.vaultTxid,
         [=, this](const json& r) {
-            using namespace YDollarRpc::RedeemResult;
-            hex               = YDollarJson::toStr(r, HEX);
-            expiryHeight      = (int)YDollarJson::toInt(r, EXPIRY_HEIGHT);
-            requiredBurnCents = YDollarJson::toInt(r, REQUIRED_BURN_CENTS, pos.requiredBurnCents);
+            using namespace YellowbackRpc::RedeemResult;
+            hex               = YellowbackJson::toStr(r, HEX);
+            expiryHeight      = (int)YellowbackJson::toInt(r, EXPIRY_HEIGHT);
+            requiredBurnCents = YellowbackJson::toInt(r, REQUIRED_BURN_CENTS, pos.requiredBurnCents);
             deadlineHeight    = ctl->deadlineHeight(expiryHeight);
             redeemIssued      = true;
             ctl->addPendingRedemption(pos.vaultTxid, expiryHeight);
 
             // The node's roster for this vault wins over the one shown on the review page
             if (r.contains(ROSTER) && r[ROSTER].is_object()) {
-                rosterK = (int)YDollarJson::toInt(r[ROSTER], YDollarRpc::Roster::K, rosterK);
-                rosterN = (int)YDollarJson::toInt(r[ROSTER], YDollarRpc::Roster::N, rosterN);
+                rosterK = (int)YellowbackJson::toInt(r[ROSTER], YellowbackRpc::Roster::K, rosterK);
+                rosterN = (int)YellowbackJson::toInt(r[ROSTER], YellowbackRpc::Roster::N, rosterN);
             }
             if (rosterK <= 0) rosterK = 1;
 
             lblCollectStatus->setText(tr("Your node signed the redemption (burning %1, expiry height %2). Contacting operators...")
-                .arg(YDollarFormat::cents(requiredBurnCents)).arg(expiryHeight));
+                .arg(YellowbackFormat::cents(requiredBurnCents)).arg(expiryHeight));
             lblDeadline->setText(deadlineText());
             refreshOperatorList();
             timer->start();
@@ -194,12 +194,12 @@ void YDollarRedeemWizard::startRedeem() {
         },
         [=, this](const QString& e) {
             collecting = false;
-            lblProgress->setText(tr("yd_redeem failed"));
-            lblCollectStatus->setText(tr("yd_redeem failed: %1\n\nNothing was reserved. Press Abort to close.").arg(e));
+            lblProgress->setText(tr("yed_redeem failed"));
+            lblCollectStatus->setText(tr("yed_redeem failed: %1\n\nNothing was reserved. Press Abort to close.").arg(e));
         });
 }
 
-void YDollarRedeemWizard::postNext() {
+void YellowbackRedeemWizard::postNext() {
     if (aborted || posting || !redeemIssued) return;
     if (signatures >= rosterK) { finishCollecting(); return; }
 
@@ -237,15 +237,15 @@ void YDollarRedeemWizard::postNext() {
 
     QUrl url(op.url);
     QString path = url.path();
-    if (!path.endsWith(YDollarRpc::Cosign::PATH)) {
+    if (!path.endsWith(YellowbackRpc::Cosign::PATH)) {
         while (path.endsWith('/')) path.chop(1);
-        url.setPath(path % YDollarRpc::Cosign::PATH);
+        url.setPath(path % YellowbackRpc::Cosign::PATH);
     }
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setTransferTimeout(30000);
 
-    json body = { {YDollarRpc::Cosign::REQ_HEX, hex.toStdString()} };
+    json body = { {YellowbackRpc::Cosign::REQ_HEX, hex.toStdString()} };
     posting = true;
     QNetworkReply* reply = conn->restclient->post(req, QByteArray::fromStdString(body.dump()));
     QObject::connect(reply, &QNetworkReply::finished, this, [=, this]() {
@@ -256,7 +256,7 @@ void YDollarRedeemWizard::postNext() {
     });
 }
 
-void YDollarRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
+void YellowbackRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
     auto& op = operators[opIndex];
     QByteArray body = reply->readAll();
     int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -268,9 +268,9 @@ void YDollarRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
 
     if (reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300) {
         if (!parsed.is_discarded() && parsed.is_object()) {
-            newHex = YDollarJson::toStr(parsed, YDollarRpc::Cosign::RESP_HEX);
-            error  = YDollarJson::toStr(parsed, YDollarRpc::Cosign::RESP_ERROR);
-            transient = YDollarJson::toBool(parsed, YDollarRpc::Cosign::RESP_TRANSIENT);
+            newHex = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_HEX);
+            error  = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_ERROR);
+            transient = YellowbackJson::toBool(parsed, YellowbackRpc::Cosign::RESP_TRANSIENT);
         } else {
             // plain-text hex
             static const QRegularExpression hexRe("^[0-9a-fA-F]+$");
@@ -280,8 +280,8 @@ void YDollarRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
         }
     } else {
         if (!parsed.is_discarded() && parsed.is_object()) {
-            error = YDollarJson::toStr(parsed, YDollarRpc::Cosign::RESP_ERROR, reply->errorString());
-            transient = YDollarJson::toBool(parsed, YDollarRpc::Cosign::RESP_TRANSIENT);
+            error = YellowbackJson::toStr(parsed, YellowbackRpc::Cosign::RESP_ERROR, reply->errorString());
+            transient = YellowbackJson::toBool(parsed, YellowbackRpc::Cosign::RESP_TRANSIENT);
         } else {
             error = reply->errorString();
             // Network-level failures (timeout, connection refused, TLS) are worth one retry per block
@@ -301,7 +301,7 @@ void YDollarRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
         }
     } else {
         if (error.isEmpty()) error = tr("empty reply");
-        if (transient || YDollarController::isTransientRefusal(error)) {
+        if (transient || YellowbackController::isTransientRefusal(error)) {
             op.retryAfterHeight = ctl->height();
             op.status = tr("transient refusal, retrying after the next block: ") % error;
         } else {
@@ -315,7 +315,7 @@ void YDollarRedeemWizard::handleCosignReply(int opIndex, QNetworkReply* reply) {
     else postNext();
 }
 
-void YDollarRedeemWizard::tick() {
+void YellowbackRedeemWizard::tick() {
     if (aborted || !redeemIssued) return;
     lblDeadline->setText(deadlineText());
 
@@ -329,7 +329,7 @@ void YDollarRedeemWizard::tick() {
     if (!posting && signatures < rosterK) postNext();
 }
 
-void YDollarRedeemWizard::finishCollecting() {
+void YellowbackRedeemWizard::finishCollecting() {
     if (pgCollect->isComplete()) return;
     collecting = false;
     lblCollectStatus->setText(tr("%1 co-signatures collected. Press Next to have your node verify and broadcast the transaction.").arg(signatures));
@@ -339,15 +339,15 @@ void YDollarRedeemWizard::finishCollecting() {
 
 // ── Page 3: submit ────────────────────────────────────────────────────────────────────────
 
-void YDollarRedeemWizard::buildSubmitPage() {
-    pgSubmit = new YDollarWizardPage(this);
+void YellowbackRedeemWizard::buildSubmitPage() {
+    pgSubmit = new YellowbackWizardPage(this);
     pgSubmit->setTitle(tr("3. Submit"));
     pgSubmit->setSubTitle(tr("Your node verifies every signature and broadcasts"));
     auto layout = new QVBoxLayout(pgSubmit);
     lblSubmit = new QLabel(tr("Submitting..."), pgSubmit);
     lblSubmit->setWordWrap(true);
     lblSubmit->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    btnSubmit = new QPushButton(tr("Retry yd_submitredeem"), pgSubmit);
+    btnSubmit = new QPushButton(tr("Retry yed_submitredeem"), pgSubmit);
     btnSubmit->setVisible(false);
     QObject::connect(btnSubmit, &QPushButton::clicked, [=, this]() { doSubmit(); });
     layout->addWidget(lblSubmit);
@@ -357,23 +357,23 @@ void YDollarRedeemWizard::buildSubmitPage() {
     pgSubmit->setFinalPage(true);
 }
 
-void YDollarRedeemWizard::doSubmit() {
+void YellowbackRedeemWizard::doSubmit() {
     if (didSubmit) return;
     timer->stop();
     btnSubmit->setVisible(false);
-    lblSubmit->setText(tr("Calling yd_submitredeem..."));
+    lblSubmit->setText(tr("Calling yed_submitredeem..."));
     ctl->submitRedeem(hex,
         [=, this](const json& r) {
             didSubmit = true;
-            submittedTxid = YDollarJson::toStr(r, YDollarRpc::SendResult::TXID);
+            submittedTxid = YellowbackJson::toStr(r, YellowbackRpc::SendResult::TXID);
             ctl->removePendingRedemption(pos.vaultTxid);
-            lblSubmit->setText(tr("Broadcast. txid: %1\n\n%2 of YDollar were burned; %3 of collateral returns to your wallet once the transaction confirms.")
-                .arg(submittedTxid).arg(YDollarFormat::cents(requiredBurnCents)).arg(YDollarFormat::zec(pos.collateralZat)));
+            lblSubmit->setText(tr("Broadcast. txid: %1\n\n%2 of YED were burned; %3 of collateral returns to your wallet once the transaction confirms.")
+                .arg(submittedTxid).arg(YellowbackFormat::cents(requiredBurnCents)).arg(YellowbackFormat::zec(pos.collateralZat)));
             pgSubmit->setOk(true);
         },
         [=, this](const QString& e) {
-            lblSubmit->setText(tr("yd_submitredeem failed: %1\n\nThe co-signed transaction is still held by this wizard. "
-                                  "You can retry, or close the wizard to abort (which releases the reserved YDollar).").arg(e));
+            lblSubmit->setText(tr("yed_submitredeem failed: %1\n\nThe co-signed transaction is still held by this wizard. "
+                                  "You can retry, or close the wizard to abort (which releases the reserved YED).").arg(e));
             btnSubmit->setVisible(true);
             pgSubmit->setOk(false);
             timer->start();
@@ -383,7 +383,7 @@ void YDollarRedeemWizard::doSubmit() {
 
 // ── Abort ─────────────────────────────────────────────────────────────────────────────────
 
-void YDollarRedeemWizard::abortRedemption(bool silent) {
+void YellowbackRedeemWizard::abortRedemption(bool silent) {
     aborted = true;
     timer->stop();
     if (!redeemIssued || didSubmit) return;
@@ -393,19 +393,19 @@ void YDollarRedeemWizard::abortRedemption(bool silent) {
             redeemIssued = false;
             if (!silent)
                 QMessageBox::information(this, tr("Redemption aborted"),
-                    tr("The redemption of vault %1 was aborted; its YDollar is available again. Nothing was broadcast.").arg(pos.vaultTxid));
+                    tr("The redemption of vault %1 was aborted; its YED is available again. Nothing was broadcast.").arg(pos.vaultTxid));
         },
         [=, this](const QString& e) {
             if (!silent)
-                QMessageBox::warning(this, tr("yd_abortredeem failed"),
+                QMessageBox::warning(this, tr("yed_abortredeem failed"),
                     tr("%1\n\nThe pending redemption is still recorded on the node; abort it from the Vaults page.").arg(e));
         });
 }
 
-void YDollarRedeemWizard::reject() {
+void YellowbackRedeemWizard::reject() {
     if (redeemIssued && !didSubmit) {
         auto r = QMessageBox::question(this, tr("Abort redemption?"),
-            tr("Abort this redemption? The co-signatures collected so far are discarded and the reserved YDollar is released (yd_abortredeem)."),
+            tr("Abort this redemption? The co-signatures collected so far are discarded and the reserved YED is released (yed_abortredeem)."),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (r != QMessageBox::Yes) return;
         abortRedemption(true);

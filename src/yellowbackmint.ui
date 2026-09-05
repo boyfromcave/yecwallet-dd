@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>YDollarMint</class>
- <widget class="QWidget" name="YDollarMint">
+ <class>YellowbackMint</class>
+ <widget class="QWidget" name="YellowbackMint">
   <layout class="QVBoxLayout" name="mintLayout">
    <item>
     <widget class="QLabel" name="lblMintIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YDollar. The collateral cannot leave the vault before the unlock height, and releasing it afterwards requires burning YDollar and the federation's co-signature.</string></property>
+     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. The collateral cannot leave the vault before the unlock height, and releasing it afterwards requires burning YED and the federation's co-signature.</string></property>
     </widget>
    </item>
    <item>
@@ -40,7 +40,7 @@
    <item>
     <layout class="QHBoxLayout" name="mintButtons">
      <item><spacer name="mintSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-     <item><widget class="QPushButton" name="btnMint"><property name="text"><string>Mint YDollar</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnMint"><property name="text"><string>Mint YED</string></property></widget></item>
     </layout>
    </item>
    <item>

@@ -1,13 +1,13 @@
-#ifndef YDOLLARMODELS_H
-#define YDOLLARMODELS_H
+#ifndef YELLOWBACKMODELS_H
+#define YELLOWBACKMODELS_H
 
 #include "precompiled.h"
 
 using json = nlohmann::json;
 
-// One row of yd_listpositions (plan §4.4). Amounts are integer cents / zatoshi as the node
+// One row of yed_listpositions (plan §4.4). Amounts are integer cents / zatoshi as the node
 // reports them; rendering happens in the model's data().
-struct YDollarPosition {
+struct YellowbackPosition {
     QString vaultTxid;
     QString status;             // ACTIVE | VOID | CLOSED
     qint64  mintedCents     = 0;
@@ -20,28 +20,28 @@ struct YDollarPosition {
     int     unlockHeight    = 0;
     QString ownerKeyId;
 
-    static YDollarPosition fromJson(const json& j);
+    static YellowbackPosition fromJson(const json& j);
 };
 
-// One row of yd_listtransactions (plan §4.4, E1/F6/D18).
-struct YDollarTx {
+// One row of yed_listtransactions (plan §4.4, E1/F6/D18).
+struct YellowbackTx {
     QString txid;
     int     height          = 0;
     int     confirmations   = 0;
     QString type;               // mint | send | receive | burn | redeem
     QString verdict;
-    qint64  ydIn            = 0;
-    qint64  ydOut           = 0;
+    qint64  yedIn            = 0;
+    qint64  yedOut           = 0;
     qint64  burned          = 0;
     qint64  amountCents     = 0;
     bool    expired         = false;
 
-    static YDollarTx fromJson(const json& j);
+    static YellowbackTx fromJson(const json& j);
 };
 
 // Tolerant readers for RPC replies: a missing or null field yields the default instead of
 // throwing, so a node one contract revision ahead or behind degrades to blanks, not a crash.
-namespace YDollarJson {
+namespace YellowbackJson {
     qint64  toInt (const json& j, const char* key, qint64 def = 0);
     QString toStr (const json& j, const char* key, const QString& def = QString());
     bool    toBool(const json& j, const char* key, bool def = false);
@@ -50,7 +50,7 @@ namespace YDollarJson {
 
 // Rendering helpers shared by the models and the tab. Pure functions of their arguments; the
 // current height is passed in so the models never reach into the controller.
-namespace YDollarFormat {
+namespace YellowbackFormat {
     QString cents(qint64 cents, bool showCentsUnit = false);
     QString zec(qint64 zat);
     QString heightWithEstimate(int height, int currentHeight);
@@ -61,10 +61,10 @@ namespace YDollarFormat {
 }
 
 // Positions (vaults) table, pattern of src/balancestablemodel.h.
-class YDollarPositionsModel : public QAbstractTableModel {
+class YellowbackPositionsModel : public QAbstractTableModel {
 public:
-    YDollarPositionsModel(QObject* parent);
-    ~YDollarPositionsModel();
+    YellowbackPositionsModel(QObject* parent);
+    ~YellowbackPositionsModel();
 
     enum Column {
         Status = 0,
@@ -76,9 +76,9 @@ public:
         Vault
     };
 
-    void setNewData(const QList<YDollarPosition>& positions, int currentHeight);
-    const YDollarPosition* positionAt(int row) const;
-    QList<YDollarPosition> redeemable() const;
+    void setNewData(const QList<YellowbackPosition>& positions, int currentHeight);
+    const YellowbackPosition* positionAt(int row) const;
+    QList<YellowbackPosition> redeemable() const;
 
     int      rowCount(const QModelIndex& parent) const override;
     int      columnCount(const QModelIndex& parent) const override;
@@ -86,17 +86,17 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
 
 private:
-    QList<YDollarPosition>* modeldata     = nullptr;
+    QList<YellowbackPosition>* modeldata     = nullptr;
     QList<QString>          headers;
     int                     currentHeight = 0;
     bool                    loading       = true;
 };
 
-// YDollar transactions table, pattern of src/txtablemodel.h.
-class YDollarTxModel : public QAbstractTableModel {
+// Yellowback transactions table, pattern of src/txtablemodel.h.
+class YellowbackTxModel : public QAbstractTableModel {
 public:
-    YDollarTxModel(QObject* parent);
-    ~YDollarTxModel();
+    YellowbackTxModel(QObject* parent);
+    ~YellowbackTxModel();
 
     enum Column {
         Type = 0,
@@ -107,8 +107,8 @@ public:
         Txid
     };
 
-    void setNewData(const QList<YDollarTx>& txs, int currentHeight);
-    const YDollarTx* txAt(int row) const;
+    void setNewData(const QList<YellowbackTx>& txs, int currentHeight);
+    const YellowbackTx* txAt(int row) const;
     QString getTxId(int row) const;
 
     int      rowCount(const QModelIndex& parent) const override;
@@ -117,10 +117,10 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
 
 private:
-    QList<YDollarTx>* modeldata     = nullptr;
+    QList<YellowbackTx>* modeldata     = nullptr;
     QList<QString>    headers;
     int               currentHeight = 0;
     bool              loading       = true;
 };
 
-#endif // YDOLLARMODELS_H
+#endif // YELLOWBACKMODELS_H

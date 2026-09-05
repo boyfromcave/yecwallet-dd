@@ -87,11 +87,11 @@ set(APP_SOURCES
     src/datamodel.cpp
     src/controller.cpp
     src/zcashdrpc.cpp
-    # YDollar
-    src/ydollarcontroller.cpp
-    src/ydollarmodels.cpp
-    src/ydollartab.cpp
-    src/ydollarredeemwizard.cpp
+    # Yellowback
+    src/yellowbackcontroller.cpp
+    src/yellowbackmodels.cpp
+    src/yellowbacktab.cpp
+    src/yellowbackredeemwizard.cpp
     # bundled 3rd-party (QR code)
     src/3rdparty/qrcode/BitBuffer.cpp
     src/3rdparty/qrcode/QrCode.cpp
@@ -123,11 +123,11 @@ set(APP_HEADERS
     src/datamodel.h
     src/controller.h
     src/zcashdrpc.h
-    src/ydollarrpc.h
-    src/ydollarcontroller.h
-    src/ydollarmodels.h
-    src/ydollartab.h
-    src/ydollarredeemwizard.h
+    src/yellowbackrpc.h
+    src/yellowbackcontroller.h
+    src/yellowbackmodels.h
+    src/yellowbacktab.h
+    src/yellowbackredeemwizard.h
     src/3rdparty/qrcode/BitBuffer.hpp
     src/3rdparty/qrcode/QrCode.hpp
     src/3rdparty/qrcode/QrSegment.hpp
@@ -153,15 +153,15 @@ set(APP_FORMS
     src/addressbook.ui
     src/createzcashconfdialog.ui
     src/requestdialog.ui
-    src/ydollartab.ui
-    src/ydollaroverview.ui
-    src/ydollarreceive.ui
-    src/ydollarsend.ui
-    src/ydollarmint.ui
-    src/ydollarpositions.ui
-    src/ydollartransactions.ui
-    src/ydollarredeem.ui
-    src/ydollarsettings.ui
+    src/yellowbacktab.ui
+    src/yellowbackoverview.ui
+    src/yellowbackreceive.ui
+    src/yellowbacksend.ui
+    src/yellowbackmint.ui
+    src/yellowbackpositions.ui
+    src/yellowbacktransactions.ui
+    src/yellowbackredeem.ui
+    src/yellowbacksettings.ui
 )
 
 # ── Platform-specific extras ──────────────────────────────────────────────────
@@ -317,26 +317,26 @@ else()
                     "Add 'qttools' to -submodules in scripts/build-qt.sh and rebuild Qt.")
 endif()
 
-# ── YDollar QTest target (plan H1) ───────────────────────────────────────────
+# ── Yellowback QTest target (plan H1) ───────────────────────────────────────────
 # Built only when Qt6::Test is present, i.e. against a system Qt 6 in development and CI.
 # The static release Qt is configured with -no-feature-testlib and never has it.
 find_package(Qt6 OPTIONAL_COMPONENTS Test)
 if(TARGET Qt6::Test AND NOT QT_STATIC)
     enable_testing()
-    set(YD_TEST_SOURCES ${APP_SOURCES})
-    list(REMOVE_ITEM YD_TEST_SOURCES src/main.cpp)
-    qt_add_executable(ydollar_test
-        tests/ydollartab_test.cpp
-        ${YD_TEST_SOURCES} ${APP_HEADERS} ${APP_FORMS} application.qrc
+    set(YELLOWBACK_TEST_SOURCES ${APP_SOURCES})
+    list(REMOVE_ITEM YELLOWBACK_TEST_SOURCES src/main.cpp)
+    qt_add_executable(yellowback_test
+        tests/yellowbacktab_test.cpp
+        ${YELLOWBACK_TEST_SOURCES} ${APP_HEADERS} ${APP_FORMS} application.qrc
     )
-    target_include_directories(ydollar_test PRIVATE
+    target_include_directories(yellowback_test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/src/3rdparty"
         "${CMAKE_CURRENT_SOURCE_DIR}/singleapplication")
-    target_compile_definitions(ydollar_test PRIVATE QT_DEPRECATED_WARNINGS QAPPLICATION_CLASS=QApplication)
-    target_precompile_headers(ydollar_test PRIVATE src/precompiled.h)
-    target_link_libraries(ydollar_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::WebSockets Qt6::Test)
-    add_test(NAME ydollar_test COMMAND ydollar_test)
-    set_tests_properties(ydollar_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    target_compile_definitions(yellowback_test PRIVATE QT_DEPRECATED_WARNINGS QAPPLICATION_CLASS=QApplication)
+    target_precompile_headers(yellowback_test PRIVATE src/precompiled.h)
+    target_link_libraries(yellowback_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::WebSockets Qt6::Test)
+    add_test(NAME yellowback_test COMMAND yellowback_test)
+    set_tests_properties(yellowback_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 # ── Install rules ─────────────────────────────────────────────────────────────
