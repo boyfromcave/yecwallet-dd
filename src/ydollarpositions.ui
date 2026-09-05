@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YDollarPositions</class>
+ <widget class="QWidget" name="YDollarPositions">
+  <layout class="QVBoxLayout" name="positionsLayout">
+   <item>
+    <widget class="QLabel" name="lblPositionsIntro">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>One row per vault you own. "Required burn now" is the YDollar that must be destroyed to release the collateral at the current system health; below 100 % health it can exceed the amount minted. VOID vaults created no YDollar and return their collateral at the unlock height with no burn.</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableView" name="tblPositions">
+     <property name="selectionMode"><enum>QAbstractItemView::SingleSelection</enum></property>
+     <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblPending"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="positionsButtons">
+     <item><widget class="QPushButton" name="btnWhyVoid"><property name="text"><string>Why is this vault VOID?</string></property></widget></item>
+     <item><spacer name="posSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+     <item><widget class="QPushButton" name="btnAbortPending"><property name="text"><string>Abort pending redemption</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnRedeem"><property name="text"><string>Redeem selected vault…</string></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -22,6 +22,7 @@
 #include "senttxstore.h"
 #include "connection.h"
 #include "requestdialog.h"
+#include "ydollartab.h"
 #include <QRegularExpression>
 
 using json = nlohmann::json;
@@ -142,8 +143,10 @@ MainWindow::MainWindow(QWidget *parent) :
     setupBalancesTab();
     setupTurnstileDialog();
     setupZcashdTab();
+    setupYDollarTab();
 
     rpc = new Controller(this);
+    ydollarTab->setController(rpc->getYDollar());
 
     restoreSavedStates();
 }
@@ -1226,6 +1229,13 @@ void MainWindow::setupBalancesTab() {
 
         menu.exec(ui->balancesTable->viewport()->mapToGlobal(pos));            
     });
+}
+
+// The YDollar tab sits after Transactions (index 4); the ycashd console tab, when the embedded
+// node is running, is appended after it (Controller::setEZcashd).
+void MainWindow::setupYDollarTab() {
+    ydollarTab = new YDollarTab(this, this);
+    ui->tabWidget->addTab(ydollarTab, tr("YDollar"));
 }
 
 void MainWindow::setupZcashdTab() {    

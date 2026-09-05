@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YDollarSettings</class>
+ <widget class="QWidget" name="YDollarSettings">
+  <layout class="QVBoxLayout" name="settingsLayout">
+   <item>
+    <widget class="QGroupBox" name="grpOperators">
+     <property name="title"><string>Federation operator endpoints (one base URL per line, e.g. https://op1.example.org)</string></property>
+     <layout class="QVBoxLayout" name="opsLayout">
+      <item><widget class="QPlainTextEdit" name="txtEndpoints"/></item>
+      <item>
+       <layout class="QHBoxLayout" name="opsButtons">
+        <item><widget class="QPushButton" name="btnVerify"><property name="text"><string>Check against the roster (yd_getroster)</string></property></widget></item>
+        <item><widget class="QLabel" name="lblEndpointsStatus"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item><widget class="QCheckBox" name="chkUnitCents"><property name="text"><string>Show YDollar amounts in cents instead of dollars</string></property></widget></item>
+   <item><widget class="QCheckBox" name="chkAdvanced"><property name="text"><string>Show advanced details (raw transaction hex, roster script)</string></property></widget></item>
+   <item>
+    <widget class="QLabel" name="lblRpcVersion"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblConfHint">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+     <property name="text"><string>The node needs both of these lines in its ycash.conf:
+
+experimentalfeatures=1
+ydollar=1</string></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="settingsButtons">
+     <item><spacer name="settingsSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+     <item><widget class="QPushButton" name="btnSave"><property name="text"><string>Save</string></property></widget></item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="settingsSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

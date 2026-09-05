@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YDollarTab</class>
+ <widget class="QWidget" name="YDollarTab">
+  <layout class="QVBoxLayout" name="tabLayout">
+   <item>
+    <widget class="QLabel" name="lblBanner">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string notr="true">QLabel { background-color: #fff3cd; color: #5c4400; border: 1px solid #e0c56e; padding: 6px; }</string></property>
+     <property name="text"><string>YDollar status</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QWidget" name="wBackupNag" native="true">
+     <layout class="QHBoxLayout" name="backupLayout">
+      <property name="leftMargin"><number>0</number></property>
+      <property name="topMargin"><number>0</number></property>
+      <property name="rightMargin"><number>0</number></property>
+      <property name="bottomMargin"><number>0</number></property>
+      <item>
+       <widget class="QLabel" name="lblBackupNag">
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="styleSheet"><string notr="true">QLabel { background-color: #f8d7da; color: #58151c; border: 1px solid #e8a0a8; padding: 6px; }</string></property>
+        <property name="text"><string>You minted YDollar. The vault's owner key lives only in this node's wallet.dat, which is not derived from a seed phrase. Back it up now.</string></property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnBackupNow"><property name="text"><string>Back up wallet.dat…</string></property></widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnBackupDone"><property name="text"><string>I have a backup</string></property></widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTabWidget" name="subTabs">
+     <property name="currentIndex"><number>0</number></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

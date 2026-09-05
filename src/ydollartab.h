@@ -1,0 +1,100 @@
+#ifndef YDOLLARTAB_H
+#define YDOLLARTAB_H
+
+#include "precompiled.h"
+
+class MainWindow;
+class YDollarController;
+
+namespace Ui {
+    class YDollarTab;
+    class YDollarOverview;
+    class YDollarReceive;
+    class YDollarSend;
+    class YDollarMint;
+    class YDollarPositions;
+    class YDollarTransactions;
+    class YDollarRedeem;
+    class YDollarSettings;
+}
+
+// The YDollar tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
+// in the order Overview, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings
+// (plan §4.7). Every action goes through YDollarController; nothing here touches keys or
+// the network except the redemption wizard it opens.
+//
+// `main` may be null and the controller may never be set: the tab then renders with every
+// action disabled. That is what the QTest target relies on.
+class YDollarTab : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit YDollarTab(MainWindow* main, QWidget* parent = nullptr);
+    ~YDollarTab();
+
+    void setController(YDollarController* controller);
+    YDollarController* controller() { return ctl; }
+
+    // Sub-page indices in subTabs
+    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings, PageCount };
+    QWidget* page(Page p) { return pages[p]; }
+
+    // Parses "12.34" / "12" / "$12.34" / "1,234.56" into cents; false on anything else
+    static bool parseDollars(const QString& text, qint64* cents);
+
+private:
+    void setupPages();
+    void setupOverview();
+    void setupReceive();
+    void setupSend();
+    void setupMint();
+    void setupPositions();
+    void setupTransactions();
+    void setupRedeem();
+    void setupSettings();
+
+    void updateBanner();
+    void updateOverview();
+    void updateBalances();
+    void updateMintGate();
+    void updatePositions();
+    void updateRedeemPage();
+    void updateBackupNag();
+    void updateSettingsPage();
+    void setActionsEnabled(bool enabled);
+
+    void requestEstimate();
+    void doMint();
+    void doSend();
+    void newReceiveAddress();
+    void startRedemption(const QString& vaultTxid);
+    void abortPending(const QString& vaultTxid);
+    void explainVoid(const QString& vaultTxid);
+    void saveSettings();
+    void verifyEndpoints();
+    void showTxContextMenu(QTableView* table, const QPoint& pos);
+
+    MainWindow*          main = nullptr;
+    YDollarController*   ctl  = nullptr;
+
+    Ui::YDollarTab*          ui           = nullptr;
+    Ui::YDollarOverview*     uiOverview   = nullptr;
+    Ui::YDollarReceive*      uiReceive    = nullptr;
+    Ui::YDollarSend*         uiSend       = nullptr;
+    Ui::YDollarMint*         uiMint       = nullptr;
+    Ui::YDollarPositions*    uiPositions  = nullptr;
+    Ui::YDollarTransactions* uiTx         = nullptr;
+    Ui::YDollarRedeem*       uiRedeem     = nullptr;
+    Ui::YDollarSettings*     uiSettings   = nullptr;
+    QWidget*                 pages[PageCount] = {};
+
+    bool     actionsEnabled   = false;
+    QTimer*  estimateTimer    = nullptr;
+    int      estimateSeq      = 0;
+    qint64   estimateCents    = 0;      // the amount the last estimate was for
+    int      estimateTier     = -1;
+    qint64   estimateZat      = -1;     // last estimate; -1 = none
+    QString  receiveAddress;
+};
+
+#endif // YDOLLARTAB_H

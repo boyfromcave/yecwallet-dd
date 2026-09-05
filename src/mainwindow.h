@@ -8,6 +8,7 @@
 // Forward declare to break circular dependency.
 class Controller;
 class Settings;
+class YDollarTab;
 
 using json = nlohmann::json;
 
@@ -67,6 +68,7 @@ public:
     QLabel*             statusIcon;
     QLabel*             loadingLabel;
     QWidget*            zcashdtab;
+    YDollarTab*         ydollarTab = nullptr;    // the YDollar tab, after Transactions
 
     Logger*      logger;
 
@@ -83,6 +85,7 @@ private:
     void setupReceiveTab();
     void setupBalancesTab();
     void setupZcashdTab();
+    void setupYDollarTab();
 
     void setupTurnstileDialog();
     void setupSettingsModal();

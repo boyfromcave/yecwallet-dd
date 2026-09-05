@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YDollarReceive</class>
+ <widget class="QWidget" name="YDollarReceive">
+  <layout class="QVBoxLayout" name="receiveLayout">
+   <item>
+    <widget class="QLabel" name="lblReceiveIntro">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>Send only YDollar to this address. It is a transparent address (not shielded): anyone can see the YDollar it receives. A fresh address is created each time you press New address.</string></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="addrRow">
+     <item>
+      <widget class="QLabel" name="lblAddress">
+       <property name="text"><string>-</string></property>
+       <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+       <property name="styleSheet"><string notr="true">QLabel { font-family: monospace; font-size: 13pt; }</string></property>
+      </widget>
+     </item>
+     <item><widget class="QPushButton" name="btnCopy"><property name="text"><string>Copy</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnNewAddress"><property name="text"><string>New address</string></property></widget></item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QRCodeLabel" name="lblQr">
+     <property name="minimumSize"><size><width>200</width><height>200</height></size></property>
+     <property name="alignment"><set>Qt::AlignCenter</set></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="labelRow">
+     <item><widget class="QLabel" name="lblLabelTitle"><property name="text"><string>Label (kept in this wallet's address book)</string></property></widget></item>
+     <item><widget class="QLineEdit" name="txtLabel"/></item>
+     <item><widget class="QPushButton" name="btnSaveLabel"><property name="text"><string>Save label</string></property></widget></item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblReceiveStatus"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget>
+   </item>
+   <item>
+    <spacer name="receiveSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property></spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QRCodeLabel</class>
+   <extends>QLabel</extends>
+   <header>qrcodelabel.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
