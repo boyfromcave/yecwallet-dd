@@ -192,6 +192,10 @@ void ConnectionLoader::createZcashConf() {
     out << "rpcuser=ycash\n";
     out << "rpcpassword=" % randomPassword() << "\n";
 
+    // YDollar: the yd_* RPCs are gated behind both of these (plan §4.7 Settings row).
+    out << "experimentalfeatures=1\n";
+    out << "ydollar=1\n";
+
     // Fast sync override
     if (ui.chkFastSync->isChecked()) {
         out << "fastsync=1\n";
@@ -817,6 +821,28 @@ void Connection::showTxError(const QString& error) {
     QMessageBox::critical(main, QObject::tr("Transaction Error"), QObject::tr("There was an error sending the transaction. The error was:") + "\n\n"
         + error, QMessageBox::StandardButton::Ok);
     shown = false;
+}
+
+/**
+ * YDollar: called when yd_getinfo answers "Method not found". If the node is configured
+ * from a ycash.conf we can write to, offer to append the two lines the yd_* RPCs need.
+ * Returns true if the lines were appended (the node must be restarted afterwards).
+ */
+bool Connection::offerYDollarConfRepair() {
+    auto confLocation = Settings::getInstance()->getZcashdConfLocation();
+    if (confLocation.isEmpty() || !QFile(confLocation).exists())
+        return false;
+
+    auto answer = QMessageBox::question(main, QObject::tr("YDollar not enabled"),
+        QObject::tr("The connected ycashd does not have YDollar enabled. YecWallet needs these two lines in") + "\n" +
+        confLocation + ":\n\nexperimentalfeatures=1\nydollar=1\n\n" +
+        QObject::tr("Add them now? ycashd must be restarted afterwards for the YDollar tab to work."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes)
+        return false;
+
+    return Settings::addToZcashConf(confLocation, "experimentalfeatures=1") &&
+           Settings::addToZcashConf(confLocation, "ydollar=1");
 }
 
 /**
