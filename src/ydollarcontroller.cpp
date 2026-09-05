@@ -46,10 +46,10 @@ void YDollarController::call(const char* method, const json& params, OkFn ok, Er
     }
 
     conn->doRPCSafe(rpcPayload(method, params),
-        [=](const json& result) {
+        [=, this](const json& result) {
             if (ok) ok(result);
         },
-        [=](QNetworkReply* reply, const json& parsed) {
+        [=, this](QNetworkReply* reply, const json& parsed) {
             QString msg;
             if (!parsed.is_discarded() && parsed.is_object() &&
                 parsed.contains("error") && parsed["error"].is_object() &&
@@ -94,7 +94,7 @@ void YDollarController::onConnected() {
     lastRefreshHeight = -1;
 
     call(YDollarRpc::GETINFO, json(nullptr),
-        [=](const json& info) {
+        [=, this](const json& info) {
             using namespace YDollarRpc::Info;
             enabled = YDollarJson::toBool(info, ENABLED, true);
             int version = (int)YDollarJson::toInt(info, RPCVERSION, -1);
@@ -115,7 +115,7 @@ void YDollarController::onConnected() {
             applyInfo(info);
             refresh(true);
         },
-        [=](const QString& e) {
+        [=, this](const QString& e) {
             if (isMethodNotFound(e)) {
                 setAvailability(false, tr("The connected ycashd has no YDollar RPCs (%1). Add 'experimentalfeatures=1' and 'ydollar=1' to its ycash.conf and restart it.").arg(e));
                 if (!confRepairOffered) {
@@ -157,7 +157,7 @@ void YDollarController::refresh(bool force) {
     if (!versionOk || !enabled) return;
 
     call(YDollarRpc::GETINFO, json(nullptr),
-        [=](const json& info) {
+        [=, this](const json& info) {
             applyInfo(info);
             if (force || indexHeight != lastRefreshHeight || !pending.isEmpty()) {
                 lastRefreshHeight = indexHeight;
@@ -167,7 +167,7 @@ void YDollarController::refresh(bool force) {
                 refreshTransactions();
             }
         },
-        [=](const QString& e) {
+        [=, this](const QString& e) {
             setAvailability(false, tr("yd_getinfo failed: %1").arg(e));
             emit infoUpdated();
         });
@@ -175,45 +175,45 @@ void YDollarController::refresh(bool force) {
 
 void YDollarController::refreshStats() {
     call(YDollarRpc::GETSTATS, json(nullptr),
-        [=](const json& s) {
+        [=, this](const json& s) {
             statsJson = s.is_object() ? s : json::object();
             emit statsUpdated();
         },
-        [=](const QString& e) { main->logger->write("yd_getstats: " + e); });
+        [=, this](const QString& e) { main->logger->write("yd_getstats: " + e); });
 }
 
 void YDollarController::refreshBalance() {
     call(YDollarRpc::GETBALANCE, json(nullptr),
-        [=](const json& b) {
+        [=, this](const json& b) {
             confirmed   = YDollarJson::toInt(b, YDollarRpc::Balance::CONFIRMED_CENTS);
             unconfirmed = YDollarJson::toInt(b, YDollarRpc::Balance::UNCONFIRMED_CENTS);
             emit balanceUpdated();
         },
-        [=](const QString& e) { main->logger->write("yd_getbalance: " + e); });
+        [=, this](const QString& e) { main->logger->write("yd_getbalance: " + e); });
 }
 
 void YDollarController::refreshPositions() {
     call(YDollarRpc::LISTPOSITIONS, json(nullptr),
-        [=](const json& arr) {
+        [=, this](const json& arr) {
             QList<YDollarPosition> list;
             if (arr.is_array())
                 for (auto& it : arr) list.append(YDollarPosition::fromJson(it));
             positions->setNewData(list, indexHeight);
             emit positionsUpdated();
         },
-        [=](const QString& e) { main->logger->write("yd_listpositions: " + e); });
+        [=, this](const QString& e) { main->logger->write("yd_listpositions: " + e); });
 }
 
 void YDollarController::refreshTransactions() {
     call(YDollarRpc::LISTTRANSACTIONS, json::array({200, 0}),
-        [=](const json& arr) {
+        [=, this](const json& arr) {
             QList<YDollarTx> list;
             if (arr.is_array())
                 for (auto& it : arr) list.append(YDollarTx::fromJson(it));
             transactions->setNewData(list, indexHeight);
             emit transactionsUpdated();
         },
-        [=](const QString& e) { main->logger->write("yd_listtransactions: " + e); });
+        [=, this](const QString& e) { main->logger->write("yd_listtransactions: " + e); });
 }
 
 // ── Pending redemptions ───────────────────────────────────────────────────────────────────
@@ -236,7 +236,7 @@ bool YDollarController::watchPending() {
     if (pending.isEmpty() || !versionOk) return false;
 
     call(YDollarRpc::GETINFO, json(nullptr),
-        [=](const json& info) {
+        [=, this](const json& info) {
             int h = (int)YDollarJson::toInt(info, YDollarRpc::Info::HEIGHT, indexHeight);
             indexHeight = h;
             QList<QString> expired;
@@ -248,7 +248,7 @@ bool YDollarController::watchPending() {
                 emit pendingExpired(v);
             }
         },
-        [=](const QString&) {});
+        [=, this](const QString&) {});
     return true;
 }
 

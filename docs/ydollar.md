@@ -71,3 +71,29 @@ ordinary compile errors; none of the design depends on anything unverified beyon
 - Copy: the wallet never describes YDollar as trustless or shielded (plan §8.1). It says
   "transparent" and "federated" where a user might expect otherwise.
 - Errors: node error strings are stable identifiers and are always shown verbatim.
+
+## Where the code is
+
+| File | What |
+|---|---|
+| `src/ydollarrpc.h` | the RPC contract: every `yd_*` method name, result field, error identifier, `/cosign` shape and displayed protocol constant; `RPC_VERSION = 1` |
+| `src/ydollarcontroller.{cpp,h}` | `YDollarController`: all `yd_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/balance, mint gate reasons, pending redemptions. Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
+| `src/ydollarmodels.{cpp,h}` | `YDollarPosition` / `YDollarTx` records, tolerant JSON readers, formatting helpers, `YDollarPositionsModel`, `YDollarTxModel` |
+| `src/ydollartab.{cpp,h,ui}` + `src/ydollar{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the YDollar tab (index 4 of the main tab bar, after Transactions) and its eight sub-pages |
+| `src/ydollarredeemwizard.{cpp,h}` | the redemption wizard: `yd_redeem` → operator `/cosign` POSTs → `yd_submitredeem`, with retry, countdown and abort |
+| `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `ydollar=1`; `Connection::offerYDollarConfRepair` appends them to an existing conf |
+| `src/settings.{cpp,h}` | `ydollar/endpoints`, `ydollar/unitcents`, `ydollar/advanced`, `ydollar/backuppending`; `getYDollarRpcVersion()` |
+| `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
+| `CMakeLists.txt`, `tests/ydollartab_test.cpp` | source registration; the optional `ydollar_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
+
+## Operator `/cosign` request shape assumed by the wizard
+
+`POST <endpoint>/cosign`, body `{"hex": "<owner-signed hex>"}`, `Content-Type: application/json`,
+30-second transfer timeout. A 2xx reply is either `{"hex": "<hex with one more signature>"}` or
+a plain-text hex body. Any other status is `{"error": "<RED-n ...>", "transient": bool}`; a
+missing `transient` falls back to matching `RED-0` / `RED-2` in the error text (plan E2), and a
+network-level failure with no HTTP status is treated as transient too. Operators are contacted
+one at a time in the configured order, each receiving the hex the previous one returned. This
+is the wallet's reading of plan §5 and D16, which fix the body as "owner-signed hex" and the
+reply as "the hex with one more signature" but not the framing; reconcile against the
+coordinator when it exists.
