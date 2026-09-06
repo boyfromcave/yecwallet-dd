@@ -63,6 +63,47 @@ Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
   `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
   separate step that needs an Apple Developer account.
 
+## Trying it on one laptop: the devnet
+
+`ycash-dd/contrib/yellowback/devnet/yellowback-devnet` builds a private Yellowback network on
+one machine and leaves it running: five regtest nodes (0 and 1 users, 2 to 4 a 2-of-3
+federation), a funded user wallet, the genesis anchor, and one federation coordinator per
+operator node publishing a mock price and answering `/cosign`. It stops at "ready to mint", so
+nothing has tripped the volatility freeze, and the coordinators keep the price fresh as you mine.
+Nothing leaves 127.0.0.1 and no mainnet sync happens.
+
+```bash
+cd ycash-dd
+PY=../.venv/bin/python                                  # the workspace venv has the test framework's deps
+$PY contrib/yellowback/devnet/yellowback-devnet up      # about a minute; prints the two things below
+$PY contrib/yellowback/devnet/yellowback-devnet wallet  # launches the built wallet against node 0
+```
+
+`up` prints the wallet command (`yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`)
+and three operator endpoints (`http://127.0.0.1:<port>`) to paste once into the wallet's
+Yellowback tab → Settings. From then on Mint, Send and the Redeem wizard work end to end: the
+wizard posts to those endpoints and the coordinators co-sign through their nodes'
+`yed_cosignredeem`. Plain HTTP is accepted by the wizard; production endpoints are HTTPS.
+
+While testing:
+
+| Command | What it does |
+|---|---|
+| `yellowback-devnet mine 10` | mines 10 blocks on node 0, half a second apart so the federation fits its price rounds in; prints height, price age and whether minting is open |
+| `yellowback-devnet price 45` | changes the mock price the federation publishes (each round moves the on-chain price at most 10 %; a 20 % move within 48 blocks freezes minting for 96 blocks, so this is also how to demo the freeze) |
+| `yellowback-devnet status` | nodes, coordinators (rounds, co-signs, refusals), height, price and age, freeze state, node 0's balances and positions |
+| `yellowback-devnet cli -- yed_listpositions` | `ycash-cli` against node 0 (`--node 2` for an operator node) |
+| `yellowback-devnet down` | stops the coordinators and nodes; `down --wipe` also deletes `~/yb-devnet` |
+
+A tier-0 vault unlocks 48 blocks after its mint on regtest (the tiers are 48, 96, 144, 192, 240
+blocks). Verified 2026-09-06 through the CLI equivalents of the GUI flow: mint on node 0,
+`mine 86`, `yellowback-redeem` against the three endpoints (2 of 3 signatures), vault CLOSED with
+the burn recorded, price age never above 9 blocks while mining.
+
+Why not `yellowback_lifecycle.py --noshutdown`: that script exercises a 20 % price drop and a
+25 % jump on purpose, which trips the volatility rule, so it leaves minting frozen for 96
+blocks and its federation stops with it; the devnet exists so a manual demo starts clean.
+
 ## Attaching the GUI to a regtest playground node (plan H2)
 
 No new options were added. The stock options already do it:
