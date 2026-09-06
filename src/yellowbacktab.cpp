@@ -13,6 +13,8 @@
 #include "ui_yellowbackreceive.h"
 #include "ui_yellowbacksend.h"
 #include "ui_yellowbackmint.h"
+
+#include <QSignalBlocker>
 #include "ui_yellowbackpositions.h"
 #include "ui_yellowbacktransactions.h"
 #include "ui_yellowbackredeem.h"
@@ -224,7 +226,7 @@ void YellowbackTab::updateOverview() {
     uiOverview->lblVaults->setText(QString::number(YellowbackJson::toInt(s, ACTIVE_VAULTS)) % " / " %
                                    QString::number(YellowbackJson::toInt(s, VOID_VAULTS)));
 
-    uiMint->lblYecAvailable->setText(Settings::getZECDisplayFormat(ctl->yecBalance()));
+    refreshFundingSources();
 }
 
 void YellowbackTab::updateBalances() {
@@ -407,10 +409,38 @@ void YellowbackTab::setupMint() {
 
     QObject::connect(uiMint->txtAmount, &QLineEdit::textChanged, [=, this](const QString&) { estimateTimer->start(); });
     QObject::connect(uiMint->cmbTier, &QComboBox::currentIndexChanged, [=, this](int) { estimateTimer->start(); });
+    QObject::connect(uiMint->cmbFundFrom, &QComboBox::currentIndexChanged, [=, this](int) {
+        if (ctl != nullptr) uiMint->lblYecAvailable->setText(Settings::getZECDisplayFormat(ctl->yecBalanceAt(fundingSource())));
+        estimateTimer->start();
+    });
     QObject::connect(uiMint->btnMint, &QPushButton::clicked, [=, this]() { doMint(); });
+    refreshFundingSources();
 
     uiMint->lblGate->setVisible(false);
     uiMint->btnMint->setEnabled(false);
+}
+
+QString YellowbackTab::fundingSource() const {
+    return uiMint->cmbFundFrom->currentData().toString();
+}
+
+void YellowbackTab::refreshFundingSources() {
+    // Plan I2: the transparent total, then every Sapling address of the wallet with its balance.
+    // Rebuilt on each refresh cycle; the current choice survives as long as the address still exists.
+    QString keep = fundingSource();
+    QSignalBlocker block(uiMint->cmbFundFrom);
+    uiMint->cmbFundFrom->clear();
+    double t = ctl != nullptr ? ctl->yecBalance() : 0.0;
+    uiMint->cmbFundFrom->addItem(tr("Transparent balance (all s1… addresses): %1").arg(Settings::getZECDisplayFormat(t)), QString());
+    if (ctl != nullptr) {
+        for (const auto& a : ctl->saplingAddresses()) {
+            uiMint->cmbFundFrom->addItem(tr("Shielded %1…%2: %3").arg(a.first.left(14)).arg(a.first.right(6))
+                                             .arg(Settings::getZECDisplayFormat(a.second)), a.first);
+        }
+    }
+    int idx = keep.isEmpty() ? 0 : uiMint->cmbFundFrom->findData(keep);
+    uiMint->cmbFundFrom->setCurrentIndex(idx < 0 ? 0 : idx);
+    uiMint->lblYecAvailable->setText(ctl != nullptr ? Settings::getZECDisplayFormat(ctl->yecBalanceAt(fundingSource())) : "-");
 }
 
 void YellowbackTab::updateMintGate() {
@@ -476,10 +506,13 @@ void YellowbackTab::requestEstimate() {
             int unlock = (int)YellowbackJson::toInt(e, UNLOCK_HEIGHT);
             uiMint->lblUnlock->setText(YellowbackFormat::heightWithEstimate(unlock, ctl->height()) %
                 tr("  — %1 blocks; dates are estimates at 75 s/block").arg(YellowbackJson::toInt(e, LOCK_BLOCKS)));
-            double haveZec = ctl->yecBalance();
+            double haveZec = ctl->yecBalanceAt(fundingSource());
             if ((double)estimateZat / 100000000.0 > haveZec)
-                uiMint->lblMintHint->setText(tr("You have %1 of transparent YEC; this mint needs %2 plus the fee.")
-                    .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat)));
+                uiMint->lblMintHint->setText(fundingSource().isEmpty()
+                    ? tr("You have %1 of transparent YEC; this mint needs %2 plus the fee. Choose a shielded address above to fund it from there instead.")
+                          .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat))
+                    : tr("The selected shielded address holds %1 of YEC; this mint needs %2 plus the fee.")
+                          .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat)));
             updateMintGate();
         },
         [=, this](const QString& err) {
@@ -503,6 +536,7 @@ void YellowbackTab::doMint() {
         return;
     }
 
+    const QString from = fundingSource();
     QString text = tr("Mint %1 of Yellowback?\n\n"
                       "Collateral: about %2 of YEC, locked in a vault until height %3 (%4 lock). "
                       "The exact requirement is fixed when your node signs the transaction, using the price "
@@ -512,19 +546,26 @@ void YellowbackTab::doMint() {
                       "The vault's owner key lives only in this node's wallet.dat. Back it up after minting.")
                       .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(estimateZat))
                       .arg(uiMint->lblUnlock->text().section(' ', 0, 0)).arg(YellowbackFormat::tierName(tier));
+    text += from.isEmpty()
+        ? tr("\n\nFunded from your transparent balance.")
+        : tr("\n\nFunded from the shielded address %1 in the same transaction: the collateral amount and the vault are "
+             "visible on the chain (as with any mint); the address it came from is not. Your node makes the Sapling "
+             "proofs first, which takes a few seconds per note spent.").arg(from);
     if (QMessageBox::question(this, tr("Confirm mint"), text, QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes)
         return;
 
     uiMint->btnMint->setEnabled(false);
-    uiMint->lblMintStatus->setText(tr("Minting..."));
-    ctl->mint(cents, tier,
+    uiMint->lblMintStatus->setText(from.isEmpty() ? tr("Minting...") : tr("Minting from the shielded address (making Sapling proofs)..."));
+    ctl->mint(cents, tier, from,
         [=, this](const json& r) {
             using namespace YellowbackRpc::MintResult;
             QString warning = YellowbackJson::toStr(r, WARNING);
-            uiMint->lblMintStatus->setText(tr("Mint submitted. txid: %1\nVault: %2, lock height %3, collateral %4, expires unmined at height %5")
+            QString funded = YellowbackJson::toStr(r, FUNDED_FROM);
+            uiMint->lblMintStatus->setText(tr("Mint submitted. txid: %1\nVault: %2, lock height %3, collateral %4 (%6), expires unmined at height %5")
                 .arg(YellowbackJson::toStr(r, TXID)).arg(YellowbackJson::toStr(r, VAULT))
                 .arg(YellowbackJson::toInt(r, LOCK_HEIGHT)).arg(YellowbackFormat::zec(YellowbackJson::toInt(r, COLLATERAL_ZAT)))
-                .arg(YellowbackJson::toInt(r, EXPIRY_HEIGHT)) %
+                .arg(YellowbackJson::toInt(r, EXPIRY_HEIGHT))
+                .arg(funded == "sapling" ? tr("funded from a shielded address") : tr("funded from transparent YEC")) %
                 (warning.isEmpty() ? QString() : "\n" % tr("Node warning: ") % warning));
             uiMint->txtAmount->clear();
             estimateZat = -1;

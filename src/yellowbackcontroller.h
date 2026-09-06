@@ -52,7 +52,12 @@ public:
     const json& params() const { return paramsJson; }           // yed_getinfo.params
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
-    double  yecBalance() const;                   // from the stock DataModel
+    double  yecBalance() const;                   // from the stock DataModel: every transparent address
+    // Plan I2: funding sources and collateral destinations. `source` is "" for the transparent
+    // total, else one address (s1... or ys1...) whose balance the DataModel knows.
+    double  yecBalanceAt(const QString& source) const;
+    QList<QPair<QString, double>> saplingAddresses() const;      // ys1... addresses of this wallet with balances
+    QList<QPair<QString, double>> transparentAddresses() const;  // s1... addresses of this wallet with balances
 
     YellowbackPositionsModel* positionsModel() { return positions; }
     YellowbackTxModel*        transactionsModel() { return transactions; }
@@ -78,8 +83,10 @@ public:
     void validateAddress(const QString& addr, OkFn ok, ErrFn err);
     void estimateCollateral(qint64 cents, int tier, OkFn ok, ErrFn err);
     void mint(qint64 cents, int tier, OkFn ok, ErrFn err);
+    void mint(qint64 cents, int tier, const QString& from, OkFn ok, ErrFn err);   // from: "" | s1... | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, OkFn ok, ErrFn err);
+    void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err); // to: "" | s1... | ys1... (I2)
     void submitRedeem(const QString& hex, OkFn ok, ErrFn err);
     void abortRedeem(const QString& vaultTxid, OkFn ok, ErrFn err);
     void getRoster(OkFn ok, ErrFn err);

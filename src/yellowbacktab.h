@@ -57,6 +57,8 @@ private:
     void updateOverview();
     void updateBalances();
     void updateMintGate();
+    QString fundingSource() const;          // "" = transparent total, else the chosen ys1... address (I2)
+    void refreshFundingSources();           // rebuild cmbFundFrom from the DataModel, keeping the selection
     void updatePositions();
     void updateRedeemPage();
     void updateBackupNag();

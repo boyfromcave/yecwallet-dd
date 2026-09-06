@@ -4,6 +4,8 @@
 #include "connection.h"
 #include "settings.h"
 
+#include <QComboBox>
+#include <QFormLayout>
 #include <QVBoxLayout>
 
 using json = nlohmann::json;
@@ -54,6 +56,20 @@ void YellowbackRedeemWizard::buildReviewPage() {
     lblReview->setWordWrap(true);
     lblReview->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(lblReview);
+
+    // Plan I2: the collateral destination. A fresh transparent address by default; any of the
+    // wallet's Sapling addresses (paid as a Sapling output, straight into the shielded pool) or
+    // transparent addresses otherwise.
+    auto form = new QFormLayout();
+    cmbDestination = new QComboBox(pgReview);
+    cmbDestination->addItem(tr("A fresh transparent address of this wallet (default)"), QString());
+    for (const auto& a : ctl->saplingAddresses())
+        cmbDestination->addItem(tr("Shielded %1…%2 (balance %3)").arg(a.first.left(14)).arg(a.first.right(6)).arg(Settings::getZECDisplayFormat(a.second)), a.first);
+    for (const auto& a : ctl->transparentAddresses())
+        cmbDestination->addItem(tr("Transparent %1…%2 (balance %3)").arg(a.first.left(8)).arg(a.first.right(6)).arg(Settings::getZECDisplayFormat(a.second)), a.first);
+    cmbDestination->setToolTip(tr("Where the released collateral goes. Choosing a shielded (ys1…) address sends it straight into the shielded pool in the redemption itself; nothing is unshielded or re-shielded afterwards."));
+    form->addRow(tr("Return collateral to"), cmbDestination);
+    layout->addLayout(form);
     layout->addStretch();
     setPage(ReviewPage, pgReview);
 
@@ -167,11 +183,16 @@ QString YellowbackRedeemWizard::deadlineText() const {
 
 void YellowbackRedeemWizard::startRedeem() {
     collecting = true;
-    lblCollectStatus->setText(tr("Calling yed_redeem..."));
-    ctl->redeem(pos.vaultTxid,
+    destination = cmbDestination != nullptr ? cmbDestination->currentData().toString() : QString();
+    lblCollectStatus->setText(destination.startsWith("ys") || destination.startsWith("ytestsapling") || destination.startsWith("yregtestsapling")
+        ? tr("Calling yed_redeem (making the Sapling proof for the collateral output)...")
+        : tr("Calling yed_redeem..."));
+    ctl->redeem(pos.vaultTxid, destination,
         [=, this](const json& r) {
             using namespace YellowbackRpc::RedeemResult;
             hex               = YellowbackJson::toStr(r, HEX);
+            collateralTo      = YellowbackJson::toStr(r, COLLATERAL_TO);
+            shieldedCollateral = r.find(SHIELDED) != r.end() && r[SHIELDED].is_boolean() && r[SHIELDED].get<bool>();
             expiryHeight      = (int)YellowbackJson::toInt(r, EXPIRY_HEIGHT);
             requiredBurnCents = YellowbackJson::toInt(r, REQUIRED_BURN_CENTS, pos.requiredBurnCents);
             burnCents         = YellowbackJson::toInt(r, BURN_CENTS, requiredBurnCents);
@@ -186,8 +207,10 @@ void YellowbackRedeemWizard::startRedeem() {
             }
             if (rosterK <= 0) rosterK = 1;
 
-            lblCollectStatus->setText(tr("Your node signed the redemption (burning %1, expiry height %2). Contacting operators...")
-                .arg(YellowbackFormat::cents(burnCents)).arg(expiryHeight));
+            lblCollectStatus->setText(tr("Your node signed the redemption (burning %1, expiry height %2; collateral to %3%4). Contacting operators...")
+                .arg(YellowbackFormat::cents(burnCents)).arg(expiryHeight)
+                .arg(collateralTo.isEmpty() ? tr("a fresh transparent address") : collateralTo)
+                .arg(shieldedCollateral ? tr(", as a shielded output") : QString()));
             lblDeadline->setText(deadlineText());
             refreshOperatorList();
             timer->start();
@@ -378,8 +401,10 @@ void YellowbackRedeemWizard::doSubmit() {
             submittedTxid = YellowbackJson::toStr(r, YellowbackRpc::SubmitResult::TXID);
             qint64 q = YellowbackJson::toInt(r, YellowbackRpc::SubmitResult::QUORUM_SIGNATURES, signatures);
             ctl->removePendingRedemption(pos.vaultTxid);
-            lblSubmit->setText(tr("Broadcast with %1 federation signature(s). txid: %2\n\n%3 of YED were burned; %4 of collateral returns to your wallet once the transaction confirms.")
-                .arg(q).arg(submittedTxid).arg(YellowbackFormat::cents(burnCents)).arg(YellowbackFormat::zec(pos.collateralZat)));
+            lblSubmit->setText(tr("Broadcast with %1 federation signature(s). txid: %2\n\n%3 of YED were burned; %4 of collateral goes to %5 once the transaction confirms.")
+                .arg(q).arg(submittedTxid).arg(YellowbackFormat::cents(burnCents)).arg(YellowbackFormat::zec(pos.collateralZat))
+                .arg(collateralTo.isEmpty() ? tr("a fresh transparent address of this wallet")
+                                            : (shieldedCollateral ? tr("the shielded address %1").arg(collateralTo) : tr("the address %1").arg(collateralTo))));
             pgSubmit->setOk(true);
         },
         [=, this](const QString& e) {

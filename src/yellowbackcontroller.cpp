@@ -1,4 +1,6 @@
 #include "yellowbackcontroller.h"
+
+#include <algorithm>
 #include "yellowbackrpc.h"
 #include "controller.h"
 #include "connection.h"
@@ -308,6 +310,36 @@ double YellowbackController::yecBalance() const {
     return total;
 }
 
+double YellowbackController::yecBalanceAt(const QString& source) const {
+    if (source.isEmpty()) return yecBalance();
+    if (rpc == nullptr) return 0.0;
+    return rpc->getModel()->getAllBalances().value(source, 0.0);
+}
+
+QList<QPair<QString, double>> YellowbackController::saplingAddresses() const {
+    QList<QPair<QString, double>> out;
+    if (rpc == nullptr) return out;
+    auto balances = rpc->getModel()->getAllBalances();
+    for (const QString& a : rpc->getModel()->getAllZAddresses()) {
+        if (!Settings::getInstance()->isSaplingAddress(a)) continue;   // Sprout cannot fund or receive (plan I2)
+        out.append(qMakePair(a, balances.value(a, 0.0)));
+    }
+    std::sort(out.begin(), out.end(), [](const QPair<QString, double>& x, const QPair<QString, double>& y) { return x.second > y.second; });
+    return out;
+}
+
+QList<QPair<QString, double>> YellowbackController::transparentAddresses() const {
+    QList<QPair<QString, double>> out;
+    if (rpc == nullptr) return out;
+    auto balances = rpc->getModel()->getAllBalances();
+    for (const QString& a : rpc->getModel()->getAllTAddresses()) {
+        if (!Settings::isTAddress(a)) continue;
+        out.append(qMakePair(a, balances.value(a, 0.0)));
+    }
+    std::sort(out.begin(), out.end(), [](const QPair<QString, double>& x, const QPair<QString, double>& y) { return x.second > y.second; });
+    return out;
+}
+
 // ── Protocol parameters ───────────────────────────────────────────────────────────────────
 
 qint64 YellowbackController::minMintCents() const   { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MIN_MINT_CENTS,   YellowbackRpc::MIN_MINT_CENTS); }
@@ -385,12 +417,22 @@ void YellowbackController::mint(qint64 cents, int tier, OkFn ok, ErrFn err) {
     call(YellowbackRpc::MINT, json::array({cents, tier}), ok, err);
 }
 
+void YellowbackController::mint(qint64 cents, int tier, const QString& from, OkFn ok, ErrFn err) {
+    if (from.isEmpty()) { mint(cents, tier, ok, err); return; }
+    call(YellowbackRpc::MINT, json::array({cents, tier, from.toStdString()}), ok, err);
+}
+
 void YellowbackController::send(const QString& addr, qint64 cents, OkFn ok, ErrFn err) {
     call(YellowbackRpc::SEND, json::array({addr.toStdString(), cents}), ok, err);
 }
 
 void YellowbackController::redeem(const QString& vaultTxid, OkFn ok, ErrFn err) {
     call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString()}), ok, err);
+}
+
+void YellowbackController::redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
+    if (to.isEmpty()) { redeem(vaultTxid, ok, err); return; }
+    call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
 }
 
 void YellowbackController::submitRedeem(const QString& hex, OkFn ok, ErrFn err) {

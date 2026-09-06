@@ -23,7 +23,8 @@ private:
 
 // The redemption wizard (plan §4.7 Redeem row, §5 "Redemption client", D16):
 //
-//   1 Review     burn, collateral returned, roster k-of-n, configured operators
+//   1 Review     burn, collateral returned, its destination (a fresh transparent address, or one
+//                of the wallet's s1.../ys1... addresses; plan I2), roster k-of-n, configured operators
 //   2 Collect    yed_redeem on the local node -> POST the hex to each operator's /cosign endpoint
 //                (HTTPS, through the app's existing QNetworkAccessManager) until k signatures;
 //                transient refusals ("RED-n: ... (transient)", or transient: true) retried after
@@ -76,6 +77,10 @@ private:
     // Review
     YellowbackWizardPage*  pgReview   = nullptr;
     QLabel*             lblReview  = nullptr;
+    QComboBox*          cmbDestination = nullptr;   // plan I2: where the collateral goes
+    QString             destination;                // "" = fresh transparent address, else s1... / ys1...
+    QString             collateralTo;               // yed_redeem.collateralTo
+    bool                shieldedCollateral = false; // yed_redeem.shielded
     int                 rosterK    = 0;
     int                 rosterN    = 0;
 

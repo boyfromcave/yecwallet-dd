@@ -207,6 +207,8 @@ namespace MintResult {
     constexpr const char* COLLATERAL_ZAT    = "collateralZat";
     constexpr const char* OWNER_KEY_ID      = "ownerKeyId";
     constexpr const char* WARNING           = "warning";
+    constexpr const char* FUNDED_FROM       = "fundedFrom";    // "transparent" | "sapling" (plan I2)
+    constexpr const char* FROM              = "from";          // the funding address as given ("" = any transparent)
 }
 
 // ── yed_send result ────────────────────────────────────────────────────────────────────────
@@ -226,6 +228,8 @@ namespace RedeemResult {
     constexpr const char* CHANGE_CENTS      = "changeCents";
     constexpr const char* EXPIRY_HEIGHT     = "expiryHeight";
     constexpr const char* DEADLINE_HEIGHT   = "deadlineHeight"; // submit at or before this height
+    constexpr const char* COLLATERAL_TO     = "collateralTo";  // where the collateral goes (plan I2)
+    constexpr const char* SHIELDED          = "shielded";      // true when it is a Sapling output
 }
 
 // ── yed_submitredeem result ────────────────────────────────────────────────────────────────
