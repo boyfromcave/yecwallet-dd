@@ -12,7 +12,7 @@ listed once in `src/yellowbackrpc.h`.
 | Host | macOS 26.0 (Darwin 25.0.0), arm64, Apple clang 17.0.0 | same |
 | CMake | not installed | `/opt/homebrew/bin/cmake` (+ ninja) |
 | Qt 6 (system) | not installed | Homebrew `qt` at `/opt/homebrew/opt/qt` (Qt 6, with `Qt6::Test`) |
-| Qt 6 (static, `build.sh`) | not attempted | still not attempted (release packaging only) |
+| Qt 6 (static, `build.sh`) | not attempted | **done** 2026-09-05: `bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd` builds static Qt 6.5.8 and produces `artifacts/macos-arm64-yecwallet-v4.5.0.dmg` with `ycashd` inside the bundle (see "Release build on macOS" below) |
 | Build of the fork | blocked | **compiles**: `build/bin/yecwallet.app` and `build/bin/yellowback_test` |
 | `yellowback_test` (QTest, offscreen) | not built | **passes** (5 cases, including the frozen-contract case) |
 
@@ -32,6 +32,36 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 
 The release configuration is unchanged: `./build.sh --package` builds the static Qt 6.5.8 and
 links the wallet against it (`-no-feature-testlib`, so the test target is skipped there).
+
+## Release build on macOS
+
+```bash
+brew install cmake ninja                       # Xcode Command Line Tools required
+cd yecwallet-dd
+bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd
+```
+
+`build.sh` compiles a static Qt 6.5.8 into `deps/` the first time (about 20 minutes on an
+Apple Silicon laptop; skipped afterwards), builds the wallet against it, verifies no Qt dylib
+is referenced, copies the given `ycashd` into `yecwallet.app/Contents/MacOS/` (the wallet starts
+the node it finds beside its own executable, so `--package` without `--ycashd` ships a wallet with
+no node and warns), and writes `artifacts/macos-arm64-yecwallet-v<version>.dmg` with the app and
+an Applications shortcut. The `--ycashd` binary must match the target architecture; the script
+checks with `lipo`.
+
+Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
+
+- **Apple removed the AGL framework from the macOS 26 SDK, and Qt 6.5 links it.** Against the
+  default SDK the Qt build fails with `ld: framework 'AGL' not found`. `build.sh` therefore picks
+  the newest installed SDK that still ships `AGL.framework` (here `MacOSX15.4.sdk`, which the
+  Command Line Tools keep alongside the current one) and exports `SDKROOT` for both the Qt and the
+  wallet build; set `SDKROOT` yourself to override. The resulting binaries record SDK 15.4 and a
+  minimum macOS of 11.0. Moving to a Qt release that no longer links AGL (6.8 or later) removes
+  the need.
+- The package is **ad-hoc signed** (`codesign` shows `Signature=adhoc`, no team). Gatekeeper
+  treats it as from an unidentified developer: right-click → Open on first launch, or
+  `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
+  separate step that needs an Apple Developer account.
 
 ## Attaching the GUI to a regtest playground node (plan H2)
 

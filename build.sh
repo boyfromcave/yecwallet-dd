@@ -22,6 +22,10 @@
 #   --prefix DIR        Override install prefix for deps (./deps)
 #   --jobs N            Parallel jobs              (default: nproc)
 #   --package           Create distributable archive / .dmg / .zip after build
+#   --ycashd PATH       Bundle this ycashd binary with the package (macOS: inside
+#                       yecwallet.app/Contents/MacOS; Linux/Windows: beside the
+#                       executable). The wallet starts the ycashd found beside its
+#                       own executable, so a package without one ships no node.
 #   -h, --help          Show this help
 #
 # ENVIRONMENT VARIABLES (override defaults)
@@ -43,6 +47,9 @@
 #
 #   # macOS universal binary
 #   bash build.sh macos-universal
+
+#   # macOS release: static Qt, the app, the node inside the bundle, a .dmg under artifacts/
+#   bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd
 #
 #   # Use a pre-built Qt, only compile the app
 #   QT_STATIC_ROOT=/opt/myqt bash build.sh --app-only linux-x86_64
@@ -63,6 +70,7 @@ DEPS_ONLY=false
 APP_ONLY=false
 DO_PACKAGE=false
 REBUILD_QT=false
+YCASHD_BIN=""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 info()    { echo ""; echo "━━━ $* ━━━"; }
@@ -77,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --app-only)        APP_ONLY=true ;;
         --rebuild-qt)      REBUILD_QT=true ;;
         --package)         DO_PACKAGE=true ;;
+        --ycashd)          YCASHD_BIN="$2"; shift ;;
         --build-type)      BUILD_TYPE="$2"; shift ;;
         --qt-version)      QT_VERSION="$2"; shift ;;
         --prefix)          DEPS_PREFIX="$2"; shift ;;
@@ -110,7 +119,8 @@ QT_STATIC_ROOT="${QT_STATIC_ROOT:-${DEPS_PREFIX}/qt-${QT_VERSION}/${TARGET}}"
 BUILD_DIR="${SCRIPT_DIR}/build/${TARGET}"
 ARTIFACTS_DIR="${SCRIPT_DIR}/artifacts"
 
-APP_VERSION="$(grep -oP '(?<=APP_VERSION ")[^"]+' "${SCRIPT_DIR}/src/version.h" 2>/dev/null || echo "dev")"
+APP_VERSION="$(sed -n 's/^#define APP_VERSION "\([^"]*\)".*/\1/p' "${SCRIPT_DIR}/src/version.h" 2>/dev/null | head -n1)"
+APP_VERSION="${APP_VERSION:-dev}"
 
 export WORK_DIR
 
@@ -134,6 +144,60 @@ export LLVM_MINGW_ROOT="${LLVM_MINGW_ROOT:-}"
 if [[ "$TARGET" == macos-* && "$(uname)" != "Darwin" ]]; then
     die "macOS targets must be built on a macOS host."
 fi
+
+# ── macOS SDK selection ──────────────────────────────────────────────────────
+# Qt 6.5 links the AGL framework on macOS and Apple removed AGL from the macOS 26 SDK, so a build
+# against the default SDK fails at link ("ld: framework 'AGL' not found"). Build against the newest
+# installed SDK that still ships AGL. SDKROOT in the environment overrides this choice.
+sdk_version() { basename "$1" | sed -E 's/^MacOSX([0-9.]+)\.sdk$/\1/'; }
+if [[ "$TARGET" == macos-* ]]; then
+    if [[ -n "${SDKROOT:-}" ]]; then
+        step "macOS SDK: ${SDKROOT} (from environment)"
+    else
+        _default_sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+        if [[ -n "$_default_sdk" && ! -d "${_default_sdk}/System/Library/Frameworks/AGL.framework" ]]; then
+            _pick=""
+            for _cand in "$(dirname "$_default_sdk")"/MacOSX[0-9]*.sdk; do
+                [[ -d "${_cand}/System/Library/Frameworks/AGL.framework" ]] || continue
+                if [[ -z "$_pick" ]] || [[ "$(printf '%s\n%s\n' "$(sdk_version "$_pick")" "$(sdk_version "$_cand")" | sort -t. -k1,1n -k2,2n | tail -n1)" == "$(sdk_version "$_cand")" ]]; then
+                    _pick="$_cand"
+                fi
+            done
+            [[ -n "$_pick" ]] || die "The default macOS SDK (${_default_sdk}) has no AGL.framework, which Qt ${QT_VERSION} links, and no other installed SDK has it. Install an older SDK (macOS 15) or set SDKROOT."
+            export SDKROOT="$_pick"
+            step "macOS SDK: ${SDKROOT} (the default SDK $(xcrun --sdk macosx --show-sdk-version 2>/dev/null) lacks AGL.framework, needed by Qt ${QT_VERSION})"
+        fi
+    fi
+fi
+
+# ── Node binary to bundle (--ycashd) ─────────────────────────────────────────
+if [[ -n "$YCASHD_BIN" ]]; then
+    [[ -f "$YCASHD_BIN" && -x "$YCASHD_BIN" ]] || die "--ycashd: not an executable file: $YCASHD_BIN"
+    YCASHD_BIN="$(cd "$(dirname "$YCASHD_BIN")" && pwd)/$(basename "$YCASHD_BIN")"
+    if [[ "$TARGET" == macos-* ]]; then
+        # The node must run on the same architecture(s) as the wallet that starts it.
+        _archs="$(lipo -archs "$YCASHD_BIN" 2>/dev/null || echo unknown)"
+        case "$TARGET" in
+            macos-arm64)      [[ "$_archs" == *arm64*  ]] || die "--ycashd: $YCASHD_BIN is [$_archs], need arm64" ;;
+            macos-x86_64)     [[ "$_archs" == *x86_64* ]] || die "--ycashd: $YCASHD_BIN is [$_archs], need x86_64" ;;
+            macos-universal)  [[ "$_archs" == *arm64* && "$_archs" == *x86_64* ]] || die "--ycashd: $YCASHD_BIN is [$_archs], need x86_64 and arm64" ;;
+        esac
+    fi
+elif $DO_PACKAGE; then
+    echo "WARNING: --package without --ycashd: the package will not contain a node; the wallet" >&2
+    echo "         will only work against an already running ycashd (or --no-embedded)." >&2
+fi
+
+# Copy the node beside the wallet executable: strip a copy, never the original.
+bundle_ycashd() {
+    local dest_dir="$1"
+    [[ -n "$YCASHD_BIN" ]] || return 0
+    mkdir -p "${dest_dir}"
+    cp "$YCASHD_BIN" "${dest_dir}/ycashd"
+    chmod 755 "${dest_dir}/ycashd"
+    strip "${dest_dir}/ycashd" 2>/dev/null || true
+    step "Bundled ycashd: ${dest_dir}/ycashd ($(du -h "${dest_dir}/ycashd" | cut -f1))"
+}
 
 
 echo ""
@@ -251,6 +315,7 @@ if $DO_PACKAGE; then
         mkdir -p "${PKG_DIR}"
         cp "${BIN}"             "${PKG_DIR}/"
         cp "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/"
+        bundle_ycashd "${PKG_DIR}"
         TARBALL="${ARTIFACTS_DIR}/linux-x86_64-yecwallet-v${APP_VERSION}.tar.gz"
         tar -czf "${TARBALL}" -C "${BUILD_DIR}/pkg" "yecwallet-v${APP_VERSION}"
         step "Package: ${TARBALL}"
@@ -260,17 +325,29 @@ if $DO_PACKAGE; then
         mkdir -p "${PKG_DIR}"
         cp "${BIN}"             "${PKG_DIR}/"
         cp "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/"
+        bundle_ycashd "${PKG_DIR}"
         ZIPFILE="${ARTIFACTS_DIR}/windows-x86_64-yecwallet-v${APP_VERSION}.zip"
         (cd "${BUILD_DIR}/pkg" && zip -r "${ZIPFILE}" "yecwallet-v${APP_VERSION}")
         step "Package: ${ZIPFILE}"
         ;;
     macos-*|macos-universal)
         APP_BUNDLE="${BUILD_DIR}/bin/yecwallet.app"
+        [[ -d "${APP_BUNDLE}" ]] || die "App bundle not found: ${APP_BUNDLE}"
+        bundle_ycashd "${APP_BUNDLE}/Contents/MacOS"
         step "Running macdeployqt..."
-        "${QT_STATIC_ROOT}/bin/macdeployqt" "${APP_BUNDLE}" -dmg
+        # Static Qt: macdeployqt finds no frameworks to copy and says so; it still fixes up the
+        # bundle's plugin/rpath layout, so keep it. The .dmg is made with hdiutil rather than
+        # macdeployqt -dmg, which names the volume after the bundle's full build path.
+        "${QT_STATIC_ROOT}/bin/macdeployqt" "${APP_BUNDLE}" 2>&1 | grep -v -E '^WARNING: ?$|Could not find any external Qt frameworks|Perhaps macdeployqt was already used|you will need to rebuild' || true
         DMG="${ARTIFACTS_DIR}/${TARGET}-yecwallet-v${APP_VERSION}.dmg"
-        mv "${BUILD_DIR}/bin/yecwallet.dmg" "${DMG}"
-        step "Package: ${DMG}"
+        STAGE="${BUILD_DIR}/dmg-stage"
+        rm -rf "${STAGE}" "${DMG}"
+        mkdir -p "${STAGE}"
+        cp -R "${APP_BUNDLE}" "${STAGE}/"
+        ln -s /Applications "${STAGE}/Applications"
+        hdiutil create -quiet -volname "YecWallet ${APP_VERSION}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
+        rm -rf "${STAGE}"
+        step "Package: ${DMG} ($(du -h "${DMG}" | cut -f1))"
         ;;
     esac
 fi
