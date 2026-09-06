@@ -89,14 +89,14 @@ diffed against it method by method (and against `ycash-dd/src/rpc/yellowbackwall
 | addresses | `ye`/`yt`/`yr` by `yed_getinfo.network` | same | no change |
 | `-32601` Method not found | matched | same | no change |
 
-Points the wallet **cannot** use exactly as specified, for the node side to consider:
+Points raised for the node side, and their outcome:
 
-- The contract lists `yed_listtransactions.type` as `mint|send|receive|burn|redeem`, but an
-  expired transfer row is emitted with `type: "transfer"` (`yellowbackwallet.cpp`, the
-  `PayloadTypeName` branch). The wallet tolerates it; the contract or the node should pick one.
-- `yed_estimatecollateral` can return `error: "collateral-out-of-range"`, which the contract
-  does not list (only `bad-oracle-price`). The wallet shows either verbatim.
-- The wallet's tier names and ratios (1 h / 30 d / 90 d / 180 d / 1 y at 1000–300 %) are
+- *Resolved in `ycash-dd` `93805aca6`:* expired rows in `yed_listtransactions` now use the
+  contract's type set (`mint|send|redeem`) instead of the payload name `transfer`. The wallet's
+  tolerance for `transfer` (rendered as "Sent") is kept and harmless.
+- *Resolved in the same commit:* `error: "collateral-out-of-range"` is now listed in the
+  contract for `yed_estimatecollateral`; the wallet shows either error verbatim.
+- *Open:* the wallet's tier names and ratios (1 h / 30 d / 90 d / 180 d / 1 y at 1000–300 %) are
   compiled in. `yed_getinfo.params.tiers[{tier,blocks,ratioPct}]` carries the ratios and lock
   lengths, so a future revision should render from it; nothing in the contract blocks that.
 
