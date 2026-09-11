@@ -25,17 +25,22 @@ YellowbackController::YellowbackController(MainWindow* main, Controller* rpc) : 
     this->rpc  = rpc;
 
     positions    = new YellowbackPositionsModel(this);
+    claimable    = new YellowbackClaimableModel(this);
     transactions = new YellowbackTxModel(this);
 
     reason = tr("Not connected to ycashd yet.");
 }
 
 YellowbackController::~YellowbackController() {
-    // positions / transactions are children of this QObject
+    // the models are children of this QObject
 }
 
 Connection* YellowbackController::connection() {
     return rpc ? rpc->getConnection() : nullptr;
+}
+
+void YellowbackController::log(const QString& line) {
+    if (main != nullptr && main->logger != nullptr) main->logger->write(line);
 }
 
 // ── Generic call ──────────────────────────────────────────────────────────────────────────
@@ -60,30 +65,30 @@ void YellowbackController::call(const char* method, const json& params, OkFn ok,
                 if (parsed["error"].find("code") != parsed["error"].end() && parsed["error"]["code"].is_number_integer()) {
                     // Keep the identifier: the code is what makes "Method not found" unambiguous
                     int code = parsed["error"]["code"].get<json::number_integer_t>();
-                    if (code == YellowbackRpc::Errors::METHOD_NOT_FOUND_CODE && !msg.contains(YellowbackRpc::Errors::METHOD_NOT_FOUND))
-                        msg = QString(YellowbackRpc::Errors::METHOD_NOT_FOUND) % " (" % msg % ")";
+                    if (code == YellowbackRpc::RpcErrors::METHOD_NOT_FOUND_CODE && !msg.contains(YellowbackRpc::RpcErrors::METHOD_NOT_FOUND))
+                        msg = QString(YellowbackRpc::RpcErrors::METHOD_NOT_FOUND) % " (" % msg % ")";
                 }
             } else if (reply != nullptr) {
                 msg = reply->errorString();
             } else {
                 msg = tr("Unknown error");
             }
-            // Every command but yed_getinfo answers this while the index is unhealthy; take
-            // the tab down at once instead of waiting for the next yed_getinfo.
+            // Every gated command answers `yellowback-unhealthy: …` while the index is
+            // unhealthy; take the tab down at once instead of waiting for the next yed_getinfo.
             if (isIndexUnhealthy(msg)) {
                 healthy = false;
-                setAvailability(false, tr("Yellowback unavailable: %1").arg(msg));
+                setAvailability(false, tr("the index reports it is unhealthy (%1). Fix: restart ycashd with -reindex-yellowback.").arg(msg));
             }
             if (err) err(msg);
         });
 }
 
 bool YellowbackController::isMethodNotFound(const QString& m) {
-    return m.contains(YellowbackRpc::Errors::METHOD_NOT_FOUND, Qt::CaseInsensitive);
+    return m.contains(YellowbackRpc::RpcErrors::METHOD_NOT_FOUND, Qt::CaseInsensitive);
 }
 
 bool YellowbackController::isIndexUnhealthy(const QString& m) {
-    return m.contains(YellowbackRpc::Errors::INDEX_UNHEALTHY, Qt::CaseInsensitive);
+    return m.startsWith(YellowbackRpc::Errors::INDEX_UNHEALTHY, Qt::CaseInsensitive);
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────────────────
@@ -103,29 +108,12 @@ void YellowbackController::onConnected() {
 
     call(YellowbackRpc::GETINFO, json(nullptr),
         [=, this](const json& info) {
-            using namespace YellowbackRpc::Info;
-            enabled = YellowbackJson::toBool(info, ENABLED, true);
-            int version = (int)YellowbackJson::toInt(info, RPCVERSION, -1);
-
-            if (!enabled) {
-                setAvailability(false, tr("Yellowback is not enabled on this ycashd. Add 'experimentalfeatures=1' and 'yellowback=1' to ycash.conf and restart it."));
-                emit infoUpdated();
-                return;
-            }
-            if (version != Settings::getYellowbackRpcVersion()) {
-                setAvailability(false, tr("This YecWallet understands Yellowback RPC version %1 but the node reports version %2. "
-                                          "Update YecWallet (or ycashd) so the two match; the Yellowback tab is disabled until then.")
-                                          .arg(Settings::getYellowbackRpcVersion()).arg(version));
-                emit infoUpdated();
-                return;
-            }
-            versionOk = true;
             applyInfo(info);
-            refresh(true);
+            if (versionOk) refresh(true);
         },
         [=, this](const QString& e) {
             if (isMethodNotFound(e)) {
-                setAvailability(false, tr("The connected ycashd has no Yellowback RPCs (%1). Add 'experimentalfeatures=1' and 'yellowback=1' to its ycash.conf and restart it.").arg(e));
+                setAvailability(false, tr("the connected ycashd has no Yellowback RPCs (%1). Add 'experimentalfeatures=1' and 'yellowback=1' to its ycash.conf and restart it.").arg(e));
                 if (!confRepairOffered) {
                     confRepairOffered = true;
                     auto conn = connection();
@@ -141,22 +129,48 @@ void YellowbackController::onConnected() {
         });
 }
 
+// The whole of the availability decision, from one yed_getinfo result. Also the entry point
+// of the offline feed, so the version and enabled checks live here and not in onConnected.
 void YellowbackController::applyInfo(const json& info) {
     using namespace YellowbackRpc::Info;
+    infoJson = info.is_object() ? info : json::object();
+    enabled  = YellowbackJson::toBool(info, ENABLED, true);
+    int version = (int)YellowbackJson::toInt(info, RPCVERSION, -1);
+
+    if (!enabled) {
+        versionOk = false;
+        setAvailability(false, tr("Yellowback is not enabled on this ycashd. Add 'experimentalfeatures=1' and 'yellowback=1' to ycash.conf and restart it."));
+        emit infoUpdated();
+        return;
+    }
+    if (version != Settings::getYellowbackRpcVersion()) {
+        versionOk = false;
+        setAvailability(false, tr("this YecWallet understands Yellowback RPC version %1 but the node reports version %2. "
+                                  "Update YecWallet (or ycashd) so the two match; the Yellowback tab is disabled until then.")
+                                  .arg(Settings::getYellowbackRpcVersion()).arg(version));
+        emit infoUpdated();
+        return;
+    }
+    versionOk = true;
+
     net              = YellowbackJson::toStr (info, NETWORK, net);
     indexHeight      = (int)YellowbackJson::toInt(info, HEIGHT, indexHeight);
+    tipHeight        = (int)YellowbackJson::toInt(info, CHAIN_HEIGHT, tipHeight);
     indexStartHeight = (int)YellowbackJson::toInt(info, START_HEIGHT, indexStartHeight);
-    synced           = YellowbackJson::toBool(info, SYNCED, false);
+    // v2 has no `synced` field: the index moves inside ConnectBlock (V2), so its tip is the
+    // chain tip whenever the node is not in initial block download or a reindex.
+    synced           = indexHeight >= 0 && indexHeight == tipHeight;
     healthy          = YellowbackJson::toBool(info, HEALTHY, false);
     if (info.is_object() && info.find(PARAMS) != info.end() && info[PARAMS].is_object())
         paramsJson = info[PARAMS];
 
-    if (!synced) {
-        setAvailability(false, tr("The Yellowback index is syncing (index height %1). Actions are disabled until it reaches the chain tip.").arg(indexHeight));
-    } else if (!healthy) {
+    if (!healthy) {
         QString why = YellowbackJson::toStr(info, UNHEALTHY_REASON, tr("unknown reason"));
-        setAvailability(false, tr("Yellowback unavailable: the index reports it is unhealthy (%1). "
+        setAvailability(false, tr("the index reports it is unhealthy (%1). "
                                   "Fix: restart ycashd with -reindex-yellowback.").arg(why));
+    } else if (!synced) {
+        setAvailability(false, tr("the Yellowback index is at height %1 while the chain is at %2 (initial block download or reindex). "
+                                  "Actions are disabled until they match.").arg(indexHeight).arg(tipHeight));
     } else {
         setAvailability(true, QString());
     }
@@ -172,9 +186,10 @@ void YellowbackController::refresh(bool force) {
             if (force || indexHeight != lastRefreshHeight) {
                 lastRefreshHeight = indexHeight;
                 refreshStats();
-                refreshProtection();
+                refreshActivation();
                 refreshBalance();
                 refreshPositions();
+                refreshClaimable();
                 refreshTransactions();
             }
         },
@@ -184,56 +199,198 @@ void YellowbackController::refresh(bool force) {
         });
 }
 
-void YellowbackController::refreshStats() {
-    call(YellowbackRpc::GETSTATS, json(nullptr),
-        [=, this](const json& s) {
-            statsJson = s.is_object() ? s : json::object();
-            emit statsUpdated();
-        },
-        [=, this](const QString& e) { main->logger->write("yed_getstats: " + e); });
+void YellowbackController::feed(const json& info, const json& stats, const json& activation,
+                                const json& balance, const json& positionsArr, const json& claimableArr,
+                                const json& transactionsArr) {
+    if (!info.is_null())            applyInfo(info);
+    if (!stats.is_null())           applyStats(stats);
+    if (!activation.is_null())      applyActivation(activation);
+    if (!balance.is_null())         applyBalance(balance);
+    if (!positionsArr.is_null())    applyPositions(positionsArr);
+    if (!claimableArr.is_null())    applyClaimable(claimableArr);
+    if (!transactionsArr.is_null()) applyTransactions(transactionsArr);
 }
 
-void YellowbackController::refreshProtection() {
-    call(YellowbackRpc::GETPROTECTIONSTATUS, json(nullptr),
-        [=, this](const json& p) {
-            protectionJson = p.is_object() ? p : json::object();
-            emit statsUpdated();
-        },
-        [=, this](const QString& e) { main->logger->write("yed_getprotectionstatus: " + e); });
+void YellowbackController::applyStats(const json& s) {
+    statsJson = s.is_object() ? s : json::object();
+    emit statsUpdated();
+}
+
+void YellowbackController::applyActivation(const json& a) {
+    activationJson = a.is_object() ? a : json::object();
+    emit statsUpdated();
+}
+
+void YellowbackController::applyBalance(const json& b) {
+    confirmed   = YellowbackJson::toInt(b, YellowbackRpc::Balance::CONFIRMED_CENTS);
+    unconfirmed = YellowbackJson::toInt(b, YellowbackRpc::Balance::UNCONFIRMED_CENTS);
+    emit balanceUpdated();
+}
+
+void YellowbackController::applyPositions(const json& arr) {
+    QList<YellowbackPosition> list;
+    if (arr.is_array())
+        for (auto& it : arr) list.append(YellowbackPosition::fromJson(it));
+    positions->setNewData(list, indexHeight);
+    emit positionsUpdated();
+}
+
+void YellowbackController::applyClaimable(const json& arr) {
+    QList<YellowbackClaimable> list;
+    if (arr.is_array())
+        for (auto& it : arr) list.append(YellowbackClaimable::fromJson(it));
+    claimable->setNewData(list, indexHeight);
+    emit claimableUpdated();
+}
+
+void YellowbackController::applyTransactions(const json& arr) {
+    QList<YellowbackTx> list;
+    if (arr.is_array())
+        for (auto& it : arr) list.append(YellowbackTx::fromJson(it));
+    transactions->setNewData(list, indexHeight);
+    emit transactionsUpdated();
+}
+
+void YellowbackController::refreshStats() {
+    call(YellowbackRpc::GETSTATS, json(nullptr),
+        [=, this](const json& s) { applyStats(s); },
+        [=, this](const QString& e) { log("yed_getstats: " + e); });
+}
+
+void YellowbackController::refreshActivation() {
+    call(YellowbackRpc::GETACTIVATION, json(nullptr),
+        [=, this](const json& a) { applyActivation(a); },
+        [=, this](const QString& e) { log("yed_getactivation: " + e); });
 }
 
 void YellowbackController::refreshBalance() {
     call(YellowbackRpc::GETBALANCE, json(nullptr),
-        [=, this](const json& b) {
-            confirmed   = YellowbackJson::toInt(b, YellowbackRpc::Balance::CONFIRMED_CENTS);
-            unconfirmed = YellowbackJson::toInt(b, YellowbackRpc::Balance::UNCONFIRMED_CENTS);
-            emit balanceUpdated();
-        },
-        [=, this](const QString& e) { main->logger->write("yed_getbalance: " + e); });
+        [=, this](const json& b) { applyBalance(b); },
+        [=, this](const QString& e) { log("yed_getbalance: " + e); });
 }
 
 void YellowbackController::refreshPositions() {
     call(YellowbackRpc::LISTPOSITIONS, json(nullptr),
-        [=, this](const json& arr) {
-            QList<YellowbackPosition> list;
-            if (arr.is_array())
-                for (auto& it : arr) list.append(YellowbackPosition::fromJson(it));
-            positions->setNewData(list, indexHeight);
-            emit positionsUpdated();
-        },
-        [=, this](const QString& e) { main->logger->write("yed_listpositions: " + e); });
+        [=, this](const json& arr) { applyPositions(arr); },
+        [=, this](const QString& e) { log("yed_listpositions: " + e); });
+}
+
+void YellowbackController::refreshClaimable() {
+    call(YellowbackRpc::LISTCLAIMABLE, json(nullptr),
+        [=, this](const json& arr) { applyClaimable(arr); },
+        [=, this](const QString& e) { log("yed_listclaimable: " + e); });
 }
 
 void YellowbackController::refreshTransactions() {
     call(YellowbackRpc::LISTTRANSACTIONS, json::array({200, 0}),
-        [=, this](const json& arr) {
-            QList<YellowbackTx> list;
-            if (arr.is_array())
-                for (auto& it : arr) list.append(YellowbackTx::fromJson(it));
-            transactions->setNewData(list, indexHeight);
-            emit transactionsUpdated();
-        },
-        [=, this](const QString& e) { main->logger->write("yed_listtransactions: " + e); });
+        [=, this](const json& arr) { applyTransactions(arr); },
+        [=, this](const QString& e) { log("yed_listtransactions: " + e); });
+}
+
+// ── Status banner ─────────────────────────────────────────────────────────────────────────
+
+bool YellowbackController::isAbandoned() const { return YellowbackJson::toBool(infoJson, YellowbackRpc::Info::ABANDONED); }
+bool YellowbackController::isEnforcing() const { return YellowbackJson::toBool(infoJson, YellowbackRpc::Info::ENFORCING); }
+
+YellowbackStatus YellowbackController::status() const {
+    return describeStatus(available, reason, infoJson, statsJson, activationJson);
+}
+
+// Plan §4.8, banner row. Every line is derived from contract fields only; the wording of what
+// enforcement means follows §8.1: a majority of hashpower that runs the module makes the rules
+// hold — a description of who enforces, never a guarantee.
+YellowbackStatus YellowbackController::describeStatus(bool available, const QString& reason,
+                                                      const json& info, const json& stats, const json& activation) {
+    using namespace YellowbackRpc;
+    YellowbackStatus st;
+    st.available = available;
+    st.reason    = reason;
+    if (!available) {
+        st.headline = tr("Yellowback unavailable: %1").arg(reason);
+        return st;
+    }
+
+    const json& act = YellowbackJson::obj(info, Info::ACTIVATION);
+    QString   status  = YellowbackJson::toStr(act, Activation::STATUS);
+    qint64    sigCount = YellowbackJson::toInt(act, Activation::SIGNAL_COUNT);
+    qint64    window  = YellowbackJson::toInt(act, Activation::WINDOW);
+    bool      enforcing   = YellowbackJson::toBool(info, Info::ENFORCING);
+    bool      valve       = YellowbackJson::toBool(info, Info::VALVE_TRIPPED);
+    bool      sunset      = YellowbackJson::toBool(info, Info::SUNSET);
+    bool      abandoned   = YellowbackJson::toBool(info, Info::ABANDONED);
+    qint64    suppressed  = YellowbackJson::toInt(info, Info::SUPPRESSED_BLOCKS);
+    qint64    rejected    = YellowbackJson::toInt(info, Info::REJECTED_BLOCKS);
+    QStringList halts     = YellowbackJson::strings(stats, Stats::HALT_MASK);
+    // yed_getactivation carries the suspension flag and the thresholds; yed_getstats.haltMask
+    // carries ENFORCEMENT. Either source is enough: the first to answer wins, both agree.
+    bool suspended = YellowbackJson::toBool(activation, ActivationInfo::ENFORCEMENT_SUSPENDED) ||
+                     halts.contains(Stats::HALT_ENFORCEMENT);
+    bool participationHalt = halts.contains(Stats::HALT_PARTICIPATION) ||
+                             (status == Activation::STATUS_ACTIVE && YellowbackJson::toBool(activation, ActivationInfo::MINT_HALTED));
+    qint64 threshold = YellowbackJson::toInt(activation, ActivationInfo::THRESHOLD, -1);
+
+    // Headline: activation state
+    QString signalText = window > 0 ? tr("%1/%2 of recent blocks signalling").arg(sigCount).arg(window) : QString();
+    if (status == Activation::STATUS_SIGNALING) {
+        st.headline = tr("Yellowback is signalling: %1%2. Minting opens only after activation.")
+            .arg(signalText.isEmpty() ? tr("waiting for pool signals") : signalText)
+            .arg(threshold > 0 ? tr(" (needs %1)").arg(threshold) : QString());
+    } else if (status == Activation::STATUS_LOCKED_IN) {
+        st.headline = tr("Yellowback is locked in; it activates at height %1.")
+            .arg(YellowbackJson::toInt(act, Activation::ACTIVATE_HEIGHT));
+    } else if (status == Activation::STATUS_ACTIVE) {
+        st.headline = tr("Yellowback is active since height %1; %2.")
+            .arg(YellowbackJson::toInt(act, Activation::ACTIVATE_HEIGHT))
+            .arg(signalText.isEmpty() ? tr("enforced by the pools that run the module") : signalText);
+    } else {
+        st.headline = tr("Yellowback activation state: %1.").arg(status.isEmpty() ? tr("unknown") : status);
+    }
+
+    // Warnings, most severe first
+    if (abandoned)
+        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for two full windows. "
+                          "Nobody polices vault spends; after its claim height any vault can be emptied by anyone. "
+                          "Sweep your collateral before then (see Vaults).");
+    if (valve)
+        st.warnings << tr("This node's work valve tripped: it rejected a block the rest of the network built on, "
+                          "so it stopped enforcing and rejoined the network's chain. Restart the node to re-arm it, "
+                          "after checking why the network did not follow (yed_getblockverdict).");
+    if (sunset)
+        st.warnings << tr("Enforcement sunset: this node's release enforces only until a fixed height, which has passed. "
+                          "It keeps accounting but rejects nothing; upgrade the node.");
+    if (suspended && !abandoned)
+        st.warnings << tr("Enforcement suspended: fewer than half of recent blocks signal, so block rejection is paused "
+                          "and vault spends are not policed until 60 % signal again. Minting is paused too.");
+    else if (participationHalt)
+        st.warnings << tr("Participation halt: fewer than 60 % of recent blocks signal enforcement, so minting is paused "
+                          "until 75 % do. Existing YED stays redeemable.");
+    if (status == Activation::STATUS_ACTIVE && !enforcing && !valve && !sunset)
+        st.warnings << tr("This node is not enforcing (yellowbackenforce=0 or the index is unhealthy). "
+                          "It still accounts and quotes; the network's rules depend on the pools that do enforce.");
+
+    // Information lines
+    if (suppressed > 0)
+        st.notes << tr("%1 rule-breaking block(s) were accepted because the network had already built on them "
+                       "(catch-up after an outage); enforcement is still on.").arg(suppressed);
+    if (rejected > 0)
+        st.notes << tr("This node has rejected %1 block(s) for vault-spend rule violations.").arg(rejected);
+
+    // The connected node's own quote state, shown only when it can mine (has a payout key)
+    const json& miner = YellowbackJson::obj(info, Info::MINER);
+    if (YellowbackJson::has(miner, Miner::PAYOUT_ADDRESS)) {
+        QString kind = YellowbackJson::toStr(miner, Miner::QUOTE_KIND);
+        QString line = tr("This node mines with payout %1: ").arg(YellowbackJson::toStr(miner, Miner::PAYOUT_ADDRESS));
+        if (kind == Miner::KIND_QUOTE)
+            line += tr("next tag carries a price quote (%1 s old)").arg(YellowbackJson::toInt(miner, Miner::QUOTE_AGE_SECONDS));
+        else if (kind == Miner::KIND_SIGNAL)
+            line += tr("next tag signals without a quote (no fresh quote from the agent)");
+        else
+            line += tr("next block carries no tag");
+        line += YellowbackJson::toBool(miner, Miner::SIGNAL) ? tr("; signalling") : tr("; not signalling");
+        line += YellowbackJson::toBool(miner, Miner::ELIGIBLE) ? tr("; eligible for enforcement fees") : tr("; not eligible for enforcement fees");
+        st.notes << line;
+    }
+    return st;
 }
 
 // ── Addresses ─────────────────────────────────────────────────────────────────────────────
@@ -300,59 +457,63 @@ QList<QPair<QString, double>> YellowbackController::transparentAddresses() const
 
 // ── Protocol parameters ───────────────────────────────────────────────────────────────────
 
-qint64 YellowbackController::minMintCents() const   { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MIN_MINT_CENTS,   YellowbackRpc::MIN_MINT_CENTS); }
-qint64 YellowbackController::maxMintCents() const   { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MAX_MINT_CENTS,   YellowbackRpc::MAX_MINT_CENTS); }
-qint64 YellowbackController::minOutputCents() const { return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MIN_OUTPUT_CENTS, YellowbackRpc::MIN_OUTPUT_CENTS); }
-int    YellowbackController::mintEvalLag() const    { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MINT_EVAL_LAG, YellowbackRpc::MINT_EVAL_LAG); }
-int    YellowbackController::mintWindow() const     { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::MINT_WINDOW,   YellowbackRpc::MINT_WINDOW); }
+// MIN_MINT / MAX_MINT / MIN_OUTPUT are §3.1 constants the v2 contract does not report; the
+// compiled-in values stand (the node refuses out-of-range amounts anyway).
+qint64 YellowbackController::minMintCents() const   { return YellowbackRpc::MIN_MINT_CENTS; }
+qint64 YellowbackController::maxMintCents() const   { return YellowbackRpc::MAX_MINT_CENTS; }
+qint64 YellowbackController::minOutputCents() const { return YellowbackRpc::MIN_OUTPUT_CENTS; }
+int    YellowbackController::refLag() const         { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_LAG, 0); }
+int    YellowbackController::grace() const          { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::GRACE, 0); }
+
+QList<YellowbackController::TermClass> YellowbackController::termClasses() const {
+    using namespace YellowbackRpc;
+    QList<TermClass> out;
+    if (!paramsJson.is_object() || paramsJson.find(Params::CLASSES) == paramsJson.end() || !paramsJson[Params::CLASSES].is_array())
+        return out;
+    for (auto& c : paramsJson[Params::CLASSES]) {
+        TermClass t;
+        t.name         = YellowbackJson::toStr(c, ParamClass::CLASS);
+        t.minBlocks    = (int)YellowbackJson::toInt(c, ParamClass::MIN_BLOCKS);
+        t.maxBlocks    = (int)YellowbackJson::toInt(c, ParamClass::MAX_BLOCKS);
+        t.baseRatioBps = YellowbackJson::toInt(c, ParamClass::BASE_RATIO_BPS);
+        out.append(t);
+    }
+    return out;
+}
 
 // ── Mint gate ─────────────────────────────────────────────────────────────────────────────
 
 QString YellowbackController::mintBlocker(qint64 cents) const {
     using namespace YellowbackRpc;
     if (!available) return reason;
-    if (indexHeight < indexStartHeight + mintEvalLag())
-        return tr("The Yellowback index is too young to evaluate a mint (height %1, needs %2).")
-                .arg(indexHeight).arg(indexStartHeight + mintEvalLag());
+    if (statsJson.empty()) return tr("Waiting for yed_getstats.");
 
-    // yed_getprotectionstatus is the authority on whether minting is open and why; fall back
-    // to the yed_getstats fields when it has not answered yet.
-    const bool haveProt = protectionJson.is_object() && !protectionJson.empty();
-    const json& vol = haveProt && protectionJson.find(Protection::VOLATILITY) != protectionJson.end()
-                      ? protectionJson[Protection::VOLATILITY] : statsJson;
-    const json& err = haveProt && protectionJson.find(Protection::ERR) != protectionJson.end()
-                      ? protectionJson[Protection::ERR] : json::object();
-
-    bool frozen = haveProt ? YellowbackJson::toBool(vol, Protection::VOL_MINT_FROZEN)
-                           : YellowbackJson::toBool(statsJson, Stats::MINT_FROZEN);
-    if (frozen) {
-        int until = haveProt ? (int)YellowbackJson::toInt(vol, Protection::VOL_FROZEN_UNTIL, -1)
-                             : (int)YellowbackJson::toInt(statsJson, Stats::MINT_FROZEN_UNTIL, -1);
-        return until > 0
-            ? tr("Minting is paused by the volatility freeze until height %1.")
-                .arg(YellowbackFormat::heightWithEstimate(until, indexHeight))
-            : tr("Minting is paused by the volatility freeze.");
+    QStringList halts = YellowbackJson::strings(statsJson, Stats::HALT_MASK);
+    if (!halts.isEmpty()) {
+        QStringList lines;
+        for (const QString& h : halts) lines << YellowbackFormat::haltReason(h);
+        return tr("Minting is paused. ") % lines.join(" ");
     }
-    if (YellowbackJson::isNull(statsJson, Stats::PRICE_MICRO_USD))
-        return tr("Minting is paused: the federation has not published a fresh YEC price.");
-    qint64 health = haveProt ? YellowbackJson::toInt(protectionJson, Protection::HEALTH_PCT, 0)
-                             : YellowbackJson::toInt(statsJson, Stats::HEALTH_PCT, 0);
-    bool errActive = haveProt ? YellowbackJson::toBool(err, Protection::ERR_ACTIVE) : health < 100;
-    if (errActive)
-        return tr("Minting is paused: system health is %1 % (must be at least 100 %). "
-                  "The emergency redemption ratio is in effect.").arg(health);
-    if (haveProt && !YellowbackJson::toBool(protectionJson, Protection::MINTING_ALLOWED, true))
-        return tr("Minting is paused (yed_getprotectionstatus reports mintingAllowed = false).");
+    if (!YellowbackJson::toBool(statsJson, Stats::MINTING_ALLOWED, true)) {
+        // No halt bit, yet not allowed: the supply cap has no room (mintpol-cap)
+        if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS))
+            return tr("Minting is paused: the supply cap (%1) is reached with %2 in circulation.")
+                    .arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS)))
+                    .arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS)));
+        return tr("Minting is paused (yed_getstats reports mintingAllowed = false).");
+    }
 
     if (cents > 0) {
         if (cents < minMintCents() || cents > maxMintCents())
             return tr("A mint must be between %1 and %2.")
                     .arg(YellowbackFormat::cents(minMintCents())).arg(YellowbackFormat::cents(maxMintCents()));
-        qint64 cap = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS, 0);   // 0 = no cap
-        qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
-        if (cap > 0 && supply + cents > cap)
-            return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
-                    .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap));
+        if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS)) {
+            qint64 cap    = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS);
+            qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
+            if (supply + cents > cap)
+                return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
+                        .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap));
+        }
     }
     return QString();
 }
@@ -367,30 +528,33 @@ void YellowbackController::validateAddress(const QString& addr, OkFn ok, ErrFn e
     call(YellowbackRpc::VALIDATEADDRESS, json::array({addr.toStdString()}), ok, err);
 }
 
-void YellowbackController::estimateCollateral(qint64 cents, int tier, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::ESTIMATECOLLATERAL, json::array({cents, tier}), ok, err);
+void YellowbackController::estimateCollateral(qint64 cents, int lockBlocks, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::ESTIMATECOLLATERAL, json::array({cents, lockBlocks}), ok, err);
 }
 
-void YellowbackController::mint(qint64 cents, int tier, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::MINT, json::array({cents, tier}), ok, err);
-}
-
-void YellowbackController::mint(qint64 cents, int tier, const QString& from, OkFn ok, ErrFn err) {
-    if (from.isEmpty()) { mint(cents, tier, ok, err); return; }
-    call(YellowbackRpc::MINT, json::array({cents, tier, from.toStdString()}), ok, err);
+void YellowbackController::mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err) {
+    if (from.isEmpty()) call(YellowbackRpc::MINT, json::array({cents, lockBlocks}), ok, err);
+    else                call(YellowbackRpc::MINT, json::array({cents, lockBlocks, from.toStdString()}), ok, err);
 }
 
 void YellowbackController::send(const QString& addr, qint64 cents, OkFn ok, ErrFn err) {
     call(YellowbackRpc::SEND, json::array({addr.toStdString(), cents}), ok, err);
 }
 
-void YellowbackController::redeem(const QString& vaultTxid, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString()}), ok, err);
+void YellowbackController::redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
+    if (to.isEmpty()) call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString()}), ok, err);
+    else              call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
 }
 
-void YellowbackController::redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
-    if (to.isEmpty()) { redeem(vaultTxid, ok, err); return; }
-    call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
+void YellowbackController::claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
+    if (to.isEmpty()) call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString()}), ok, err);
+    else              call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
+}
+
+void YellowbackController::sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
+    json params = json::array({vaultTxid.toStdString(), YellowbackRpc::SWEEP_ACKNOWLEDGEMENT});
+    if (!to.isEmpty()) params.push_back(to.toStdString());
+    call(YellowbackRpc::SWEEP, params, ok, err);
 }
 
 void YellowbackController::getTxInfo(const QString& txid, OkFn ok, ErrFn err) {

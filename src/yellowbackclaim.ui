@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YellowbackClaim</class>
+ <widget class="QWidget" name="YellowbackClaim">
+  <layout class="QVBoxLayout" name="claimLayout">
+   <item>
+    <widget class="QLabel" name="lblClaimIntro">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>Vaults past their claim height whose collateral is worth less than their debt at the claim price. Anyone may claim one by burning its debt in YED from their own balance; the enforcement fee is paid from the collateral and the claimant receives the rest. The claim path needs nobody's key; the burn is enforced by the pools running the Yellowback module.</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableView" name="tblClaimable">
+     <property name="selectionMode"><enum>QAbstractItemView::SingleSelection</enum></property>
+     <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblClaimHint">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string/></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; }</string></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="claimButtons">
+     <item><spacer name="claimSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+     <item><widget class="QPushButton" name="btnClaim"><property name="text"><string>Claim selected vault…</string></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

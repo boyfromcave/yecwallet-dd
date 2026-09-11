@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblMintIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. The collateral cannot leave the vault before the unlock height, and releasing it afterwards requires burning YED and the federation's co-signature.</string></property>
+     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. Every Ycash node enforces that the collateral cannot leave the vault before its lock height; after it, releasing the collateral requires burning exactly the YED minted and paying an enforcement fee to a pool that publishes price quotes — a rule enforced by the mining pools that run the Yellowback module.</string></property>
     </widget>
    </item>
    <item>
@@ -22,15 +22,15 @@
      <item row="0" column="1"><widget class="QLineEdit" name="txtAmount"><property name="placeholderText"><string>100.00</string></property></widget></item>
      <item row="1" column="0"><widget class="QLabel" name="m8"><property name="text"><string>Fund collateral from</string></property></widget></item>
      <item row="1" column="1"><widget class="QComboBox" name="cmbFundFrom"><property name="toolTip"><string>Your transparent balance, or one of this wallet's shielded (ys1…) addresses: the collateral is then spent from that address in the same transaction, with no separate unshielding step.</string></property></widget></item>
-     <item row="2" column="0"><widget class="QLabel" name="m2"><property name="text"><string>Lock period</string></property></widget></item>
+     <item row="2" column="0"><widget class="QLabel" name="m2"><property name="text"><string>Lock length (term class)</string></property></widget></item>
      <item row="2" column="1"><widget class="QComboBox" name="cmbTier"/></item>
-     <item row="3" column="0"><widget class="QLabel" name="m3"><property name="text"><string>Collateral ratio</string></property></widget></item>
+     <item row="3" column="0"><widget class="QLabel" name="m3"><property name="text"><string>Minimum collateral ratio</string></property></widget></item>
      <item row="3" column="1"><widget class="QLabel" name="lblRatio"><property name="text"><string>-</string></property></widget></item>
-     <item row="4" column="0"><widget class="QLabel" name="m4"><property name="text"><string>YEC price used</string></property></widget></item>
+     <item row="4" column="0"><widget class="QLabel" name="m4"><property name="text"><string>Mint price used</string></property></widget></item>
      <item row="4" column="1"><widget class="QLabel" name="lblPrice"><property name="text"><string>-</string></property></widget></item>
      <item row="5" column="0"><widget class="QLabel" name="m5"><property name="text"><string>YEC collateral required now</string></property></widget></item>
      <item row="5" column="1"><widget class="QLabel" name="lblCollateral"><property name="text"><string>-</string></property><property name="styleSheet"><string notr="true">QLabel { font-weight: bold; }</string></property></widget></item>
-     <item row="6" column="0"><widget class="QLabel" name="m6"><property name="text"><string>Unlock height (estimated date)</string></property></widget></item>
+     <item row="6" column="0"><widget class="QLabel" name="m6"><property name="text"><string>Lock height (estimated date)</string></property></widget></item>
      <item row="6" column="1"><widget class="QLabel" name="lblUnlock"><property name="text"><string>-</string></property></widget></item>
      <item row="7" column="0"><widget class="QLabel" name="m7"><property name="text"><string>YEC available at the funding source</string></property></widget></item>
      <item row="7" column="1"><widget class="QLabel" name="lblYecAvailable"><property name="text"><string>-</string></property></widget></item>

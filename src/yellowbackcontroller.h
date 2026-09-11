@@ -10,7 +10,18 @@ class MainWindow;
 class Controller;
 class Connection;
 
-// Issues every yed_* call through the existing Connection (plan §4.7, mapping.md §12).
+// What the status banner shows, computed from yed_getinfo / yed_getstats / yed_getactivation
+// by YellowbackController::describeStatus (a pure function, so the offline QTest can feed it
+// canned replies). Wording follows plan §4.8 (banner row) and §8.1.
+struct YellowbackStatus {
+    bool        available = false;   // node answers, enabled, rpcversion ok, synced, healthy
+    QString     reason;              // why not, when !available
+    QString     headline;            // one line: activation state and enforcement
+    QStringList warnings;            // valve tripped, sunset, suspended, abandoned, participation halt
+    QStringList notes;               // information lines (suppressedBlocks, own-pool quote state)
+};
+
+// Issues every yed_* call through the existing Connection (plan §4.8, mapping.md §12).
 //
 // Lifecycle, all driven by the stock Controller:
 //   - Controller::setConnection      -> onConnected()  : yed_getinfo, rpcversion check, conf repair offer
@@ -28,6 +39,11 @@ public:
     void onConnected();
     void refresh(bool force = false);
 
+    // Offline feed (the QTest, N28): apply canned replies exactly as the RPC callbacks would,
+    // emitting the same signals. No Connection is touched. Pass json(nullptr) to skip one.
+    void feed(const json& info, const json& stats, const json& activation,
+              const json& balance, const json& positions, const json& claimable, const json& transactions);
+
     // ── Availability (status banner) ──────────────────────────────────────────────────────
     // "available" means: node answers yed_getinfo, enabled, rpcversion matches, synced and healthy.
     bool    isAvailable() const { return available; }
@@ -36,17 +52,24 @@ public:
     bool    isVersionOk() const { return versionOk; }
     bool    isSynced() const { return synced; }
     bool    isHealthy() const { return healthy; }
+    YellowbackStatus status() const;
+    static YellowbackStatus describeStatus(bool available, const QString& reason,
+                                           const json& info, const json& stats, const json& activation);
 
     // ── Cached state ──────────────────────────────────────────────────────────────────────
     int     height() const { return indexHeight; }
+    int     chainHeight() const { return tipHeight; }
     int     startHeight() const { return indexStartHeight; }
     QString network() const { return net; }       // "main" | "test" | "regtest" (never getinfo.testnet)
     QString addressPrefix() const;                // ye | yt | yr
     bool    looksLikeYellowbackAddress(const QString& addr) const;
     bool    isShieldedAddress(const QString& addr) const;   // s1..., ys..., z... (refused)
-    const json& stats() const { return statsJson; }
-    const json& protection() const { return protectionJson; }   // yed_getprotectionstatus
+    const json& info() const { return infoJson; }               // yed_getinfo (whole result)
+    const json& stats() const { return statsJson; }             // yed_getstats
+    const json& activation() const { return activationJson; }   // yed_getactivation
     const json& params() const { return paramsJson; }           // yed_getinfo.params
+    bool    isAbandoned() const;                                // yed_getinfo.abandoned (L10)
+    bool    isEnforcing() const;                                // yed_getinfo.enforcing
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
     double  yecBalance() const;                   // from the stock DataModel: every transparent address
@@ -57,17 +80,21 @@ public:
     QList<QPair<QString, double>> transparentAddresses() const;  // s1... addresses of this wallet with balances
 
     YellowbackPositionsModel* positionsModel() { return positions; }
+    YellowbackClaimableModel* claimableModel() { return claimable; }
     YellowbackTxModel*        transactionsModel() { return transactions; }
 
     // ── Protocol parameters: yed_getinfo.params when present, else the compiled-in defaults ─
     qint64  minMintCents() const;
     qint64  maxMintCents() const;
     qint64  minOutputCents() const;
-    int     mintEvalLag() const;
-    int     mintWindow() const;
+    int     refLag() const;
+    int     grace() const;
+    // Term classes from yed_getinfo.params.classes, in class order (empty until the node answered)
+    struct TermClass { QString name; int minBlocks = 0; int maxBlocks = 0; qint64 baseRatioBps = 0; };
+    QList<TermClass> termClasses() const;
 
     // ── Mint gate: empty string when a mint of `cents` is allowed, else the reason ─────────
-    // Prefers yed_getprotectionstatus (mintingAllowed and why) and falls back to yed_getstats.
+    // MINTPOL-1 as yed_getstats reports it: mintingAllowed, and every haltMask name by name.
     QString mintBlocker(qint64 cents) const;
 
     // ── RPC calls. `ok` receives the "result"; `err` the node's error message verbatim ─────
@@ -78,12 +105,12 @@ public:
 
     void getNewAddress(OkFn ok, ErrFn err);
     void validateAddress(const QString& addr, OkFn ok, ErrFn err);
-    void estimateCollateral(qint64 cents, int tier, OkFn ok, ErrFn err);
-    void mint(qint64 cents, int tier, OkFn ok, ErrFn err);
-    void mint(qint64 cents, int tier, const QString& from, OkFn ok, ErrFn err);   // from: "" | s1... | ys1... (I2)
+    void estimateCollateral(qint64 cents, int lockBlocks, OkFn ok, ErrFn err);
+    void mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
-    void redeem(const QString& vaultTxid, OkFn ok, ErrFn err);
-    void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err); // to: "" | s1... | ys1... (I2)
+    void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);     // to: "" | s1... | ys1... (I2)
+    void claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);
+    void sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);      // sends the L10 acknowledgement
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
 
@@ -97,24 +124,34 @@ public:
 signals:
     void availabilityChanged(bool available, const QString& reason);
     void infoUpdated();
-    void statsUpdated();          // after yed_getstats and after yed_getprotectionstatus
+    void statsUpdated();          // after yed_getstats and after yed_getactivation
     void balanceUpdated();
     void positionsUpdated();
+    void claimableUpdated();
     void transactionsUpdated();
 
 private:
     void applyInfo(const json& info);
+    void applyStats(const json& s);
+    void applyActivation(const json& a);
+    void applyBalance(const json& b);
+    void applyPositions(const json& arr);
+    void applyClaimable(const json& arr);
+    void applyTransactions(const json& arr);
     void refreshStats();
-    void refreshProtection();
+    void refreshActivation();
     void refreshBalance();
     void refreshPositions();
+    void refreshClaimable();
     void refreshTransactions();
     void setAvailability(bool avail, const QString& why);
+    void log(const QString& line);
 
     MainWindow*   main;
     Controller*   rpc;
 
     YellowbackPositionsModel* positions    = nullptr;
+    YellowbackClaimableModel* claimable    = nullptr;
     YellowbackTxModel*        transactions = nullptr;
 
     bool    available   = false;
@@ -126,10 +163,12 @@ private:
     QString reason;
     QString net;
     int     indexHeight      = 0;
+    int     tipHeight        = 0;
     int     indexStartHeight = 0;
     int     lastRefreshHeight = -1;
+    json    infoJson       = json::object();
     json    statsJson      = json::object();
-    json    protectionJson = json::object();
+    json    activationJson = json::object();
     json    paramsJson     = json::object();
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;

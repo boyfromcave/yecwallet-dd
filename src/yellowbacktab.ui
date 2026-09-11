@@ -8,6 +8,23 @@
      <property name="wordWrap"><bool>true</bool></property>
      <property name="styleSheet"><string notr="true">QLabel { background-color: #fff3cd; color: #5c4400; border: 1px solid #e0c56e; padding: 6px; }</string></property>
      <property name="text"><string>Yellowback status</string></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblStatus">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string notr="true">QLabel { background-color: #e7f1e7; color: #1e4620; border: 1px solid #a9c9aa; padding: 6px; }</string></property>
+     <property name="text"><string/></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblNotes">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; padding: 2px 6px; }</string></property>
+     <property name="text"><string/></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
     </widget>
    </item>
    <item>

@@ -19,6 +19,10 @@
         <item row="3" column="1"><widget class="QLabel" name="lblNetwork"><property name="text"><string>-</string></property></widget></item>
         <item row="4" column="0"><widget class="QLabel" name="l5"><property name="text"><string>Index height</string></property></widget></item>
         <item row="4" column="1"><widget class="QLabel" name="lblIndexHeight"><property name="text"><string>-</string></property></widget></item>
+        <item row="5" column="0"><widget class="QLabel" name="l6"><property name="text"><string>Activation</string></property></widget></item>
+        <item row="5" column="1"><widget class="QLabel" name="lblActivation"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+        <item row="6" column="0"><widget class="QLabel" name="l7"><property name="text"><string>Enforcement</string></property></widget></item>
+        <item row="6" column="1"><widget class="QLabel" name="lblEnforcement"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
        </layout>
       </widget>
      </item>
@@ -26,22 +30,24 @@
       <widget class="QGroupBox" name="grpSystem">
        <property name="title"><string>Yellowback system</string></property>
        <layout class="QFormLayout" name="systemForm">
-        <item row="0" column="0"><widget class="QLabel" name="s1"><property name="text"><string>YEC price (federation)</string></property></widget></item>
-        <item row="0" column="1"><widget class="QLabel" name="lblYecPrice"><property name="text"><string>-</string></property></widget></item>
-        <item row="1" column="0"><widget class="QLabel" name="s2"><property name="text"><string>Price age</string></property></widget></item>
-        <item row="1" column="1"><widget class="QLabel" name="lblPriceAge"><property name="text"><string>-</string></property></widget></item>
-        <item row="2" column="0"><widget class="QLabel" name="s3"><property name="text"><string>System health</string></property></widget></item>
-        <item row="2" column="1"><widget class="QLabel" name="lblHealth"><property name="text"><string>-</string></property></widget></item>
-        <item row="3" column="0"><widget class="QLabel" name="s4"><property name="text"><string>Collateral multiplier (DCA)</string></property></widget></item>
-        <item row="3" column="1"><widget class="QLabel" name="lblDca"><property name="text"><string>-</string></property></widget></item>
-        <item row="4" column="0"><widget class="QLabel" name="s5"><property name="text"><string>Emergency redemption ratio (ERR)</string></property></widget></item>
-        <item row="4" column="1"><widget class="QLabel" name="lblErr"><property name="text"><string>-</string></property></widget></item>
+        <item row="0" column="0"><widget class="QLabel" name="s1"><property name="text"><string>YEC price (median of pool quotes)</string></property></widget></item>
+        <item row="0" column="1"><widget class="QLabel" name="lblYecPrice"><property name="text"><string>-</string></property><property name="toolTip"><string>P_mid: the median of the price quotes pools published in their own blocks over the middle window. Prices are undefined until enough blocks carry quotes.</string></property></widget></item>
+        <item row="1" column="0"><widget class="QLabel" name="s2"><property name="text"><string>Mint price / claim price</string></property></widget></item>
+        <item row="1" column="1"><widget class="QLabel" name="lblMintClaimPrice"><property name="text"><string>-</string></property><property name="toolTip"><string>P_mint (the lowest of the three medians) sets the collateral a mint needs; P_claim (the higher of the middle and slow medians) decides when a vault is underwater. Either is undefined when its windows hold too few quotes.</string></property></widget></item>
+        <item row="2" column="0"><widget class="QLabel" name="s3"><property name="text"><string>Volatility multiplier (σ)</string></property></widget></item>
+        <item row="2" column="1"><widget class="QLabel" name="lblSigma"><property name="text"><string>-</string></property><property name="toolTip"><string>Scales every class's base collateral ratio with recent price volatility.</string></property></widget></item>
+        <item row="3" column="0"><widget class="QLabel" name="s4"><property name="text"><string>Global collateral ratio</string></property></widget></item>
+        <item row="3" column="1"><widget class="QLabel" name="lblGlobalRatio"><property name="text"><string>-</string></property></widget></item>
+        <item row="4" column="0"><widget class="QLabel" name="s5"><property name="text"><string>Supply cap headroom</string></property></widget></item>
+        <item row="4" column="1"><widget class="QLabel" name="lblCapHeadroom"><property name="text"><string>-</string></property></widget></item>
         <item row="5" column="0"><widget class="QLabel" name="s6"><property name="text"><string>Minting</string></property></widget></item>
         <item row="5" column="1"><widget class="QLabel" name="lblMintStatus"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
         <item row="6" column="0"><widget class="QLabel" name="s7"><property name="text"><string>Supply / collateral</string></property></widget></item>
         <item row="6" column="1"><widget class="QLabel" name="lblSupply"><property name="text"><string>-</string></property></widget></item>
-        <item row="7" column="0"><widget class="QLabel" name="s8"><property name="text"><string>Vaults (active / void)</string></property></widget></item>
+        <item row="7" column="0"><widget class="QLabel" name="s8"><property name="text"><string>Vaults (active / void / closed / claimed)</string></property></widget></item>
         <item row="7" column="1"><widget class="QLabel" name="lblVaults"><property name="text"><string>-</string></property></widget></item>
+        <item row="8" column="0"><widget class="QLabel" name="s9"><property name="text"><string>Unbacked YED</string></property></widget></item>
+        <item row="8" column="1"><widget class="QLabel" name="lblUnbacked"><property name="text"><string>-</string></property><property name="toolTip"><string>YED minted against vaults that were later emptied without their burn (only possible while enforcement is paused or abandoned).</string></property></widget></item>
        </layout>
       </widget>
      </item>
@@ -59,7 +65,7 @@
    <item>
     <widget class="QLabel" name="lblTrust">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Yellowback is a federated, over-collateralised digital dollar on Ycash. It is transparent: YED balances and transfers are visible on the chain, and collateral is released only with the federation's co-signature. It is not a shielded asset.</string></property>
+     <property name="text"><string>Yellowback is a miner-enforced, over-collateralised stablecoin overlay on Ycash. Every Ycash node enforces that collateral cannot leave a vault before its lock height and that only the minter's key can spend it before the claim height. The rest — collateral released only against the burn of the vault's debt — is enforced by the mining pools that run the Yellowback module: a majority of hashpower that runs the module and follows it makes those rules hold; a majority that does not could release collateral without burns or move the price, as it could already reorganise the chain. Prices are medians of the quotes pools publish in their own blocks. YED is transparent: balances and transfers are visible on the chain; it is not a shielded asset.</string></property>
     </widget>
    </item>
   </layout>

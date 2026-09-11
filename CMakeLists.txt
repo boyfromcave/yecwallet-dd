@@ -157,6 +157,7 @@ set(APP_FORMS
     src/yellowbacksend.ui
     src/yellowbackmint.ui
     src/yellowbackpositions.ui
+    src/yellowbackclaim.ui
     src/yellowbacktransactions.ui
     src/yellowbackredeem.ui
     src/yellowbacksettings.ui

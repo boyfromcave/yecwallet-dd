@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblPositionsIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>One row per vault you own. "Required burn now" is the YED that must be destroyed to release the collateral at the current system health; below 100 % health it can exceed the amount minted. VOID vaults created no YED and return their collateral at the unlock height with no burn.</string></property>
+     <property name="text"><string>One row per vault you own. Redeeming an ACTIVE vault at or past its lock height burns exactly the YED it minted and pays an enforcement fee to a quoting pool. A VOID vault created no YED: its collateral is released at the lock height with no burn and no fee (Release), and must be released before its claim height, after which its claim path is open to anyone. "Claimable" means the vault is past its claim height and underwater, so anyone may burn its debt and take the collateral.</string></property>
     </widget>
    </item>
    <item>
@@ -16,10 +16,19 @@
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="lblVaultAction">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string/></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; }</string></property>
+    </widget>
+   </item>
+   <item>
     <layout class="QHBoxLayout" name="positionsButtons">
      <item><widget class="QPushButton" name="btnWhyVoid"><property name="text"><string>Why is this vault VOID?</string></property></widget></item>
      <item><spacer name="posSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-     <item><widget class="QPushButton" name="btnRedeem"><property name="text"><string>Redeem selected vault…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnRelease"><property name="text"><string>Release…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnRedeem"><property name="text"><string>Redeem…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnSweep"><property name="text"><string>Sweep…</string></property></widget></item>
     </layout>
    </item>
   </layout>

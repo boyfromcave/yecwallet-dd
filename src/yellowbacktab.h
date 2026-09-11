@@ -5,6 +5,7 @@
 
 class MainWindow;
 class YellowbackController;
+struct YellowbackPosition;
 
 namespace Ui {
     class YellowbackTab;
@@ -13,18 +14,23 @@ namespace Ui {
     class YellowbackSend;
     class YellowbackMint;
     class YellowbackPositions;
+    class YellowbackClaim;
     class YellowbackTransactions;
     class YellowbackRedeem;
     class YellowbackSettings;
 }
 
 // The Yellowback tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
-// in the order Overview, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings
-// (plan §4.7). Every action goes through YellowbackController; nothing here touches keys or
+// in the order Overview, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Settings
+// (plan §4.8). Every action goes through YellowbackController; nothing here touches keys or
 // the network.
 //
-// `main` may be null and the controller may never be set: the tab then renders with every
-// action disabled. That is what the QTest target relies on.
+// Phase 7b-a builds the node-context screens (banner, Overview, Vaults, Claim). The actions
+// that spend — Mint, Send, Redeem/Release, Claim, Sweep — are Phase 7b-b: their buttons are
+// shown disabled with the reason, and the code paths behind them are not reachable.
+//
+// `main` may be null and the controller may be a bare YellowbackController(nullptr, nullptr)
+// fed canned JSON: that is what the offline QTest relies on.
 class YellowbackTab : public QWidget {
     Q_OBJECT
 
@@ -36,11 +42,22 @@ public:
     YellowbackController* controller() { return ctl; }
 
     // Sub-page indices in subTabs
-    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings, PageCount };
+    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Settings, PageCount };
     QWidget* page(Page p) { return pages[p]; }
 
     // Parses "12.34" / "12" / "$12.34" / "1,234.56" into cents; false on anything else
     static bool parseDollars(const QString& text, qint64* cents);
+
+    // What the Vaults page says about the selected row's actions (plan §4.8 Vaults row):
+    // which of Release / Redeem / Sweep the row offers and why the others are not offered.
+    // Pure function of the row, the index height and the abandonment flag (offline-testable).
+    struct VaultActions {
+        bool    release = false;   // VOID at or past lockHeight (yed_redeem, no burn, no fee; L14)
+        bool    redeem  = false;   // ACTIVE at or past lockHeight (yed_redeem)
+        bool    sweep   = false;   // ACTIVE while abandoned (yed_sweep, L10)
+        QString text;              // the sentence shown under the table
+    };
+    static VaultActions vaultActions(const YellowbackPosition& p, int height, bool abandoned);
 
 private:
     void setupPages();
@@ -49,6 +66,7 @@ private:
     void setupSend();
     void setupMint();
     void setupPositions();
+    void setupClaim();
     void setupTransactions();
     void setupRedeem();
     void setupSettings();
@@ -57,20 +75,23 @@ private:
     void updateOverview();
     void updateBalances();
     void updateMintGate();
+    void updateMintClasses();
     QString fundingSource() const;          // "" = transparent total, else the chosen ys1... address (I2)
     void refreshFundingSources();           // rebuild cmbFundFrom from the DataModel, keeping the selection
     void updatePositions();
+    void updateVaultButtons();
+    void updateClaimPage();
     void updateRedeemPage();
     void updateBackupNag();
     void updateSettingsPage();
     void setActionsEnabled(bool enabled);
+    void notInThisBuild(const QString& what);
 
     void requestEstimate();
     void doMint();
     void doSend();
     void newReceiveAddress();
-    void startRedemption(const QString& vaultTxid);
-    void explainVoid(const QString& vaultTxid);
+    void explainVoid(const YellowbackPosition& p);
     void saveSettings();
     void showTxContextMenu(QTableView* table, const QPoint& pos);
 
@@ -83,6 +104,7 @@ private:
     Ui::YellowbackSend*         uiSend       = nullptr;
     Ui::YellowbackMint*         uiMint       = nullptr;
     Ui::YellowbackPositions*    uiPositions  = nullptr;
+    Ui::YellowbackClaim*        uiClaim      = nullptr;
     Ui::YellowbackTransactions* uiTx         = nullptr;
     Ui::YellowbackRedeem*       uiRedeem     = nullptr;
     Ui::YellowbackSettings*     uiSettings   = nullptr;
@@ -92,7 +114,7 @@ private:
     QTimer*  estimateTimer    = nullptr;
     int      estimateSeq      = 0;
     qint64   estimateCents    = 0;      // the amount the last estimate was for
-    int      estimateTier     = -1;
+    int      estimateLockBlocks = -1;
     qint64   estimateZat      = -1;     // last estimate; -1 = none
     QString  receiveAddress;
 };
