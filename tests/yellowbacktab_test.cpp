@@ -258,9 +258,13 @@ struct DevnetTransport {
             if (!e.isEmpty()) { if (err) err(e); } else if (ok) ok(r);
         };
     }
-    // Read rpcuser / rpcpassword / rpcport from the devnet's per-node ycash.conf
-    bool attach(const QString& dir, QString* why) {
-        QFile f(dir % "/node0/ycash.conf");
+    // Read rpcuser / rpcpassword / rpcport from the devnet's per-node ycash.conf.  The wallet
+    // only ever talks to node 0; the other nodes are reachable for the test's own steps (mining
+    // a pool block, moving a pool's quote), which on a real network are other people's machines.
+    QString                     devnetDir;
+    QMap<int, QNetworkRequest>  nodeRequests;
+    bool attachNode(const QString& dir, int node, QNetworkRequest* out, QString* why) {
+        QFile f(dir % QString("/node%1/ycash.conf").arg(node));
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) { *why = "cannot read " % f.fileName(); return false; }
         QMap<QString, QString> kv;
         for (const QString& line : QString::fromUtf8(f.readAll()).split('\n')) {
@@ -268,9 +272,15 @@ struct DevnetTransport {
             if (eq > 0) kv[line.left(eq).trimmed()] = line.mid(eq + 1).trimmed();
         }
         if (!kv.contains("rpcport") || !kv.contains("rpcuser") || !kv.contains("rpcpassword")) { *why = "ycash.conf lacks rpcport/rpcuser/rpcpassword"; return false; }
-        request.setUrl(QUrl("http://127.0.0.1:" % kv["rpcport"] % "/"));
-        request.setHeader(QNetworkRequest::ContentTypeHeader, "text/plain");
-        request.setRawHeader("Authorization", "Basic " % (kv["rpcuser"] % ":" % kv["rpcpassword"]).toUtf8().toBase64());
+        out->setUrl(QUrl("http://127.0.0.1:" % kv["rpcport"] % "/"));
+        out->setHeader(QNetworkRequest::ContentTypeHeader, "text/plain");
+        out->setRawHeader("Authorization", "Basic " % (kv["rpcuser"] % ":" % kv["rpcpassword"]).toUtf8().toBase64());
+        return true;
+    }
+    bool attach(const QString& dir, QString* why) {
+        devnetDir = dir;
+        if (!attachNode(dir, 0, &request, why)) return false;
+        nodeRequests[0] = request;
         return true;
     }
     // A plain RPC for the test's own steps (generate, getblockcount); fails the test on error
@@ -278,6 +288,21 @@ struct DevnetTransport {
         QString e;
         json r = post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", method}, {"params", params}}, &e);
         if (!e.isEmpty()) qWarning("%s: %s", method, qPrintable(e));
+        return r;
+    }
+    // The same, on another devnet node (2-4 are the pools: they tag, signal and quote)
+    json rpcOn(int node, const char* method, const json& params = json::array()) {
+        if (!nodeRequests.contains(node)) {
+            QNetworkRequest r; QString why;
+            if (!attachNode(devnetDir, node, &r, &why)) { qWarning("node%d: %s", node, qPrintable(why)); return json(nullptr); }
+            nodeRequests[node] = r;
+        }
+        QNetworkRequest saved = request;
+        request = nodeRequests[node];
+        QString e;
+        json r = post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", method}, {"params", params}}, &e);
+        request = saved;
+        if (!e.isEmpty()) qWarning("node%d %s: %s", node, method, qPrintable(e));
         return r;
     }
 };
@@ -742,6 +767,7 @@ private slots:
         QVERIFY(h.button("btnMint") != nullptr && !h.button("btnMint")->isEnabled());
         QVERIFY(h.ctl.mintBlocker(1000).contains("between $100.00 and $10,000.00"));
         QVERIFY(h.ctl.mintBlocker(10000).isEmpty());
+        const qint64 yedBefore = h.ctl.confirmedCents();
     }
 
     // ── Mint page: class derivation from the lock length (§4.8; regtest ranges) ───────────
@@ -1217,8 +1243,13 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
-    // The claim and sweep halves: written against the contract; skipped while the node lacks
-    // the RPCs (they are a concurrent Phase 6 deliverable) or the devnet is not running.
+    // ── Devnet claim and sweep (N28, L10, L13) ───────────────────────────────────────────
+    // The whole schedule is the test's own: it crashes the pools' quotes for a full slow window
+    // so pClaim = max(pMid, pSlow) falls (the sequence of ycash-dd/qa/rpc-tests/yellowback_claim.py),
+    // claims the underwater vault through the Claim page, then mines untagged blocks from node 0
+    // until yed_getinfo.abandoned and sweeps the second vault through the Vaults page.  Every
+    // Yellowback action goes through the tab's own code path; only mining and the pools' quotes
+    // (other people's machines on a real network) are driven directly.
     void devnetClaimAndSweep() {
         QString dir = qEnvironmentVariable("YELLOWBACK_DEVNET_DIR");
         if (dir.isEmpty())
@@ -1228,71 +1259,154 @@ private slots:
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
         QString probe;
         dev.post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_sweep"}, {"params", json::array()}}, &probe);
-        if (YellowbackController::isMethodNotFound(probe))
-            QSKIP("the node has no yed_sweep yet (Phase 6 in progress)");
+        QVERIFY2(!YellowbackController::isMethodNotFound(probe), "the node has no yed_sweep");
         dev.post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_claim"}, {"params", json::array()}}, &probe);
-        if (YellowbackController::isMethodNotFound(probe))
-            QSKIP("the node has no yed_claim yet (Phase 6 in progress)");
+        QVERIFY2(!YellowbackController::isMethodNotFound(probe), "the node has no yed_claim");
 
         Harness h;
         h.ctl.setTransport(dev.transport());
         h.ctl.onConnected();
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
 
-        // A vault to sweep: mint $100, confirm it
-        h.mintAmount("100");
-        h.tab.findChild<QComboBox*>("cmbTier")->setCurrentIndex(0);
-        h.tab.doMint();
+        const int pools[3] = {2, 3, 4};                 // the devnet's signalling, quoting pools
+        auto height = [&]() { json r = dev.rpc("getblockcount"); return r.is_number() ? r.get<int>() : -1; };
+        // One block at a time, round-robin, waiting for node 0 to see each: the pools are peers,
+        // and two of them generating from the same height would fork the devnet.
+        auto minePools = [&](int n) {
+            for (int i = 0; i < n; i++) {
+                int want = height() + 1;
+                dev.rpcOn(pools[i % 3], "generate", json::array({1}));
+                for (int w = 0; w < 400 && height() < want; w++) QTest::qWait(25);
+            }
+        };
+        // A transaction node 0 broadcast has to reach the pool that will mine it
+        auto waitForTx = [&](const QString& txid) {
+            for (int w = 0; w < 400; w++) {
+                json m = dev.rpcOn(pools[0], "getrawmempool");
+                if (m.is_array()) for (const auto& t : m) if (QString::fromStdString(t.get<std::string>()) == txid) return true;
+                QTest::qWait(25);
+            }
+            return false;
+        };
+        // …and the block that carried it has to reach node 0's wallet and index before the next
+        // action is built (getblockcount rises when the block connects; the wallet follows).
+        auto waitConfirmed = [&](const QString& txid) {
+            for (int w = 0; w < 400; w++) {
+                json t = dev.rpc("gettransaction", json::array({txid.toStdString()}));
+                if (t.is_object() && t.value("confirmations", 0) >= 1 &&
+                    h.ctl.info().value("synced", true)) { h.ctl.refresh(true); return true; }
+                QTest::qWait(25);
+                h.ctl.refresh(true);
+            }
+            return false;
+        };
+        auto positionOf = [&](const QString& txid) {
+            YellowbackPosition p;
+            for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
+                if (h.ctl.positionsModel()->positionAt(i)->txid == txid) p = *h.ctl.positionsModel()->positionAt(i);
+            if (p.txid.isEmpty())    // a closed vault leaves yed_listpositions; yed_getvault still has it
+                h.ctl.getVault(txid, [&](const json& v) { p = YellowbackPosition::fromJson(v); },
+                               [](const QString& e) { qWarning("yed_getvault: %s", qPrintable(e)); });
+            return p;
+        };
+
+        // Two vaults at the devnet's $50: S is swept, C is claimed.
+        QVERIFY(h.ctl.mintBlocker(10000).isEmpty());
+        const qint64 yedBefore = h.ctl.confirmedCents();
+        auto tier = h.tab.findChild<QComboBox*>("cmbTier");
+        QVERIFY(tier != nullptr);
+        QStringList minted;
+        for (int i = 0; i < 2; i++) {
+            h.errorNotices.clear();
+            h.mintAmount("100");
+            tier->setCurrentIndex(0);                   // the shortest class-A lock (48 blocks on regtest)
+            h.tab.doMint();
+            QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+            QString txid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
+            QCOMPARE(txid.size(), 64);
+            minted << txid;
+            QVERIFY2(waitForTx(txid), "the mint did not reach the pool's mempool");
+            minePools(1);
+            QVERIFY2(waitConfirmed(txid), "the mint did not confirm");
+        }
+        const QString sweepTxid = minted[0], claimTxid = minted[1];
+        YellowbackPosition vaultS = positionOf(sweepTxid), vaultC = positionOf(claimTxid);
+        QCOMPARE(vaultS.status, QString("ACTIVE"));
+        QCOMPARE(vaultC.status, QString("ACTIVE"));
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 20000);
+
+        // Past the lock height, so the only reason a sweep can be refused is that enforcement
+        // has not been abandoned.
+        if (height() < vaultS.lockHeight) minePools(vaultS.lockHeight - height());
+        h.ctl.refresh(true);
+        QVERIFY(!h.ctl.isAbandoned());
+        h.errorNotices.clear();
+        h.tab.sweepVault(positionOf(sweepTxid));
+        QVERIFY(!h.errorNotices.isEmpty());
+        QVERIFY2(h.errorNotices.last().contains("sweep-not-abandoned"), qPrintable(h.errorNotices.last()));
+
+        // Crash the quote on all three pools and publish it for a full slow window: pClaim is
+        // max(pMid, pSlow) and each window needs two-thirds of its 64 blocks to carry a quote.
+        auto pClaimNow = [&]() { return YellowbackJson::toInt(h.ctl.stats(), YellowbackRpc::Stats::P_CLAIM, 0); };
+        const qint64 before = pClaimNow();
+        for (int p : pools) dev.rpcOn(p, "yed_setquote", json::array({10000, 1}));   // $0.01 in micro-USD
+        minePools(64);
+        h.ctl.refresh(true);
+        QVERIFY2(pClaimNow() < before, qPrintable(QString("pClaim did not fall: %1 -> %2").arg(before).arg(pClaimNow())));
+
+        // Claim C through the Claim page once it is past its claim height and underwater.
+        vaultC = positionOf(claimTxid);
+        if (height() < vaultC.claimHeight) minePools(vaultC.claimHeight - height());
+        h.ctl.refresh(true);
+        QVERIFY2(h.ctl.claimableModel()->rowCount(QModelIndex()) > 0, "no vault is claimable after the crash");
+        const YellowbackClaimable* row = nullptr;
+        for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
+            if (h.ctl.claimableModel()->rowAt(i)->vault.section(':', 0, 0) == claimTxid) row = h.ctl.claimableModel()->rowAt(i);
+        QVERIFY2(row != nullptr, "the minted vault is not in yed_listclaimable");
+        QCOMPARE(row->mintedCents, (qint64)10000);
+        h.errorNotices.clear();
+        int noticesBefore = h.notices.size();
+        h.tab.claimVault(*row);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QString txid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
-        dev.rpc("generate", json::array({1}));
-        h.ctl.refresh(true);
+        QCOMPARE(h.notices.size(), noticesBefore + 1);
+        QVERIFY(h.notices.last().startsWith("Claim sent|"));
+        QVERIFY2(h.notices.last().contains("YED burned: $100.00"), qPrintable(h.notices.last()));
+        const QString claimTx = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
+        QVERIFY(waitForTx(claimTx));
+        minePools(1);
+        QVERIFY(waitConfirmed(claimTx));
+        QCOMPARE(positionOf(claimTxid).status, QString("CLAIMED"));
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);      // the claim burned $100 of our YED
 
-        // Sweep refuses while enforcement is on (sweep-not-abandoned) …
-        YellowbackPosition vault;
-        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.positionsModel()->positionAt(i)->txid == txid) vault = *h.ctl.positionsModel()->positionAt(i);
-        QCOMPARE(vault.status, QString("ACTIVE"));
-        int height = dev.rpc("getblockcount").get<int>();
-        if (height < vault.lockHeight) dev.rpc("generate", json::array({vault.lockHeight - height}));
-        h.ctl.refresh(true);
-        h.tab.sweepVault(vault);
-        QVERIFY(!h.errorNotices.isEmpty() && h.errorNotices.last().contains("sweep-not-abandoned"));
-
-        // … and builds under abandonment: untagged blocks from node 0 until yed_getinfo.abandoned
-        // (ENFORCEMENT set for ABANDON_BLOCKS = 128 on regtest), staying below claimHeight.
+        // Abandonment (L10/L12): node 0 is not a pool, so its blocks neither tag nor signal.
+        // Once the trailing signal count is under the floor haltMask.ENFORCEMENT is set, and
+        // ABANDON_BLOCKS (128 on regtest) consecutive such tips is abandonment.
         const int abandonBlocks = (int)YellowbackJson::toInt(h.ctl.params(), YellowbackRpc::Params::ABANDON_BLOCKS, 128);
-        for (int i = 0; i < 4 * abandonBlocks && !h.ctl.isAbandoned(); i += 8) {
+        for (int i = 0; i < 3 * abandonBlocks && !h.ctl.isAbandoned(); i += 8) {
             dev.rpc("generate", json::array({8}));
             h.ctl.refresh(true);
         }
-        if (!h.ctl.isAbandoned())
-            QSKIP("the devnet did not reach abandonment within four abandonment windows");
+        QVERIFY2(h.ctl.isAbandoned(), "the devnet did not reach abandonment within three abandonment windows");
+
+        // Sweep S through the Vaults page: no burn, no fee, the YED left unbacked.
+        vaultS = positionOf(sweepTxid);
+        QCOMPARE(vaultS.status, QString("ACTIVE"));
+        QVERIFY(vaultS.canSweep);
+        QCOMPARE(vaultS.sweepBefore, vaultS.claimHeight);
         h.errorNotices.clear();
-        h.ctl.refresh(true);
-        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.positionsModel()->positionAt(i)->txid == txid) vault = *h.ctl.positionsModel()->positionAt(i);
-        if (vault.status != "ACTIVE")
-            QSKIP("the vault was claimed before the sweep could be built (claimHeight reached during the abandonment run)");
-        QVERIFY(vault.canSweep);
-        h.tab.sweepVault(vault);
+        noticesBefore = h.notices.size();
+        h.tab.sweepVault(vaultS);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        QCOMPARE(h.notices.size(), noticesBefore + 1);
         QVERIFY(h.notices.last().startsWith("Sweep sent|"));
+        QVERIFY2(h.notices.last().contains("YED now unbacked: $100.00"), qPrintable(h.notices.last()));
         dev.rpc("generate", json::array({1}));
         h.ctl.refresh(true);
-        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.positionsModel()->positionAt(i)->txid == txid) vault = *h.ctl.positionsModel()->positionAt(i);
-        QCOMPARE(vault.status, QString("CLOSED"));
-        QVERIFY(vault.unbacked);
-
-        // A claim needs an underwater vault past its claim height at a fallen claim price; the
-        // devnet's `price` command moves the pools' quotes. The wallet side of a claim is the
-        // Claim page: with yed_listclaimable non-empty, claimVault() makes the one yed_claim call.
-        if (h.ctl.claimableModel()->rowCount(QModelIndex()) == 0)
-            QSKIP("no claimable vault on this devnet (lower the price with `yellowback-devnet price` and mine past a claim height to exercise Claim)");
-        h.tab.claimVault(*h.ctl.claimableModel()->rowAt(0));
-        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QVERIFY(h.notices.last().startsWith("Claim sent|"));
+        YellowbackPosition swept = positionOf(sweepTxid);
+        QCOMPARE(swept.status, QString("CLOSED"));
+        QVERIFY(swept.unbacked);
+        QCOMPARE(swept.burnedCents, (qint64)0);
+        QVERIFY(h.copyIsClean());
     }
 };
 
