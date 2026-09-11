@@ -1,21 +1,82 @@
 # Yellowback in YecWallet — development notes
 
-**Status (2026-09-10, Yellowback v2 Phase 0):** the wallet is being rebuilt for the
-miner-enforced Yellowback v2 (`docs/plans/yellowback-v2-development-plan.md` in the workspace,
-§4.8 and Phase 7b). Phase 0 removed the federation prototype's co-signing redemption wizard
-(`yellowbackredeemwizard.*`), the operator-endpoint settings and the `yed_getroster` /
-`yed_submitredeem` / `yed_abortredeem` calls; the Redeem page says so until the one-step
-`yed_redeem` screen lands in Phase 7b-b. `RPC_VERSION` stays at 1 until the node ships
-`rpcversion 2` (Phase 3); the bump is Phase 7b-a's first commit. The generated RPC contract this
-wallet is checked against is `docs/yellowback-rpc-contract.json` (written by the workspace's
-`make spec`, never edited here). Everything below that describes the federation, the wizard,
-`/cosign` endpoints or the devnet's coordinators is **federation prototype, being replaced by
-phase**; the build notes remain current.
+**Status (2026-09-10, Yellowback v2, Phase 7b-b):** the wallet talks to the miner-enforced
+Yellowback v2 node over `rpcversion 2` (`docs/plans/yellowback-v2-development-plan.md` in the
+workspace, §4.8 and Phase 7b). Phase 0 removed the federation prototype (the co-signing redemption
+wizard, the operator-endpoint settings, `yed_getroster` / `yed_submitredeem` / `yed_abortredeem`).
+Phase 7b-a bumped `RPC_VERSION` to 2 and built the node-context screens (status banner, Overview,
+Vaults, Claim list, Transactions). Phase 7b-b wired the five spending actions — Mint, Send,
+Redeem/Release, Claim, Sweep — each as one confirmation dialog and one `yed_*` call. The generated
+RPC contract this wallet is checked against is `docs/yellowback-rpc-contract.json` (written by the
+workspace's `make spec`, never edited here); `tests/check-rpc-contract.py` asserts that every field
+`src/yellowbackrpc.h` reads is in it.
 
 This file records the wallet-side baseline and the conventions the `feature/yellowback-sf` fork
 follows (`feature/digidollar` is the retired prototype, kept as a record). The node-side contract
 lives in `ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends
 on is listed once in `src/yellowbackrpc.h`.
+
+## The v2 flow, screen by screen
+
+The wallet never talks to anything but the local node, and never holds key material: every
+transaction is built, checked against the enforcement rules, signed and committed by `ycashd`.
+The wallet validates what it can locally, shows one confirmation with the figures the node
+reported, makes one call, and shows the node's result.
+
+| Action | Before the confirmation | The call | After |
+|---|---|---|---|
+| **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, MINTPOL-1 gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, cap headroom), class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`), the enforcement fee and payee from `yed_getfeepayee <refHeight> <requiredZat>` (`feeZat`, `default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none") | `yed_mint <cents> <lockBlocks> [from]` (`from` = a `ys1…` funding address, plan I2) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
+| **Send** (Send page) | prefix check (`ye`/`yt`/`yr` from `yed_getinfo.network`), `s1…`/`ys…`/`z…` refused locally, amount ≥ `MIN_OUTPUT`, confirmed balance, `yed_validateaddress` (`isvalid`, `reason`) | `yed_send <address> <cents>` | `txid`, `changeCents`, `expiryHeight`; a `change-floor` refusal's two workable amounts ("send N cents … or at most M cents") are parsed into the hint |
+| **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, fee and payee from `yed_getfeepayee <tip − refLag> <collateralZat>`, destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
+| **Release** (Vaults row, VOID) | VOID at or past `lockHeight`; the dialog says no YED is burned and no fee is paid, and names `sweepBefore` (= `claimHeight`) | the same `yed_redeem <vaultTxid>` (L14) | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
+| **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED | `yed_claim <vaultTxid> [to]` | the `yed_redeem` shape |
+| **Sweep** (Vaults row, ACTIVE while `yed_getinfo.abandoned`) | the dialog carries `I understand this leaves YED unbacked` verbatim and names `sweepBefore` | `yed_sweep <vaultTxid> "I understand this leaves YED unbacked" [to]` (L10) | `txid`, `hex` (copied to the clipboard for submission elsewhere), `collateralOut`, `to`, `unbackedCents` |
+
+Refresh reads `yed_getinfo`, `yed_getstats`, `yed_getactivation`, `yed_getbalance`,
+`yed_listpositions`, `yed_listclaimable` and `yed_listtransactions 200 0` on the stock
+`Controller`'s block-changed branch and after every successful action.
+
+**Errors.** Node error strings are stable identifiers and are always shown verbatim
+(`yed_x failed: <message>`); `YellowbackController::explainError` appends what the identifier
+means for `yellowback-unhealthy`, `change-floor`, `not-a-yellowback-address`, `insufficient-yed`,
+`vault-locked`, `vault-not-active`, `vault-not-owned`, `vault-not-found`, `sweep-not-abandoned`,
+`sweep-acknowledgement-missing`, `claim-not-yet`, `claim-not-underwater`, the six `mintpol-*`,
+`mint-unsatisfiable`, `mint-bad-lock`, `mempool-check-failed:<verdict>` and a locked wallet. A node
+that lacks `yed_claim` or `yed_sweep` answers JSON-RPC `-32601`; the dialog reports that the node
+does not offer the command. `yellowback-unhealthy` from any call takes the whole tab down at once.
+
+**Copy.** The wallet never describes Yellowback as "trustless" (CI: `grep -rn 'trustless' src/`)
+and never mentions a federation; what enforcement means is stated as in plan §8.1 — every Ycash
+node enforces the lock height and that only the owner's key spends before the claim height; the
+mining pools running the module enforce that collateral is released only against the burn of the
+vault's debt. The Overview and every confirmation dialog are checked for this by the QTest
+(`Harness::copyIsClean`).
+
+## Testing
+
+```bash
+cd yecwallet-dd
+cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt) && cmake --build build
+QT_QPA_PLATFORM=offscreen build/bin/yellowback_test        # offline cases; the devnet cases QSKIP
+python3 tests/check-rpc-contract.py                        # yellowbackrpc.h vs docs/yellowback-rpc-contract.json
+grep -rn 'trustless' src/ | { ! grep .; }
+```
+
+The offline cases (plan §4.8, N28) feed canned `yed_*` replies — the contract's example values —
+through `YellowbackController::feed()` for the screens and through
+`YellowbackController::setTransport()` (a fake `Connection`) for the dialogs, and capture the
+confirmation and notice copy through `YellowbackTab::confirmFn` / `noticeFn`. They cover the
+banner for every activation state, the Overview, the Vaults rows (ACTIVE, VOID, abandoned,
+CLOSED, CLAIMED), the claim list, the transaction types, class derivation for lock lengths
+47/48/96/97/144/145/240/241, and each dialog with its result and its error identifiers.
+
+The two devnet cases (`devnetEndToEnd`: mint → send → redeem; `devnetClaimAndSweep`: sweep
+under a forced abandonment, then claim when a claimable vault exists) run only with
+`YELLOWBACK_DEVNET_DIR=<the devnet's --dir>` set; they read `rpcuser`, `rpcpassword` and
+`rpcport` from `<dir>/node0/ycash.conf` (the same file the GUI reads through `--conf`) and post
+JSON-RPC to node 0 directly, because the test has no `MainWindow` for `Connection::doRPCSafe`.
+`devnetClaimAndSweep` also QSKIPs while the node lacks `yed_claim`/`yed_sweep`. Note that the
+devnet's per-node conf uses the test framework's regtest credentials; nothing leaves 127.0.0.1.
 
 ## Build status
 
@@ -26,7 +87,7 @@ on is listed once in `src/yellowbackrpc.h`.
 | Qt 6 (system) | not installed | Homebrew `qt` at `/opt/homebrew/opt/qt` (Qt 6, with `Qt6::Test`) |
 | Qt 6 (static, `build.sh`) | not attempted | **done** 2026-09-05: `bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd` builds static Qt 6.5.8 and produces `artifacts/macos-arm64-yecwallet-v4.5.0.dmg` with `ycashd` inside the bundle (see "Release build on macOS" below) |
 | Build of the fork | blocked | **compiles**: `build/bin/yecwallet.app` and `build/bin/yellowback_test` |
-| `yellowback_test` (QTest, offscreen) | not built | **passes** (5 cases; the contract case lost its co-signer and submit-deadline checks in Phase 0) |
+| `yellowback_test` (QTest, offscreen) | not built | **passes** (54 offline cases at Phase 7b-b; the two devnet cases QSKIP without `YELLOWBACK_DEVNET_DIR`) |
 
 Nothing was `brew install`ed by an agent session; the tools appeared on the host between the
 two sessions. The development configuration is built with:
@@ -75,46 +136,40 @@ Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
   `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
   separate step that needs an Apple Developer account.
 
-## Trying it on one laptop: the devnet (federation prototype, being replaced by phase — Phase 7 rewrites the devnet)
+## Trying it on one laptop: the devnet (v2)
 
-`ycash-dd/contrib/yellowback/devnet/yellowback-devnet` builds a private Yellowback network on
-one machine and leaves it running: five regtest nodes (0 and 1 users, 2 to 4 a 2-of-3
-federation), a funded user wallet, the genesis anchor, and one federation coordinator per
-operator node publishing a mock price and answering `/cosign`. It stops at "ready to mint", so
-nothing has tripped the volatility freeze, and the coordinators keep the price fresh as you mine.
-Nothing leaves 127.0.0.1 and no mainnet sync happens.
+`ycash-dd/contrib/yellowback/devnet/yellowback-devnet` builds a private Yellowback v2 network
+on one machine and leaves it running: five regtest nodes (0 the user wallet, 1 a stock node,
+2–4 pools with payout addresses and mock price quotes), a funded user wallet, and enough
+signalling blocks that Yellowback is active and minting is open. Nothing leaves 127.0.0.1 and no
+mainnet sync happens.
 
 ```bash
 cd ycash-dd
 PY=../.venv/bin/python                                  # the workspace venv has the test framework's deps
-$PY contrib/yellowback/devnet/yellowback-devnet up      # about a minute; prints the two things below
+$PY contrib/yellowback/devnet/yellowback-devnet up      # about a minute; prints the wallet command
 $PY contrib/yellowback/devnet/yellowback-devnet wallet  # launches the built wallet against node 0
 ```
 
-`up` prints the wallet command (`yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`)
-and three operator endpoints (`http://127.0.0.1:<port>`) to paste once into the wallet's
-Yellowback tab → Settings. From then on Mint, Send and the Redeem wizard work end to end: the
-wizard posts to those endpoints and the coordinators co-sign through their nodes'
-`yed_cosignredeem`. Plain HTTP is accepted by the wizard; production endpoints are HTTPS.
-
-While testing:
+Options of `up`: `--dir` (default `~/yb-devnet`), `--portseed` (default 7; pick another when
+other regtest nodes run on the machine), `--bitcoind <path>` (default `src/ycashd`), `--price`,
+`--force`. `up` prints the wallet command (`yecwallet --conf <dir>/node0/ycash.conf --no-embedded`).
+From then on Mint, Send, Redeem and Release work end to end from the Yellowback tab.
 
 | Command | What it does |
 |---|---|
-| `yellowback-devnet mine 10` | mines 10 blocks on node 0, half a second apart so the federation fits its price rounds in; prints height, price age and whether minting is open |
-| `yellowback-devnet price 45` | changes the mock price the federation publishes (each round moves the on-chain price at most 10 %; a 20 % move within 48 blocks freezes minting for 96 blocks, so this is also how to demo the freeze) |
-| `yellowback-devnet status` | nodes, coordinators (rounds, co-signs, refusals), height, price and age, freeze state, node 0's balances and positions |
-| `yellowback-devnet cli -- yed_listpositions` | `ycash-cli` against node 0 (`--node 2` for an operator node) |
-| `yellowback-devnet down` | stops the coordinators and nodes; `down --wipe` also deletes `~/yb-devnet` |
+| `yellowback-devnet mine 10 [node]` | mines 10 blocks on node 0 (untagged) or on a pool node (tagged, carrying its quote) |
+| `yellowback-devnet price 45` | changes the mock price the pools quote; mine pool blocks to publish it |
+| `yellowback-devnet status` | nodes and ports, activation, minting state, each pool's registration and eligibility |
+| `yellowback-devnet check` | exits 0 iff active, minting allowed, all pools eligible and node 0 funded |
+| `yellowback-devnet cli -- yed_listpositions` | `ycash-cli` against node 0 (`--node 2` for a pool) |
+| `yellowback-devnet down` | stops the nodes; `down --wipe` also deletes the directory |
 
-A tier-0 vault unlocks 48 blocks after its mint on regtest (the tiers are 48, 96, 144, 192, 240
-blocks). Verified 2026-09-06 through the CLI equivalents of the GUI flow: mint on node 0,
-`mine 86`, `yellowback-redeem` against the three endpoints (2 of 3 signatures), vault CLOSED with
-the burn recorded, price age never above 9 blocks while mining.
-
-Why not `yellowback_lifecycle.py --noshutdown`: that script exercises a 20 % price drop and a
-25 % jump on purpose, which trips the volatility rule, so it leaves minting frozen for 96
-blocks and its federation stops with it; the devnet exists so a manual demo starts clean.
+A class-A vault unlocks 48 blocks after its mint on regtest (classes A 48–96, B 97–144,
+C 145–240 blocks). To redeem: mint, `mine 48`, select the vault on the Vaults page, Redeem.
+To see Sweep: mine untagged blocks on node 0 until fewer than half of a window signal and the
+enforcement halt has held for `abandonBlocks` (128) — the banner then says "abandoned" and every
+ACTIVE row offers Sweep. The wallet QTest's devnet cases do the same through the RPC.
 
 ## Attaching the GUI to a regtest playground node (plan H2)
 
@@ -140,83 +195,33 @@ would pick the mainnet `ye` prefix. The Yellowback code therefore takes the netw
 
 ## Verification status of the fork
 
-The Yellowback code was first written without a compiler or Qt on the host; it now **compiles
-cleanly** against the system Qt 6 (`cmake --build build`, no warnings in the Yellowback files)
-and the QTest target passes under `QT_QPA_PLATFORM=offscreen`. What has *not* been done: running
-the GUI against a live regtest node (plan H2), so every `yed_*` reply shape is verified against
-the contract document and the node's `src/rpc/yellowback*.cpp` by reading, not by a round trip.
-
-## Reconciliation with the frozen contract (rpcversion 1)
-
-`ycash-dd/doc/yellowback-rpc.md` was frozen after the wallet was first written. The wallet was
-diffed against it method by method (and against `ycash-dd/src/rpc/yellowbackwallet.cpp` /
-`yellowback.cpp` for exact strings) and changed on every mismatch; the node was not touched.
-
-| Area | Wallet assumed | Contract says | Wallet change |
-|---|---|---|---|
-| `/cosign` success body | `{hex}` (+ optional `signatures`) | `{hex, quorumSignatures, k, complete}` | reads `quorumSignatures` to count progress (falls back to the hex growing), `complete` to stop early, `k` overrides the roster's k |
-| transient co-signer refusal | error text contains `RED-0` or `RED-2` | error text **ends with `(transient)`**, or JSON `transient: true`; 429 rate-limit is transient | `isTransientRefusal` matches the suffix only; `transient` flag still honoured |
-| submit deadline | `expiryHeight - 3`, computed in the wallet; expired when `height >= deadline` | `yed_redeem.deadlineHeight = expiryHeight - 3 - 1`, **inclusive** ("submit by this height") | pending map stores the node's `deadlineHeight`; expiry check is `height > deadline`; the wallet-side fallback is `expiry - EXPIRING_SOON - 1`; `REDEEM_DEADLINE` is 36 |
-| `yed_redeem` result | `hex, vault, roster, requiredBurnCents, expiryHeight` | also `burnCents, changeCents, deadlineHeight`, `roster{index,k,n,pubkeys[]}` | shows `burnCents` (what the tx burns) rather than `requiredBurnCents` |
-| `yed_submitredeem` result | `txid` | `txid, quorumSignatures` | shown in the final page |
-| `yed_estimatecollateral` | always `requiredZat` | `requiredZat` **null** with `error: bad-oracle-price` (or `collateral-out-of-range`, node-only); `lockHeight` and `unlockHeight` both present | handles the null + `error` case as "no estimate", mint button stays disabled |
-| `yed_getstats` | no `lastBreachHeight`; `supplyCapCents` optional | `supplyCapCents` always present (0 = none), `priceHeight`/`priceAge`/`lastBreachHeight`/`mintFrozenUntil` are `-1` when undefined | field added to the header; cap test uses `0 = none` |
-| `yed_getprotectionstatus` | not used | exists: `mintingAllowed`, `dca.band`, `err.active/burnMultiplierBps`, `volatility.frozenUntil` | fetched on every refresh; `mintBlocker` and the Overview's health/ERR lines prefer it over `yed_getstats` |
-| `yed_getinfo.params` | not used; limits compiled in | `minMintCents, maxMintCents, minOutputCents, mintWindow, mintEvalLag, tiers[]…` | `YellowbackController::minMintCents()` etc. read them, with the compiled-in values as fallback; the tier table (`YellowbackFormat::tierName/tierRatio`) is still compiled in |
-| `yed_listpositions` | no `pending` | `pending`, `mintHeight`, `voidReason`, `closeHeight`, `closingTxid`, `burnedCents` | all read; `pending` from the node drives the Redeem/Abort buttons alongside the wallet's own map (survives a wallet restart) |
-| `yed_listtransactions` expired rows | `expired: true` only | `height: -1`, `verdict: "expired"`, `expired: true`; and the node's expired rows carry the **payload** type name (`transfer`), which is not in the contract's `mint\|send\|receive\|burn\|redeem` list | `expired` also set from the verdict; `transfer` rendered as "Sent" |
-| C20 change floor | matched the word `change` | the message carries `(C20)` and names the workable amounts | matches `C20`; the node's amounts are shown instead of recomputed |
-| index unhealthy | only via `yed_getinfo.healthy` | every other command fails with `-1` "yellowback index unhealthy: …; restart with -reindex-yellowback" | any such error takes the tab down immediately |
-| locked wallet | not handled | `walletpassphrase` in the message | a hint is appended on mint/send |
-| `yed_mint` result | `txid, vault, lockHeight, collateralZat` | also `evalHeight, expiryHeight, ownerKeyId, warning` | `warning` and `expiryHeight` shown |
-| addresses | `ye`/`yt`/`yr` by `yed_getinfo.network` | same | no change |
-| `-32601` Method not found | matched | same | no change |
-
-Points raised for the node side, and their outcome:
-
-- *Resolved in `ycash-dd` `93805aca6`:* expired rows in `yed_listtransactions` now use the
-  contract's type set (`mint|send|redeem`) instead of the payload name `transfer`. The wallet's
-  tolerance for `transfer` (rendered as "Sent") is kept and harmless.
-- *Resolved in the same commit:* `error: "collateral-out-of-range"` is now listed in the
-  contract for `yed_estimatecollateral`; the wallet shows either error verbatim.
-- *Open:* the wallet's tier names and ratios (1 h / 30 d / 90 d / 180 d / 1 y at 1000–300 %) are
-  compiled in. `yed_getinfo.params.tiers[{tier,blocks,ratioPct}]` carries the ratios and lock
-  lengths, so a future revision should render from it; nothing in the contract blocks that.
+The Yellowback code compiles cleanly against the system Qt 6 (`cmake --build build`, no warnings
+in the Yellowback files) and the QTest target passes under `QT_QPA_PLATFORM=offscreen`. The
+mint → send → redeem flow has been run against the v2 devnet through the QTest's devnet case and
+the GUI attached with `--conf --no-embedded`; the claim and sweep dialogs are verified offline
+against the contract's example values until the node ships `yed_claim` / `yed_sweep`.
 
 ## Conventions
 
 - Naming: `Yellowback` for the system, `YED` for amounts, `yed_*` RPCs (workspace AGENTS.md rule 6); `DigiDollar` appears only in comments citing
   `ref/digibyte` files.
-- Amounts: integer cents in code; `YellowbackController::formatCents` renders them.
+- Amounts: integer cents in code; `YellowbackFormat::cents` renders them.
 - Heights: shown with an estimated date at 75 s per block, labelled as an estimate.
 - Copy: the wallet never describes Yellowback as trustless or shielded (plan §4.8, §8.1; the CI
-  grep `grep -rn 'trustless' src/`). It says "transparent" where a user might expect otherwise;
-  the remaining "federated"/"federation" wording in the Overview and mint copy is prototype text
-  that Phase 7b replaces with the §8.1 statement.
+  grep `grep -rn 'trustless' src/`). It says "transparent" where a user might expect otherwise,
+  and states what enforcement means as §8.1 does.
 - Errors: node error strings are stable identifiers and are always shown verbatim.
 
 ## Where the code is
 
 | File | What |
 |---|---|
-| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier and displayed protocol constant; `RPC_VERSION = 1` |
+| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier and displayed protocol constant; `RPC_VERSION = 2`; `tests/check-rpc-contract.py` parses its `// contract:` markers |
 | `docs/yellowback-rpc-contract.json` | generated copy of the RPC contract (plan §4.5 / `ycash-dd/doc/yellowback-rpc.md`), written by the workspace `make spec`; the `wallet` CI job checks `yellowbackrpc.h` against it from Phase 7b |
-| `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/balance, mint gate reasons, pending redemptions. Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
-| `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, `YellowbackPositionsModel`, `YellowbackTxModel` |
-| `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its eight sub-pages |
+| `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/activation/balance, mint gate reasons, `classForLock`, `explainError`, `parseChangeFloor`, `setTransport` (the test's fake Connection). Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
+| `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackClaimable` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, the positions, claimable and transactions table models |
+| `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its nine sub-pages; the five action flows and their confirmation dialogs (`confirmFn`/`noticeFn` for the test) |
 | `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
-| `CMakeLists.txt`, `tests/yellowbacktab_test.cpp` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
-
-## Operator `/cosign` request shape used by the wizard (federation prototype, removed in Phase 0)
-
-As the coordinator (`ycash-dd/contrib/yellowback/yellowback_fed.py`) implements it:
-`POST <endpoint>/cosign`, body `{"hex": "<owner-signed or partially co-signed hex>"}`,
-`Content-Type: application/json`, 30-second transfer timeout. A 2xx reply is
-`{"hex", "quorumSignatures", "k", "complete"}` (a plain-text hex body is still accepted).
-A refusal is 409 `{"error": "<RED-n: ... [(transient)]>", "transient": bool}`, a rate limit is
-429 with `transient: true`; a missing `transient` falls back to the `(transient)` suffix, and a
-network-level failure with no HTTP status is treated as transient too. Operators are contacted
-one at a time in the configured order, each receiving the hex the previous one returned, until
-`quorumSignatures >= k` or `complete`.
+| `CMakeLists.txt`, `tests/yellowbacktab_test.cpp`, `tests/check-rpc-contract.py` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`); the contract checker |
