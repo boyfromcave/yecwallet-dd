@@ -639,12 +639,6 @@ void Controller::watchTxStatus() {
     if (!zrpc->haveConnection()) 
         return noConnection();
 
-    // Yellowback: a pending redemption keeps the quick timer on, like a watched opid does
-    if (yellowback->watchPending())
-        txTimer->start(Settings::quickUpdateSpeed);
-    else if (watchingOps.isEmpty() && txTimer->interval() != Settings::updateSpeed)
-        txTimer->start(Settings::updateSpeed);
-
     zrpc->fetchOpStatus([=, this](const json& reply) {
         // There's an array for each item in the status
         for (auto& it : reply.get<json::array_t>()) {  

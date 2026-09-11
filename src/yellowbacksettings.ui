@@ -3,22 +3,8 @@
  <class>YellowbackSettings</class>
  <widget class="QWidget" name="YellowbackSettings">
   <layout class="QVBoxLayout" name="settingsLayout">
-   <item>
-    <widget class="QGroupBox" name="grpOperators">
-     <property name="title"><string>Federation operator endpoints (one base URL per line, e.g. https://op1.example.org)</string></property>
-     <layout class="QVBoxLayout" name="opsLayout">
-      <item><widget class="QPlainTextEdit" name="txtEndpoints"/></item>
-      <item>
-       <layout class="QHBoxLayout" name="opsButtons">
-        <item><widget class="QPushButton" name="btnVerify"><property name="text"><string>Check against the roster (yed_getroster)</string></property></widget></item>
-        <item><widget class="QLabel" name="lblEndpointsStatus"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
    <item><widget class="QCheckBox" name="chkUnitCents"><property name="text"><string>Show YED amounts in cents instead of dollars</string></property></widget></item>
-   <item><widget class="QCheckBox" name="chkAdvanced"><property name="text"><string>Show advanced details (raw transaction hex, roster script)</string></property></widget></item>
+   <item><widget class="QCheckBox" name="chkAdvanced"><property name="text"><string>Show advanced details (raw transaction hex)</string></property></widget></item>
    <item>
     <widget class="QLabel" name="lblRpcVersion"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget>
    </item>

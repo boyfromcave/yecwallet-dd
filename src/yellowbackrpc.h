@@ -7,8 +7,11 @@
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
-// ycash-dd/doc/yellowback-rpc.md (rpcversion 1, frozen) in one place. Nothing else crosses the
-// node/wallet boundary. The section order below follows that document.
+// ycash-dd/doc/yellowback-rpc.md in one place. Nothing else crosses the node/wallet boundary.
+// The section order below follows that document. RPC_VERSION stays at 1 until the node ships
+// rpcversion 2 (plan Phase 3); the bump is Phase 7b-a's first commit (N27). The federation
+// prototype's yed_getroster / yed_submitredeem / yed_abortredeem and the operator /cosign
+// endpoint were removed in Phase 0; redemption becomes one step (yed_redeem, plan V24).
 
 namespace YellowbackRpc {
 
@@ -19,7 +22,6 @@ constexpr int RPC_VERSION = 1;
 constexpr const char* GETINFO             = "yed_getinfo";
 constexpr const char* GETSTATS            = "yed_getstats";
 constexpr const char* GETPROTECTIONSTATUS = "yed_getprotectionstatus";
-constexpr const char* GETROSTER           = "yed_getroster";
 constexpr const char* GETVAULT            = "yed_getvault";
 constexpr const char* GETTXINFO           = "yed_gettxinfo";
 constexpr const char* ESTIMATECOLLATERAL  = "yed_estimatecollateral";
@@ -31,8 +33,6 @@ constexpr const char* GETBALANCE          = "yed_getbalance";
 constexpr const char* MINT                = "yed_mint";
 constexpr const char* SEND                = "yed_send";
 constexpr const char* REDEEM              = "yed_redeem";
-constexpr const char* SUBMITREDEEM        = "yed_submitredeem";
-constexpr const char* ABORTREDEEM         = "yed_abortredeem";
 constexpr const char* LISTPOSITIONS       = "yed_listpositions";
 constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
 
@@ -184,19 +184,6 @@ namespace Estimate {
     constexpr const char* ERROR             = "error";         // bad-oracle-price | collateral-out-of-range
 }
 
-// ── yed_getroster result ───────────────────────────────────────────────────────────────────
-namespace Roster {
-    constexpr const char* INDEX             = "index";
-    constexpr const char* REVEAL_HEIGHT     = "revealHeight";
-    constexpr const char* SCRIPT_HEX        = "scriptHex";
-    constexpr const char* ADDRESS           = "address";
-    constexpr const char* K                 = "k";
-    constexpr const char* N                 = "n";
-    constexpr const char* PUBKEYS           = "pubkeys";
-    constexpr const char* MINTABLE_INDICES  = "mintableIndices";
-    constexpr const char* PREVIOUS          = "previous";
-}
-
 // ── yed_mint result ────────────────────────────────────────────────────────────────────────
 namespace MintResult {
     constexpr const char* TXID              = "txid";
@@ -222,25 +209,12 @@ namespace SendResult {
 namespace RedeemResult {
     constexpr const char* HEX               = "hex";           // owner-signed
     constexpr const char* VAULT             = "vault";
-    constexpr const char* ROSTER            = "roster";        // {index,k,n,pubkeys[]} (Roster::*)
     constexpr const char* REQUIRED_BURN_CENTS = "requiredBurnCents";
     constexpr const char* BURN_CENTS        = "burnCents";
     constexpr const char* CHANGE_CENTS      = "changeCents";
     constexpr const char* EXPIRY_HEIGHT     = "expiryHeight";
-    constexpr const char* DEADLINE_HEIGHT   = "deadlineHeight"; // submit at or before this height
     constexpr const char* COLLATERAL_TO     = "collateralTo";  // where the collateral goes (plan I2)
     constexpr const char* SHIELDED          = "shielded";      // true when it is a Sapling output
-}
-
-// ── yed_submitredeem result ────────────────────────────────────────────────────────────────
-namespace SubmitResult {
-    constexpr const char* TXID              = "txid";
-    constexpr const char* QUORUM_SIGNATURES = "quorumSignatures";
-}
-
-// ── yed_abortredeem result ─────────────────────────────────────────────────────────────────
-namespace AbortResult {
-    constexpr const char* ABORTED           = "aborted";
 }
 
 // ── yed_validateaddress result ─────────────────────────────────────────────────────────────
@@ -265,28 +239,6 @@ namespace Errors {
     constexpr const char* CHANGE_FLOOR      = "C20";
     // yed_mint / yed_send / yed_redeem on an encrypted, locked wallet
     constexpr const char* WALLET_LOCKED     = "walletpassphrase";
-    // yed_submitredeem: the co-signed transaction differs or a signature fails to verify
-    constexpr const char* SUB_1             = "SUB-1";
-    // Co-signer refusals (yed_cosignredeem, and the operator /cosign relaying it) begin with
-    // the rule id RED-0 … RED-8 and end with this suffix when a retry after the next block
-    // may succeed.
-    constexpr const char* TRANSIENT_SUFFIX  = "(transient)";
-    constexpr const char* RULE_PREFIX       = "RED-";
-}
-
-// ── Operator co-sign endpoint (coordinator, not the node) ────────────────────────────────
-// POST <endpoint>/cosign with a JSON body {"hex": "<owner-signed or partially co-signed hex>"};
-// success 2xx {"hex", "quorumSignatures", "k", "complete"}; refusal 4xx {"error", "transient"}
-// (409 for a co-signer refusal, 429 rate-limited with transient: true).
-namespace Cosign {
-    constexpr const char* PATH              = "/cosign";
-    constexpr const char* REQ_HEX           = "hex";
-    constexpr const char* RESP_HEX          = "hex";
-    constexpr const char* RESP_QUORUM_SIGNATURES = "quorumSignatures";
-    constexpr const char* RESP_K            = "k";
-    constexpr const char* RESP_COMPLETE     = "complete";
-    constexpr const char* RESP_ERROR        = "error";
-    constexpr const char* RESP_TRANSIENT    = "transient";
 }
 
 // ── Protocol constants (plan §3.1) ────────────────────────────────────────────────────────
@@ -294,10 +246,6 @@ namespace Cosign {
 // has answered (YellowbackController::param*). SECONDS_PER_BLOCK is display-only.
 constexpr int    SECONDS_PER_BLOCK   = 75;
 constexpr int    MINT_WINDOW         = 40;   // nExpiryHeight = indexTip + 40
-constexpr int    EXPIRING_SOON       = 3;    // the mempool refuses within 3 blocks of expiry
-// yed_redeem.deadlineHeight = expiryHeight - EXPIRING_SOON - 1: the last height at which
-// yed_submitredeem is accepted. 36 blocks from the height the redemption was built at.
-constexpr int    REDEEM_DEADLINE     = MINT_WINDOW - EXPIRING_SOON - 1;
 constexpr int    MINT_EVAL_LAG       = 2;
 constexpr qint64 MIN_MINT_CENTS      = 10000;     // $100
 constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000

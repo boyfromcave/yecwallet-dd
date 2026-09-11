@@ -86,10 +86,6 @@ bool YellowbackController::isIndexUnhealthy(const QString& m) {
     return m.contains(YellowbackRpc::Errors::INDEX_UNHEALTHY, Qt::CaseInsensitive);
 }
 
-bool YellowbackController::isTransientRefusal(const QString& m) {
-    return m.trimmed().endsWith(YellowbackRpc::Errors::TRANSIENT_SUFFIX);
-}
-
 // ── Lifecycle ─────────────────────────────────────────────────────────────────────────────
 
 void YellowbackController::setAvailability(bool avail, const QString& why) {
@@ -173,7 +169,7 @@ void YellowbackController::refresh(bool force) {
     call(YellowbackRpc::GETINFO, json(nullptr),
         [=, this](const json& info) {
             applyInfo(info);
-            if (force || indexHeight != lastRefreshHeight || !pending.isEmpty()) {
+            if (force || indexHeight != lastRefreshHeight) {
                 lastRefreshHeight = indexHeight;
                 refreshStats();
                 refreshProtection();
@@ -238,44 +234,6 @@ void YellowbackController::refreshTransactions() {
             emit transactionsUpdated();
         },
         [=, this](const QString& e) { main->logger->write("yed_listtransactions: " + e); });
-}
-
-// ── Pending redemptions ───────────────────────────────────────────────────────────────────
-
-int YellowbackController::deadlineHeight(int expiryHeight) const {
-    // yed_submitredeem refuses once expiry < chainHeight + 1 + EXPIRING_SOON, so the last
-    // accepted height is expiry - EXPIRING_SOON - 1 (what yed_redeem.deadlineHeight reports).
-    return expiryHeight - YellowbackRpc::EXPIRING_SOON - 1;
-}
-
-void YellowbackController::addPendingRedemption(const QString& vaultTxid, int deadline) {
-    pending[vaultTxid] = deadline;
-    emit pendingChanged();
-}
-
-void YellowbackController::removePendingRedemption(const QString& vaultTxid) {
-    if (pending.remove(vaultTxid) > 0)
-        emit pendingChanged();
-}
-
-bool YellowbackController::watchPending() {
-    if (pending.isEmpty() || !versionOk) return false;
-
-    call(YellowbackRpc::GETINFO, json(nullptr),
-        [=, this](const json& info) {
-            int h = (int)YellowbackJson::toInt(info, YellowbackRpc::Info::HEIGHT, indexHeight);
-            indexHeight = h;
-            QList<QString> expired;
-            for (auto it = pending.constBegin(); it != pending.constEnd(); ++it)
-                if (h > it.value()) expired.append(it.key());   // deadlineHeight is inclusive
-            for (auto& v : expired) {
-                pending.remove(v);
-                emit pendingChanged();
-                emit pendingExpired(v);
-            }
-        },
-        [=, this](const QString&) {});
-    return true;
 }
 
 // ── Addresses ─────────────────────────────────────────────────────────────────────────────
@@ -433,18 +391,6 @@ void YellowbackController::redeem(const QString& vaultTxid, OkFn ok, ErrFn err) 
 void YellowbackController::redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
     if (to.isEmpty()) { redeem(vaultTxid, ok, err); return; }
     call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
-}
-
-void YellowbackController::submitRedeem(const QString& hex, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::SUBMITREDEEM, json::array({hex.toStdString()}), ok, err);
-}
-
-void YellowbackController::abortRedeem(const QString& vaultTxid, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::ABORTREDEEM, json::array({vaultTxid.toStdString()}), ok, err);
-}
-
-void YellowbackController::getRoster(OkFn ok, ErrFn err) {
-    call(YellowbackRpc::GETROSTER, json(nullptr), ok, err);
 }
 
 void YellowbackController::getTxInfo(const QString& txid, OkFn ok, ErrFn err) {

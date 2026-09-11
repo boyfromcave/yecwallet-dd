@@ -75,8 +75,9 @@ private slots:
         QCOMPARE(t.confirmations, 0);
     }
 
-    // The frozen contract (ycash-dd/doc/yellowback-rpc.md): expired rows, node-side pending,
-    // transient co-signer refusals and the inclusive submit deadline.
+    // The rpcversion 1 contract (ycash-dd/doc/yellowback-rpc.md): expired rows and node-side
+    // pending. (The federation prototype's co-signer refusals and submit deadline left with
+    // Phase 0; the contract case is redone against docs/yellowback-rpc-contract.json in Phase 7b.)
     void followsFrozenContract() {
         auto e = YellowbackTx::fromJson(nlohmann::json::parse(
             R"({"txid":"cd","height":-1,"confirmations":0,"type":"transfer","verdict":"expired",
@@ -92,13 +93,8 @@ private slots:
         QCOMPARE(p.closeHeight, 77);
         QCOMPARE(p.burnedCents, (qint64)10000);
 
-        QVERIFY(YellowbackController::isTransientRefusal("RED-0: index behind the chain (transient)"));
-        QVERIFY(!YellowbackController::isTransientRefusal("RED-3: burn below required"));
         QVERIFY(YellowbackController::isMethodNotFound("Method not found (Yellowback requires -experimentalfeatures -yellowback)"));
         QVERIFY(YellowbackController::isIndexUnhealthy("yellowback index unhealthy: corrupt; restart with -reindex-yellowback"));
-
-        QCOMPARE(YellowbackRpc::REDEEM_DEADLINE, 36);   // expiry - EXPIRING_SOON - 1, relative to the build height
-        QCOMPARE(QString(YellowbackRpc::Cosign::RESP_QUORUM_SIGNATURES), QString("quorumSignatures"));
     }
 };
 

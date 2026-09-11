@@ -91,7 +91,6 @@ set(APP_SOURCES
     src/yellowbackcontroller.cpp
     src/yellowbackmodels.cpp
     src/yellowbacktab.cpp
-    src/yellowbackredeemwizard.cpp
     # bundled 3rd-party (QR code)
     src/3rdparty/qrcode/BitBuffer.cpp
     src/3rdparty/qrcode/QrCode.cpp
@@ -127,7 +126,6 @@ set(APP_HEADERS
     src/yellowbackcontroller.h
     src/yellowbackmodels.h
     src/yellowbacktab.h
-    src/yellowbackredeemwizard.h
     src/3rdparty/qrcode/BitBuffer.hpp
     src/3rdparty/qrcode/QrCode.hpp
     src/3rdparty/qrcode/QrSegment.hpp

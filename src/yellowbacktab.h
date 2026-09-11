@@ -21,7 +21,7 @@ namespace Ui {
 // The Yellowback tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
 // in the order Overview, Receive, Send, Mint, Vaults, Transactions, Redeem, Settings
 // (plan §4.7). Every action goes through YellowbackController; nothing here touches keys or
-// the network except the redemption wizard it opens.
+// the network.
 //
 // `main` may be null and the controller may never be set: the tab then renders with every
 // action disabled. That is what the QTest target relies on.
@@ -70,10 +70,8 @@ private:
     void doSend();
     void newReceiveAddress();
     void startRedemption(const QString& vaultTxid);
-    void abortPending(const QString& vaultTxid);
     void explainVoid(const QString& vaultTxid);
     void saveSettings();
-    void verifyEndpoints();
     void showTxContextMenu(QTableView* table, const QPoint& pos);
 
     MainWindow*          main = nullptr;

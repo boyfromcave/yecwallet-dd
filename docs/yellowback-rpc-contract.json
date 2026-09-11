@@ -1,0 +1,671 @@
+{
+  "errors": {
+    "change-floor": {
+      "raisedBy": [
+        "yed_send",
+        "yed_sendmany",
+        "yed_redeem",
+        "yed_claim"
+      ],
+      "when": "YED change would lie in (0, MIN_OUTPUT) (§4.6); the message names the nearest workable amounts (structured by H2 in Phase 8)"
+    },
+    "claim-not-underwater": {
+      "raisedBy": [
+        "yed_claim"
+      ],
+      "when": "RED-4 would fail at the reference snapshot"
+    },
+    "claim-not-yet": {
+      "raisedBy": [
+        "yed_claim"
+      ],
+      "when": "tip below claimHeight"
+    },
+    "fee-no-eligible-payee": {
+      "raisedBy": [
+        "yed_getfeepayee"
+      ],
+      "when": "E(R) empty (FEE-0; not an error for the wallet, which omits the output)"
+    },
+    "insufficient-yed": {
+      "raisedBy": [
+        "yed_redeem",
+        "yed_claim",
+        "yed_send"
+      ],
+      "when": "wallet YED below the burn or amount"
+    },
+    "mempool-check-failed:<verdict>": {
+      "raisedBy": [
+        "yed_redeem",
+        "yed_claim"
+      ],
+      "when": "MempoolCheck returned the named RED verdict (K7)"
+    },
+    "mint-bad-lock": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "lockBlocks outside every class or lockHeight + GRACE ≥ LOCKTIME_THRESHOLD"
+    },
+    "mint-unsatisfiable": {
+      "raisedBy": [
+        "yed_mint",
+        "yed_estimatecollateral"
+      ],
+      "when": "requiredZat > MAX_MONEY (K14)"
+    },
+    "mintpol-cap": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "mintpol-divergence": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "mintpol-global-ratio": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "mintpol-no-price": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "mintpol-not-active": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "mintpol-participation": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "MINTPOL-1, one per halt bit and the cap"
+    },
+    "no-payout-address": {
+      "raisedBy": [
+        "yed_setquote"
+      ],
+      "when": "the node has no payout key and so can emit no tag"
+    },
+    "not-a-yellowback-address": {
+      "raisedBy": [
+        "yed_send",
+        "yed_sendmany",
+        "yed_validateaddress"
+      ],
+      "when": "the recipient is not a ye…/yt…/yr… address of this network"
+    },
+    "quote-out-of-range": {
+      "raisedBy": [
+        "yed_setquote"
+      ],
+      "when": "price outside [PRICE_MIN, PRICE_MAX] and not 0"
+    },
+    "sweep-acknowledgement-missing": {
+      "raisedBy": [
+        "yed_sweep"
+      ],
+      "when": "the second argument is not the exact acknowledgement string"
+    },
+    "sweep-not-abandoned": {
+      "raisedBy": [
+        "yed_sweep"
+      ],
+      "when": "the abandonment predicate (§4.6) is false: enforcement is on, or suspended for less than ABANDON_BLOCKS (L10, L12 — a passed sunset alone is not abandonment)"
+    },
+    "vault-locked": {
+      "raisedBy": [
+        "yed_redeem"
+      ],
+      "when": "tip below lockHeight (ACTIVE and VOID alike)"
+    },
+    "vault-not-active": {
+      "raisedBy": [
+        "yed_redeem",
+        "yed_claim",
+        "yed_getvault"
+      ],
+      "when": "as named; vault-not-active means CLOSED or CLAIMED — a VOID vault is releasable by yed_redeem (L14)"
+    },
+    "vault-not-found": {
+      "raisedBy": [
+        "yed_redeem",
+        "yed_claim",
+        "yed_getvault"
+      ],
+      "when": "as named; vault-not-active means CLOSED or CLAIMED — a VOID vault is releasable by yed_redeem (L14)"
+    },
+    "vault-not-owned": {
+      "raisedBy": [
+        "yed_redeem",
+        "yed_claim",
+        "yed_getvault"
+      ],
+      "when": "as named; vault-not-active means CLOSED or CLAIMED — a VOID vault is releasable by yed_redeem (L14)"
+    },
+    "verdict-parent-not-tip": {
+      "raisedBy": [
+        "yed_getblockverdict"
+      ],
+      "when": "the block's parent is not the index tip and the block is not a rejected child of it (N12)"
+    },
+    "yellowback-unhealthy": {
+      "raisedBy": [
+        "every gated command"
+      ],
+      "when": "the index is unhealthy (unhealthyReason follows)"
+    }
+  },
+  "rpcversion": 2,
+  "source": {
+    "plan": "docs/plans/yellowback-v2-development-plan.md",
+    "revision": 6,
+    "rpcdoc": "ycash-dd/doc/yellowback-rpc.md",
+    "section": "4.5"
+  },
+  "yed_claim": {
+    "args": "<vaultTxid> [to]",
+    "returns": {
+      "burnedCents": "",
+      "collateralOut": "",
+      "feeZat": "",
+      "payee": "",
+      "to": "",
+      "txid": ""
+    }
+  },
+  "yed_decodepayload": {
+    "args": "<hex>",
+    "returns": {}
+  },
+  "yed_estimatecollateral": {
+    "args": "<cents> <lockBlocks> [priceMicroUsd]",
+    "returns": {
+      "baseRatioBps": "",
+      "claimHeight": "",
+      "lockHeight": "",
+      "minRatioBps": "",
+      "pMint": "",
+      "refHeight": "",
+      "requiredZat": "",
+      "sigmaMultBps": "",
+      "termClass": ""
+    }
+  },
+  "yed_estimatefee": {
+    "args": "<collateralZat>",
+    "returns": {}
+  },
+  "yed_estimatesend": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_getactivation": {
+    "args": "",
+    "returns": {
+      "activateHeight": "",
+      "enforceUntilHeight": "",
+      "enforcementFloor": "",
+      "enforcementResume": "",
+      "enforcementSuspended": "",
+      "enforcing": "",
+      "history": [
+        {
+          "height": "",
+          "signalCount": ""
+        }
+      ],
+      "lockInHeight": "",
+      "mintHalted": "",
+      "participationFloor": "",
+      "signalCount": "",
+      "status": "",
+      "sunset": "",
+      "threshold": "",
+      "valveTripped": "",
+      "window": ""
+    }
+  },
+  "yed_getbalance": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_getblockverdict": {
+    "args": "<blockhash>",
+    "returns": {
+      "blockInvalid": "",
+      "enforcementOn": "",
+      "reason": "",
+      "transactions": [
+        {
+          "closedVaults": "",
+          "feeZat": "",
+          "path": "",
+          "payee": "",
+          "txid": "",
+          "type": "",
+          "verdict": "",
+          "yedIn": "",
+          "yedOut": ""
+        }
+      ]
+    }
+  },
+  "yed_getfeepayee": {
+    "args": "<refHeight> <collateralZat> [selectorHex]",
+    "returns": {
+      "default": {
+        "payoutAddress": "",
+        "weight": ""
+      },
+      "eligible": [
+        "payoutAddress…"
+      ],
+      "feeZat": "",
+      "policy": {
+        "accuracyWindow": "",
+        "penaltyBlocks": "",
+        "tiltBps": ""
+      },
+      "preferred": ""
+    }
+  },
+  "yed_gethistory": {
+    "args": "<from> <to>",
+    "returns": {}
+  },
+  "yed_getinfo": {
+    "args": "",
+    "returns": {
+      "abandoned": "",
+      "activation": {
+        "activateHeight": "",
+        "lockInHeight": "",
+        "signalCount": "",
+        "status": "",
+        "window": ""
+      },
+      "blockhash": "",
+      "chainHeight": "",
+      "enabled": "",
+      "enforcing": "",
+      "healthy": "",
+      "height": "",
+      "miner": {
+        "eligible": "",
+        "payoutAddress": "",
+        "quoteAgeSeconds": "",
+        "quoteKind": "",
+        "registered": "",
+        "signal": ""
+      },
+      "network": "",
+      "params": {
+        "abandonBlocks": "",
+        "classes": [
+          {
+            "baseRatioBps": "",
+            "class": "\"A\"|\"B\"|\"C\"",
+            "maxBlocks": "",
+            "minBlocks": ""
+          }
+        ],
+        "enforceUntilHeight": "",
+        "feeBps": "",
+        "feeMinZat": "",
+        "feeZat": "",
+        "grace": "",
+        "minFill": {
+          "fast": "",
+          "mid": "",
+          "slow": ""
+        },
+        "payeeWindow": "",
+        "policy": {
+          "accuracyWindow": "",
+          "penaltyBlocks": "",
+          "preferredPayee": "",
+          "tiltBps": ""
+        },
+        "refLag": "",
+        "refWindow": "",
+        "sigmaRefBps": "",
+        "startHeight": "",
+        "supplyCapBps": "",
+        "tokenValueZat": "",
+        "valveBlocks": "",
+        "windows": {
+          "fast": "",
+          "mid": "",
+          "signal": "",
+          "slow": ""
+        }
+      },
+      "rejectedBlocks": "",
+      "rpcversion": "2",
+      "startHeight": "",
+      "sunset": "",
+      "suppressedBlocks": "",
+      "templatePolicy": "",
+      "unhealthyReason": "",
+      "valveTripped": ""
+    }
+  },
+  "yed_getnewaddress": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_getprice": {
+    "args": "[height]",
+    "returns": {
+      "fill": {
+        "fast": {
+          "minFill": "",
+          "quoteTags": "",
+          "window": ""
+        },
+        "mid": {},
+        "slow": {}
+      },
+      "height": "",
+      "pClaim": "",
+      "pFast": "",
+      "pMid": "",
+      "pMint": "",
+      "pSlow": "",
+      "tag": {}
+    }
+  },
+  "yed_getstatehash": {
+    "args": "[height]",
+    "returns": {}
+  },
+  "yed_getstats": {
+    "args": "",
+    "returns": {
+      "activeVaults": "",
+      "claimedVaults": "",
+      "closedVaults": "",
+      "collateralZat": "",
+      "globalRatioBps": "",
+      "haltMask": [
+        "names"
+      ],
+      "height": "",
+      "issuedZat": "",
+      "mintingAllowed": "",
+      "pClaim": "",
+      "pFast": "",
+      "pMid": "",
+      "pMint": "",
+      "pSlow": "",
+      "sigmaMultBps": "",
+      "supplyCapCents": "",
+      "supplyCents": "",
+      "unbackedCents": "",
+      "voidVaults": ""
+    }
+  },
+  "yed_gettag": {
+    "args": "<height\\|blockhash>",
+    "returns": {
+      "found": "",
+      "kind": "",
+      "payoutAddress": "",
+      "priceMicroUsd": "",
+      "signal": "",
+      "sourceMask": "",
+      "version": ""
+    }
+  },
+  "yed_gettxinfo": {
+    "args": "<txid>",
+    "returns": {
+      "assigned": [
+        {
+          "cents": "",
+          "vout": ""
+        }
+      ],
+      "burned": "",
+      "closedVaults": [
+        "outpoint"
+      ],
+      "expired": "",
+      "feeZat": "",
+      "height": "",
+      "path": "",
+      "payee": "",
+      "spentTokens": [
+        "outpoint"
+      ],
+      "txid": "",
+      "type": "",
+      "verdict": "",
+      "yedIn": "",
+      "yedOut": ""
+    }
+  },
+  "yed_getvault": {
+    "args": "<txid>",
+    "returns": {
+      "burnedCents": "",
+      "claimHeight": "",
+      "claimable": "",
+      "closeHeight": "",
+      "closingTxid": "",
+      "collateral": "",
+      "collateralZat": "",
+      "feePaidZat": "",
+      "lockHeight": "",
+      "mintHeight": "",
+      "mintedCents": "",
+      "ownerAddress": "",
+      "ownerKeyId": "",
+      "ownerPubKey": "",
+      "refHeight": "",
+      "status": "",
+      "sweepBefore": "",
+      "termClass": "",
+      "txid": "",
+      "unbacked": "",
+      "underwaterAt": "",
+      "voidReason": "",
+      "vout": ""
+    }
+  },
+  "yed_listclaimable": {
+    "args": "",
+    "returns": [
+      {
+        "claimHeight": "",
+        "collateralZat": "",
+        "feeZat": "",
+        "mintedCents": "",
+        "ownerAddress": "",
+        "pClaim": "",
+        "underwaterAt": "",
+        "vault": ""
+      }
+    ]
+  },
+  "yed_listminers": {
+    "args": "[height] [window]",
+    "returns": [
+      {
+        "accuracyBps": "",
+        "eligible": "",
+        "inBand": "",
+        "lastQuote": "",
+        "lastTagHeight": "",
+        "payoutAddress": "",
+        "penalizedUntil": "",
+        "quoteTags": "",
+        "quoted": "",
+        "registered": "",
+        "share": ""
+      }
+    ]
+  },
+  "yed_listpositions": {
+    "args": "",
+    "returns": [
+      {
+        "burnedCents": "",
+        "canClaim": "",
+        "canRedeem": "",
+        "canSweep": "",
+        "claimHeight": "",
+        "claimable": "",
+        "closeHeight": "",
+        "closingTxid": "",
+        "collateral": "",
+        "collateralZat": "",
+        "feePaidZat": "",
+        "lockHeight": "",
+        "mintHeight": "",
+        "mintedCents": "",
+        "ownerAddress": "",
+        "ownerKeyId": "",
+        "ownerPubKey": "",
+        "refHeight": "",
+        "status": "",
+        "sweepBefore": "",
+        "termClass": "",
+        "txid": "",
+        "unbacked": "",
+        "underwaterAt": "",
+        "voidReason": "",
+        "vout": ""
+      }
+    ]
+  },
+  "yed_listtransactions": {
+    "args": "[count] [skip]",
+    "returns": [
+      {
+        "amountCents": "",
+        "burned": "",
+        "confirmations": "",
+        "expired": "",
+        "feeZat": "",
+        "height": "",
+        "path": "",
+        "payee": "",
+        "txid": "",
+        "type": "∈ {mint, send, receive, burn, redeem, claim, claimed, sweep}",
+        "unbacked": "",
+        "verdict": "",
+        "yedIn": "",
+        "yedOut": ""
+      }
+    ]
+  },
+  "yed_listunspent": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_listvaults": {
+    "args": "[status] [count] [skip]",
+    "returns": {}
+  },
+  "yed_lockcoins": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_mint": {
+    "args": "<cents> <lockBlocks> [from]",
+    "returns": {
+      "claimHeight": "",
+      "collateralZat": "",
+      "feeZat": "",
+      "fundedFrom": "",
+      "lockHeight": "",
+      "payee": "",
+      "termClass": "",
+      "txid": "",
+      "vault": "",
+      "warning": ""
+    }
+  },
+  "yed_redeem": {
+    "args": "<vaultTxid> [to]",
+    "returns": {
+      "burnedCents": "",
+      "collateralOut": "",
+      "feeZat": "",
+      "payee": "",
+      "to": "",
+      "txid": ""
+    }
+  },
+  "yed_send": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_sendmany": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_setquote": {
+    "args": "<priceMicroUsd> <sourceMask>",
+    "returns": {
+      "nextTag": {
+        "kind": "",
+        "payoutAddress": "",
+        "signal": ""
+      },
+      "priceMicroUsd": "",
+      "receivedAt": "",
+      "sourceMask": ""
+    }
+  },
+  "yed_sweep": {
+    "args": "<vaultTxid> <acknowledgement> [to]",
+    "returns": {
+      "collateralOut": "",
+      "hex": "",
+      "to": "",
+      "txid": "",
+      "unbackedCents": ""
+    }
+  },
+  "yed_unlockcoin": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_validateaddress": {
+    "args": "",
+    "returns": {}
+  },
+  "yed_validaterawtransaction": {
+    "args": "<hex>",
+    "returns": {
+      "blockValid": "",
+      "burned": "",
+      "feeZat": "",
+      "mempoolExpiryOk": "",
+      "path": "",
+      "payee": "",
+      "type": "",
+      "unconfirmedInputs": [
+        "outpoint"
+      ],
+      "valid": "",
+      "verdict": "",
+      "wouldBeRejected": "",
+      "yedIn": "",
+      "yedOut": ""
+    }
+  }
+}

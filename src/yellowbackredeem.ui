@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblRedeemIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Redeeming destroys (burns) YED and releases a vault's collateral back to you. This is the one operation that talks to anything other than your own node: the owner-signed transaction is sent to the federation operators for co-signatures, then verified again by your node before it is broadcast. Your node signs; the operators never see a private key.</string></property>
+     <property name="text"><string>Redeeming destroys (burns) YED and releases a vault's collateral back to you, in one transaction that your own node builds, signs and broadcasts. Nothing leaves your node but the finished transaction.</string></property>
     </widget>
    </item>
    <item>
@@ -17,8 +17,6 @@
      <item row="1" column="1"><widget class="QLabel" name="lblBurn"><property name="text"><string>-</string></property></widget></item>
      <item row="2" column="0"><widget class="QLabel" name="r3"><property name="text"><string>Collateral returned</string></property></widget></item>
      <item row="2" column="1"><widget class="QLabel" name="lblCollateral"><property name="text"><string>-</string></property></widget></item>
-     <item row="3" column="0"><widget class="QLabel" name="r4"><property name="text"><string>Operators configured</string></property></widget></item>
-     <item row="3" column="1"><widget class="QLabel" name="lblOperators"><property name="text"><string>-</string></property></widget></item>
     </layout>
    </item>
    <item>
@@ -27,7 +25,7 @@
    <item>
     <layout class="QHBoxLayout" name="redeemButtons">
      <item><spacer name="redeemSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-     <item><widget class="QPushButton" name="btnStart"><property name="text"><string>Start redemption…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnStart"><property name="text"><string>Redeem…</string></property></widget></item>
     </layout>
    </item>
    <item>

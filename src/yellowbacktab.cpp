@@ -2,7 +2,6 @@
 #include "yellowbackcontroller.h"
 #include "yellowbackmodels.h"
 #include "yellowbackrpc.h"
-#include "yellowbackredeemwizard.h"
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "addressbook.h"
@@ -116,15 +115,6 @@ void YellowbackTab::setController(YellowbackController* controller) {
         uiOverview->tblRecent->resizeColumnsToContents();
         uiTx->tblTransactions->resizeColumnsToContents();
     });
-    QObject::connect(ctl, &YellowbackController::pendingChanged,      this, [=, this]() { updatePositions(); updateRedeemPage(); });
-    QObject::connect(ctl, &YellowbackController::pendingExpired,      this, [=, this](const QString& vault) {
-        auto r = QMessageBox::warning(this, tr("Redemption deadline passed"),
-            tr("The redemption of vault %1 was not submitted within %2 blocks and can no longer be broadcast. "
-               "Abort it now to release the YED it reserved? You can then start over.")
-               .arg(vault).arg(YellowbackRpc::REDEEM_DEADLINE),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-        if (r == QMessageBox::Yes) abortPending(vault);
-    });
 
     updateBanner();
     updateOverview();
@@ -157,10 +147,8 @@ void YellowbackTab::setActionsEnabled(bool enabled) {
     uiSend->btnSend->setEnabled(enabled);
     uiMint->btnMint->setEnabled(enabled && estimateZat >= 0);
     uiPositions->btnRedeem->setEnabled(enabled);
-    uiPositions->btnAbortPending->setEnabled(enabled);
     uiPositions->btnWhyVoid->setEnabled(enabled);
     uiRedeem->btnStart->setEnabled(enabled);
-    uiSettings->btnVerify->setEnabled(enabled);
 }
 
 void YellowbackTab::updateBackupNag() {
@@ -542,7 +530,7 @@ void YellowbackTab::doMint() {
                       "The exact requirement is fixed when your node signs the transaction, using the price "
                       "and multiplier at that moment, and may differ slightly from this estimate.\n\n"
                       "Until the unlock height the collateral cannot leave the vault. After it, releasing "
-                      "the collateral requires burning the required Yellowback and the federation's co-signature.\n\n"
+                      "the collateral requires burning the vault's debt in YED.\n\n"
                       "The vault's owner key lives only in this node's wallet.dat. Back it up after minting.")
                       .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(estimateZat))
                       .arg(uiMint->lblUnlock->text().section(' ', 0, 0)).arg(YellowbackFormat::tierName(tier));
@@ -597,7 +585,6 @@ void YellowbackTab::doMint() {
 void YellowbackTab::setupPositions() {
     uiPositions->tblPositions->horizontalHeader()->setStretchLastSection(true);
     uiPositions->btnRedeem->setEnabled(false);
-    uiPositions->btnAbortPending->setEnabled(false);
     uiPositions->btnWhyVoid->setEnabled(false);
 
     QObject::connect(uiPositions->btnRedeem, &QPushButton::clicked, [=, this]() {
@@ -613,13 +600,6 @@ void YellowbackTab::setupPositions() {
         }
         startRedemption(p->vaultTxid);
     });
-    QObject::connect(uiPositions->btnAbortPending, &QPushButton::clicked, [=, this]() {
-        if (ctl == nullptr) return;
-        auto idx = uiPositions->tblPositions->currentIndex();
-        auto p = ctl->positionsModel()->positionAt(idx.row());
-        if (p == nullptr || !(p->pending || ctl->hasPendingRedemption(p->vaultTxid))) return;
-        abortPending(p->vaultTxid);
-    });
     QObject::connect(uiPositions->btnWhyVoid, &QPushButton::clicked, [=, this]() {
         if (ctl == nullptr) return;
         auto idx = uiPositions->tblPositions->currentIndex();
@@ -632,20 +612,6 @@ void YellowbackTab::updatePositions() {
     if (ctl == nullptr) return;
     uiPositions->tblPositions->resizeColumnsToContents();
 
-    auto& pending = ctl->pendingRedemptions();
-    if (pending.isEmpty()) {
-        uiPositions->lblPending->clear();
-    } else {
-        QStringList parts;
-        for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
-            int deadline = it.value();   // yed_redeem.deadlineHeight, inclusive
-            parts << tr("vault %1 (submit by height %2, %3 blocks left)")
-                     .arg(it.key()).arg(deadline).arg(qMax(0, deadline - ctl->height()));
-        }
-        uiPositions->lblPending->setText(tr("Redemption in progress: ") % parts.join("; ") %
-            tr(". The YED it burns is reserved until it is submitted or aborted."));
-    }
-
     // Selection-dependent buttons are re-evaluated whenever the selection changes
     auto sel = uiPositions->tblPositions->selectionModel();
     if (sel != nullptr) {
@@ -653,9 +619,8 @@ void YellowbackTab::updatePositions() {
         QObject::connect(sel, &QItemSelectionModel::currentRowChanged, this, [=, this](const QModelIndex& cur, const QModelIndex&) {
             auto p = ctl->positionsModel()->positionAt(cur.row());
             bool have = p != nullptr;
-            bool pend = have && (p->pending || ctl->hasPendingRedemption(p->vaultTxid));
+            bool pend = have && p->pending;
             uiPositions->btnRedeem->setEnabled(actionsEnabled && have && p->canRedeem && !pend);
-            uiPositions->btnAbortPending->setEnabled(actionsEnabled && pend);
             uiPositions->btnWhyVoid->setEnabled(actionsEnabled && have && p->status == YellowbackRpc::Position::STATUS_VOID);
         });
     }
@@ -674,20 +639,6 @@ void YellowbackTab::explainVoid(const QString& vaultTxid) {
         },
         [=, this](const QString& e) {
             QMessageBox::warning(this, tr("yed_gettxinfo failed"), e);
-        });
-}
-
-void YellowbackTab::abortPending(const QString& vaultTxid) {
-    if (ctl == nullptr) return;
-    ctl->abortRedeem(vaultTxid,
-        [=, this](const json& r) {
-            ctl->removePendingRedemption(vaultTxid);
-            if (YellowbackJson::toBool(r, YellowbackRpc::AbortResult::ABORTED))
-                uiPositions->lblPending->setText(tr("Redemption of vault %1 aborted; its YED is available again.").arg(vaultTxid));
-            ctl->refresh(true);
-        },
-        [=, this](const QString& e) {
-            QMessageBox::warning(this, tr("yed_abortredeem failed"), e);
         });
 }
 
@@ -757,11 +708,6 @@ void YellowbackTab::updateRedeemPage() {
     if (i >= 0) uiRedeem->cmbVault->setCurrentIndex(i);
     uiRedeem->cmbVault->blockSignals(false);
 
-    int endpoints = Settings::getInstance()->getYellowbackEndpoints().size();
-    uiRedeem->lblOperators->setText(endpoints == 0
-        ? tr("none — add the operators' /cosign URLs on the Settings page first")
-        : tr("%1 endpoint(s)").arg(endpoints));
-
     QString vault = uiRedeem->cmbVault->currentData().toString();
     const YellowbackPosition* sel = nullptr;
     for (auto& p : list) if (p.vaultTxid == vault) { sel = &p; break; }
@@ -773,7 +719,7 @@ void YellowbackTab::updateRedeemPage() {
         uiRedeem->lblBurn->setText(YellowbackFormat::cents(sel->requiredBurnCents) %
             (sel->requiredBurnCents > sel->mintedCents ? tr("  (more than minted: emergency redemption ratio)") : ""));
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat));
-        if (sel->pending || ctl->hasPendingRedemption(vault))
+        if (sel->pending)
             uiRedeem->lblRedeemHint->setText(tr("A redemption of this vault is already in progress (see Vaults)."));
         else if (sel->requiredBurnCents > ctl->confirmedCents())
             uiRedeem->lblRedeemHint->setText(tr("You need %1 of confirmed YED to burn but have %2.")
@@ -792,14 +738,18 @@ void YellowbackTab::startRedemption(const QString& vaultTxid) {
         if (p->vaultTxid == vaultTxid) { sel = p; break; }
     }
     if (sel == nullptr) return;
-    if (sel->pending || ctl->hasPendingRedemption(vaultTxid)) {
-        QMessageBox::information(this, tr("Already in progress"), tr("A redemption of this vault is already pending. Abort it from the Vaults page to start over."));
+    if (sel->pending) {
+        QMessageBox::information(this, tr("Already in progress"), tr("A redemption of this vault is already pending."));
         return;
     }
 
-    YellowbackRedeemWizard wizard(ctl, *sel, this);
-    wizard.exec();
-    ctl->refresh(true);
+    // Phase 0 (plan §6, V24): the federation prototype's co-signing wizard is gone and the one-step
+    // redemption (yed_redeem builds, signs and broadcasts) arrives with the v2 wallet screens
+    // (Phase 7b-b). Until then this build cannot redeem.
+    QMessageBox::information(this, tr("Not available in this build"),
+        tr("Redeeming vault %1 is not available in this build of YecWallet. Redemption is being "
+           "rebuilt as a single step handled by your own node; a later release adds it back.")
+           .arg(vaultTxid));
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────────────────
@@ -807,12 +757,10 @@ void YellowbackTab::startRedemption(const QString& vaultTxid) {
 void YellowbackTab::setupSettings() {
     updateSettingsPage();
     QObject::connect(uiSettings->btnSave,   &QPushButton::clicked, [=, this]() { saveSettings(); });
-    QObject::connect(uiSettings->btnVerify, &QPushButton::clicked, [=, this]() { verifyEndpoints(); });
 }
 
 void YellowbackTab::updateSettingsPage() {
     auto s = Settings::getInstance();
-    uiSettings->txtEndpoints->setPlainText(s->getYellowbackEndpoints().join("\n"));
     uiSettings->chkUnitCents->setChecked(s->getYellowbackUnitCents());
     uiSettings->chkAdvanced->setChecked(s->getYellowbackAdvanced());
     uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC version %1.").arg(Settings::getYellowbackRpcVersion()) %
@@ -821,50 +769,12 @@ void YellowbackTab::updateSettingsPage() {
 
 void YellowbackTab::saveSettings() {
     auto s = Settings::getInstance();
-    QStringList urls;
-    for (auto line : uiSettings->txtEndpoints->toPlainText().split('\n')) {
-        line = line.trimmed();
-        if (line.isEmpty()) continue;
-        QUrl u(line);
-        if (!u.isValid() || (u.scheme() != "https" && u.scheme() != "http")) {
-            uiSettings->lblEndpointsStatus->setText(tr("Not a valid URL: ") % line);
-            return;
-        }
-        if (u.scheme() == "http" && ctl != nullptr && ctl->network() == "main") {
-            uiSettings->lblEndpointsStatus->setText(tr("Mainnet operators must be https://: ") % line);
-            return;
-        }
-        urls << line;
-    }
-    s->setYellowbackEndpoints(urls);
     s->setYellowbackUnitCents(uiSettings->chkUnitCents->isChecked());
     s->setYellowbackAdvanced(uiSettings->chkAdvanced->isChecked());
-    uiSettings->lblEndpointsStatus->setText(tr("Saved (%1 endpoint(s)).").arg(urls.size()));
     if (ctl != nullptr) {
         updateBalances();
         updateOverview();
         ctl->refresh(true);   // re-renders the models in the chosen unit
     }
     updateRedeemPage();
-}
-
-void YellowbackTab::verifyEndpoints() {
-    if (ctl == nullptr) return;
-    int endpoints = 0;
-    for (auto line : uiSettings->txtEndpoints->toPlainText().split('\n'))
-        if (!line.trimmed().isEmpty()) endpoints++;
-    ctl->getRoster(
-        [=, this](const json& r) {
-            using namespace YellowbackRpc::Roster;
-            int k = (int)YellowbackJson::toInt(r, K), n = (int)YellowbackJson::toInt(r, N);
-            QString msg = tr("Current roster #%1: %2 of %3 signatures needed; %4 endpoint(s) configured.")
-                .arg(YellowbackJson::toInt(r, INDEX)).arg(k).arg(n).arg(endpoints);
-            if (endpoints < k) msg += tr(" That is fewer than %1 — a redemption cannot complete.").arg(k);
-            if (Settings::getInstance()->getYellowbackAdvanced())
-                msg += "\n" % tr("Roster address: ") % YellowbackJson::toStr(r, ADDRESS) % "\n" % tr("Script: ") % YellowbackJson::toStr(r, SCRIPT_HEX);
-            uiSettings->lblEndpointsStatus->setText(msg);
-        },
-        [=, this](const QString& e) {
-            uiSettings->lblEndpointsStatus->setText(tr("yed_getroster failed: ") % e);
-        });
 }

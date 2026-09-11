@@ -1,9 +1,21 @@
 # Yellowback in YecWallet — development notes
 
-This file records the wallet-side baseline (plan §6 Phase 5b, "Phase 0 (wallet side)") and the
-conventions the `feature/digidollar` fork follows. The node-side contract lives in
-`ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends on is
-listed once in `src/yellowbackrpc.h`.
+**Status (2026-09-10, Yellowback v2 Phase 0):** the wallet is being rebuilt for the
+miner-enforced Yellowback v2 (`docs/plans/yellowback-v2-development-plan.md` in the workspace,
+§4.8 and Phase 7b). Phase 0 removed the federation prototype's co-signing redemption wizard
+(`yellowbackredeemwizard.*`), the operator-endpoint settings and the `yed_getroster` /
+`yed_submitredeem` / `yed_abortredeem` calls; the Redeem page says so until the one-step
+`yed_redeem` screen lands in Phase 7b-b. `RPC_VERSION` stays at 1 until the node ships
+`rpcversion 2` (Phase 3); the bump is Phase 7b-a's first commit. The generated RPC contract this
+wallet is checked against is `docs/yellowback-rpc-contract.json` (written by the workspace's
+`make spec`, never edited here). Everything below that describes the federation, the wizard,
+`/cosign` endpoints or the devnet's coordinators is **federation prototype, being replaced by
+phase**; the build notes remain current.
+
+This file records the wallet-side baseline and the conventions the `feature/yellowback-sf` fork
+follows (`feature/digidollar` is the retired prototype, kept as a record). The node-side contract
+lives in `ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends
+on is listed once in `src/yellowbackrpc.h`.
 
 ## Build status
 
@@ -14,7 +26,7 @@ listed once in `src/yellowbackrpc.h`.
 | Qt 6 (system) | not installed | Homebrew `qt` at `/opt/homebrew/opt/qt` (Qt 6, with `Qt6::Test`) |
 | Qt 6 (static, `build.sh`) | not attempted | **done** 2026-09-05: `bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd` builds static Qt 6.5.8 and produces `artifacts/macos-arm64-yecwallet-v4.5.0.dmg` with `ycashd` inside the bundle (see "Release build on macOS" below) |
 | Build of the fork | blocked | **compiles**: `build/bin/yecwallet.app` and `build/bin/yellowback_test` |
-| `yellowback_test` (QTest, offscreen) | not built | **passes** (5 cases, including the frozen-contract case) |
+| `yellowback_test` (QTest, offscreen) | not built | **passes** (5 cases; the contract case lost its co-signer and submit-deadline checks in Phase 0) |
 
 Nothing was `brew install`ed by an agent session; the tools appeared on the host between the
 two sessions. The development configuration is built with:
@@ -63,7 +75,7 @@ Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
   `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
   separate step that needs an Apple Developer account.
 
-## Trying it on one laptop: the devnet
+## Trying it on one laptop: the devnet (federation prototype, being replaced by phase — Phase 7 rewrites the devnet)
 
 `ycash-dd/contrib/yellowback/devnet/yellowback-devnet` builds a private Yellowback network on
 one machine and leaves it running: five regtest nodes (0 and 1 users, 2 to 4 a 2-of-3
@@ -177,25 +189,27 @@ Points raised for the node side, and their outcome:
   `ref/digibyte` files.
 - Amounts: integer cents in code; `YellowbackController::formatCents` renders them.
 - Heights: shown with an estimated date at 75 s per block, labelled as an estimate.
-- Copy: the wallet never describes Yellowback as trustless or shielded (plan §8.1). It says
-  "transparent" and "federated" where a user might expect otherwise.
+- Copy: the wallet never describes Yellowback as trustless or shielded (plan §4.8, §8.1; the CI
+  grep `grep -rn 'trustless' src/`). It says "transparent" where a user might expect otherwise;
+  the remaining "federated"/"federation" wording in the Overview and mint copy is prototype text
+  that Phase 7b replaces with the §8.1 statement.
 - Errors: node error strings are stable identifiers and are always shown verbatim.
 
 ## Where the code is
 
 | File | What |
 |---|---|
-| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier, `/cosign` shape and displayed protocol constant; `RPC_VERSION = 1` |
+| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier and displayed protocol constant; `RPC_VERSION = 1` |
+| `docs/yellowback-rpc-contract.json` | generated copy of the RPC contract (plan §4.5 / `ycash-dd/doc/yellowback-rpc.md`), written by the workspace `make spec`; the `wallet` CI job checks `yellowbackrpc.h` against it from Phase 7b |
 | `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/balance, mint gate reasons, pending redemptions. Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
 | `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, `YellowbackPositionsModel`, `YellowbackTxModel` |
 | `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its eight sub-pages |
-| `src/yellowbackredeemwizard.{cpp,h}` | the redemption wizard: `yed_redeem` → operator `/cosign` POSTs → `yed_submitredeem`, with retry, countdown and abort |
 | `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
-| `src/settings.{cpp,h}` | `yellowback/endpoints`, `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` |
+| `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
 | `CMakeLists.txt`, `tests/yellowbacktab_test.cpp` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`) |
 
-## Operator `/cosign` request shape used by the wizard
+## Operator `/cosign` request shape used by the wizard (federation prototype, removed in Phase 0)
 
 As the coordinator (`ycash-dd/contrib/yellowback/yellowback_fed.py`) implements it:
 `POST <endpoint>/cosign`, body `{"hex": "<owner-signed or partially co-signed hex>"}`,

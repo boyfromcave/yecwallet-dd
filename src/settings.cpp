@@ -116,14 +116,6 @@ double Settings::getZECPrice() {
     return zecPrice; 
 }
 
-QStringList Settings::getYellowbackEndpoints() {
-    return QSettings().value("yellowback/endpoints", QStringList()).toStringList();
-}
-
-void Settings::setYellowbackEndpoints(const QStringList& urls) {
-    QSettings().setValue("yellowback/endpoints", urls);
-}
-
 bool Settings::getYellowbackUnitCents() {
     return QSettings().value("yellowback/unitcents", false).toBool();
 }

@@ -75,8 +75,6 @@ public:
     void set_theme_name(QString theme_name);
 
     // Yellowback (plan §4.7 Settings row). Persisted in QSettings under "yellowback/".
-    QStringList getYellowbackEndpoints();               // operator /cosign base URLs, default empty
-    void        setYellowbackEndpoints(const QStringList& urls);
     bool        getYellowbackUnitCents();               // display cents instead of dollars
     void        setYellowbackUnitCents(bool cents);
     bool        getYellowbackAdvanced();                // show raw hex etc.

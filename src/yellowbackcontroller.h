@@ -15,10 +15,8 @@ class Connection;
 // Lifecycle, all driven by the stock Controller:
 //   - Controller::setConnection      -> onConnected()  : yed_getinfo, rpcversion check, conf repair offer
 //   - Controller::getInfoThenRefresh -> refresh()      : on the "block changed" branch
-//   - Controller::watchTxStatus      -> watchPending() : pending redemptions on the quick txTimer
 //
-// It never holds key material and never talks to anything but the local node; the redemption
-// wizard (yellowbackredeemwizard.cpp) is the one place that reaches operator endpoints.
+// It never holds key material and never talks to anything but the local node.
 class YellowbackController : public QObject {
     Q_OBJECT
 
@@ -29,7 +27,6 @@ public:
     // ── Lifecycle hooks ───────────────────────────────────────────────────────────────────
     void onConnected();
     void refresh(bool force = false);
-    bool watchPending();                          // true while a redemption is pending
 
     // ── Availability (status banner) ──────────────────────────────────────────────────────
     // "available" means: node answers yed_getinfo, enabled, rpcversion matches, synced and healthy.
@@ -87,25 +84,12 @@ public:
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err); // to: "" | s1... | ys1... (I2)
-    void submitRedeem(const QString& hex, OkFn ok, ErrFn err);
-    void abortRedeem(const QString& vaultTxid, OkFn ok, ErrFn err);
-    void getRoster(OkFn ok, ErrFn err);
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
-
-    // ── Pending redemptions (yed_redeem issued, yed_submitredeem not yet) ───────────────────
-    // Keyed by vault txid; the value is yed_redeem.deadlineHeight, the last height at which
-    // yed_submitredeem is accepted.
-    void addPendingRedemption(const QString& vaultTxid, int deadlineHeight);
-    void removePendingRedemption(const QString& vaultTxid);
-    bool hasPendingRedemption(const QString& vaultTxid) const { return pending.contains(vaultTxid); }
-    const QMap<QString, int>& pendingRedemptions() const { return pending; }
-    int  deadlineHeight(int expiryHeight) const;  // fallback when the node did not say: expiry - EXPIRING_SOON - 1
 
     // Static helpers
     static bool isMethodNotFound(const QString& errorMessage);
     static bool isIndexUnhealthy(const QString& errorMessage);
-    static bool isTransientRefusal(const QString& errorMessage);   // "... (transient)"
 
     MainWindow* mainWindow() { return main; }
     Connection* connection();
@@ -117,8 +101,6 @@ signals:
     void balanceUpdated();
     void positionsUpdated();
     void transactionsUpdated();
-    void pendingChanged();
-    void pendingExpired(const QString& vaultTxid);
 
 private:
     void applyInfo(const json& info);
@@ -151,8 +133,6 @@ private:
     json    paramsJson     = json::object();
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
-
-    QMap<QString, int> pending;                   // vaultTxid -> deadlineHeight
 };
 
 #endif // YELLOWBACKCONTROLLER_H
