@@ -46,6 +46,17 @@ void YellowbackController::log(const QString& line) {
 // ── Generic call ──────────────────────────────────────────────────────────────────────────
 
 void YellowbackController::call(const char* method, const json& params, OkFn ok, ErrFn err) {
+    if (transport) {
+        transport(QString(method), params, ok,
+            [=, this](const QString& msg) {
+                if (isIndexUnhealthy(msg)) {
+                    healthy = false;
+                    setAvailability(false, tr("the index reports it is unhealthy (%1). Fix: restart ycashd with -reindex-yellowback.").arg(msg));
+                }
+                if (err) err(msg);
+            });
+        return;
+    }
     auto conn = connection();
     if (conn == nullptr) {
         if (err) err(tr("Not connected to ycashd."));
@@ -563,4 +574,79 @@ void YellowbackController::getTxInfo(const QString& txid, OkFn ok, ErrFn err) {
 
 void YellowbackController::getVault(const QString& txid, OkFn ok, ErrFn err) {
     call(YellowbackRpc::GETVAULT, json::array({txid.toStdString()}), ok, err);
+}
+
+void YellowbackController::getFeePayee(int refHeight, qint64 collateralZat, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::GETFEEPAYEE, json::array({refHeight, collateralZat}), ok, err);
+}
+
+YellowbackController::TermClass YellowbackController::classForLock(int lockBlocks) const {
+    for (const auto& c : termClasses())
+        if (lockBlocks >= c.minBlocks && lockBlocks <= c.maxBlocks) return c;
+    return TermClass();
+}
+
+// ── Error identifiers (§4.5) ──────────────────────────────────────────────────────────────
+
+QString YellowbackController::explainError(const QString& e) {
+    using namespace YellowbackRpc;
+    auto is = [&](const char* id) { return e.startsWith(id, Qt::CaseInsensitive); };
+    if (isMethodNotFound(e))
+        return tr("The connected node does not offer this command. It needs a ycashd release with this Yellowback RPC, started with experimentalfeatures=1 and yellowback=1.");
+    if (is(Errors::INDEX_UNHEALTHY))
+        return tr("The node's Yellowback index is unhealthy; restart ycashd with -reindex-yellowback.");
+    if (is(Errors::CHANGE_FLOOR))
+        return tr("The YED change left over would be below the minimum output; the node's message names the amounts that work.");
+    if (is(Errors::NOT_YELLOWBACK_ADDRESS))
+        return tr("The recipient is not a Yellowback address of this network.");
+    if (is(Errors::INSUFFICIENT_YED))
+        return tr("Your confirmed YED is below what this transaction needs to burn or send.");
+    if (is(Errors::VAULT_LOCKED))
+        return tr("The vault's lock height has not been reached; the collateral cannot leave it before then (a rule every Ycash node enforces).");
+    if (is(Errors::VAULT_NOT_ACTIVE))
+        return tr("The vault is already closed or claimed; there is nothing left to release.");
+    if (is(Errors::VAULT_NOT_OWNED))
+        return tr("This wallet does not hold the owner key of that vault.");
+    if (is(Errors::VAULT_NOT_FOUND))
+        return tr("The node's index knows no vault by that txid.");
+    if (is(Errors::SWEEP_NOT_ABANDONED))
+        return tr("The chain does not show abandonment: enforcement is on, or has been suspended for fewer than the abandonment window of blocks. Redeem instead.");
+    if (is(Errors::SWEEP_ACKNOWLEDGEMENT_MISSING))
+        return tr("The node did not receive the exact acknowledgement a sweep requires.");
+    if (is(Errors::CLAIM_NOT_YET))
+        return tr("The vault's claim height has not been reached.");
+    if (is(Errors::CLAIM_NOT_UNDERWATER))
+        return tr("At the claim price the vault is not underwater, so a claim would be refused by the enforcing pools.");
+    if (is(Errors::MINTPOL_NOT_ACTIVE))
+        return tr("Yellowback is not active at the reference height: minting waits for activation.");
+    if (is(Errors::MINTPOL_NO_PRICE))
+        return tr("No mint price is defined at the reference height: too few recent blocks carry a price quote.");
+    if (is(Errors::MINTPOL_PARTICIPATION))
+        return tr("Minting is paused: fewer than 60 % of recent blocks signal Yellowback enforcement.");
+    if (is(Errors::MINTPOL_GLOBAL_RATIO))
+        return tr("Minting is paused: the network's overall collateral ratio is too low.");
+    if (is(Errors::MINTPOL_DIVERGENCE))
+        return tr("Minting is paused: the fast and slow price medians diverge too much.");
+    if (is(Errors::MINTPOL_CAP))
+        return tr("Minting is paused: the supply cap is reached.");
+    if (is(Errors::MINT_UNSATISFIABLE))
+        return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
+    if (is(Errors::MINT_BAD_LOCK))
+        return tr("The lock length falls in no term class.");
+    if (is(Errors::MEMPOOL_CHECK_FAILED))
+        return tr("The node's own pre-check of the enforcement rules refused the transaction, so nothing was signed or sent.");
+    if (e.contains(RpcErrors::WALLET_LOCKED))
+        return tr("Unlock the wallet first (walletpassphrase in the console tab).");
+    return QString();
+}
+
+bool YellowbackController::parseChangeFloor(const QString& e, qint64* allCents, qint64* atMost) {
+    // "change-floor: ... send 12345 cents (all selected inputs) or at most 12245 cents"; the
+    // prototype's C20 wording carried the same two figures in the same order.
+    static const QRegularExpression re("send (\\d+) cents.*?or at most (\\d+) cents");
+    auto m = re.match(e);
+    if (!m.hasMatch()) return false;
+    if (allCents) *allCents = m.captured(1).toLongLong();
+    if (atMost)   *atMost   = m.captured(2).toLongLong();
+    return true;
 }

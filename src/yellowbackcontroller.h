@@ -103,6 +103,12 @@ public:
 
     void call(const char* method, const json& params, OkFn ok, ErrFn err);
 
+    // The fake Connection of the offline QTest (N28): when set, call() hands every request to
+    // it instead of the Connection, so a dialog can be driven with canned result JSON or a
+    // canned error message. The devnet case sets one that posts to the node directly.
+    typedef std::function<void(const QString& method, const json& params, OkFn ok, ErrFn err)> Transport;
+    void setTransport(Transport t) { transport = t; }
+
     void getNewAddress(OkFn ok, ErrFn err);
     void validateAddress(const QString& addr, OkFn ok, ErrFn err);
     void estimateCollateral(qint64 cents, int lockBlocks, OkFn ok, ErrFn err);
@@ -113,6 +119,19 @@ public:
     void sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);      // sends the L10 acknowledgement
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
+    void getFeePayee(int refHeight, qint64 collateralZat, OkFn ok, ErrFn err);   // FEE-1 / FEE-W for a confirmation
+
+    // The term class a lock length falls in (params.classes), name "" when it is in none (mint-bad-lock).
+    TermClass classForLock(int lockBlocks) const;
+    // The reference height a transaction built now would use: tip - REF_LAG (§3.5), for yed_getfeepayee.
+    int refHeightNow() const { return std::max(0, indexHeight - refLag()); }
+
+    // What the node's refusal means to the user, keyed on the identifier that begins the message
+    // (§4.5 error table); empty when the wallet has nothing to add to the verbatim message.
+    static QString explainError(const QString& errorMessage);
+    // change-floor: the two workable amounts the message names (§4.6), "send exactly `all` or at
+    // most `atMost`"; false when the message carries no amounts (then only the text is shown).
+    static bool parseChangeFloor(const QString& errorMessage, qint64* allCents, qint64* atMostCents);
 
     // Static helpers
     static bool isMethodNotFound(const QString& errorMessage);
@@ -149,6 +168,7 @@ private:
 
     MainWindow*   main;
     Controller*   rpc;
+    Transport     transport;
 
     YellowbackPositionsModel* positions    = nullptr;
     YellowbackClaimableModel* claimable    = nullptr;

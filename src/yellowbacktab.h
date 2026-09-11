@@ -6,6 +6,7 @@
 class MainWindow;
 class YellowbackController;
 struct YellowbackPosition;
+struct YellowbackClaimable;
 
 namespace Ui {
     class YellowbackTab;
@@ -25,9 +26,9 @@ namespace Ui {
 // (plan §4.8). Every action goes through YellowbackController; nothing here touches keys or
 // the network.
 //
-// Phase 7b-a builds the node-context screens (banner, Overview, Vaults, Claim). The actions
-// that spend — Mint, Send, Redeem/Release, Claim, Sweep — are Phase 7b-b: their buttons are
-// shown disabled with the reason, and the code paths behind them are not reachable.
+// The spending actions — Mint, Send, Redeem/Release, Claim, Sweep — are each one confirmation
+// dialog and one yed_* call (plan §4.8, V24, L10, L14); the node builds, checks, signs and
+// commits. Modal prompts go through confirmFn / noticeFn so the offline QTest can answer them.
 //
 // `main` may be null and the controller may be a bare YellowbackController(nullptr, nullptr)
 // fed canned JSON: that is what the offline QTest relies on.
@@ -59,6 +60,18 @@ public:
     };
     static VaultActions vaultActions(const YellowbackPosition& p, int height, bool abandoned);
 
+    // Modal prompts (defaults: QMessageBox). The QTest replaces them to read the copy and answer.
+    std::function<bool(const QString& title, const QString& text)>              confirmFn;
+    std::function<void(const QString& title, const QString& text, bool isError)> noticeFn;
+
+    // The actions, callable without a table selection (the QTest drives them directly)
+    void doMint();
+    void doSend();
+    void redeemVault(const YellowbackPosition& p, const QString& to = QString());   // ACTIVE: Redeem; VOID: Release (L14)
+    void claimVault(const YellowbackClaimable& c, const QString& to = QString());
+    void sweepVault(const YellowbackPosition& p, const QString& to = QString());    // L10: carries the acknowledgement
+    QString redeemDestination() const;   // the Redeem page's choice: "" = a fresh own transparent address
+
 private:
     void setupPages();
     void setupOverview();
@@ -85,11 +98,12 @@ private:
     void updateBackupNag();
     void updateSettingsPage();
     void setActionsEnabled(bool enabled);
-    void notInThisBuild(const QString& what);
+    void refreshDestinations();             // the Redeem page's destination combo (I2)
+    bool confirm(const QString& title, const QString& text);
+    void notice(const QString& title, const QString& text, bool isError = false);
+    void failed(const QString& what, const QString& e);   // "yed_x failed: <verbatim>" + explainError
 
     void requestEstimate();
-    void doMint();
-    void doSend();
     void newReceiveAddress();
     void explainVoid(const YellowbackPosition& p);
     void saveSettings();

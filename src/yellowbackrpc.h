@@ -30,6 +30,7 @@ constexpr const char* GETVAULT            = "yed_getvault";
 constexpr const char* LISTCLAIMABLE       = "yed_listclaimable";
 constexpr const char* GETTXINFO           = "yed_gettxinfo";
 constexpr const char* ESTIMATECOLLATERAL  = "yed_estimatecollateral";
+constexpr const char* GETFEEPAYEE         = "yed_getfeepayee";
 
 // ── Methods (wallet context) ──────────────────────────────────────────────────────────────
 constexpr const char* GETNEWADDRESS       = "yed_getnewaddress";
@@ -268,6 +269,20 @@ namespace Estimate {   // contract: yed_estimatecollateral
     constexpr const char* REF_HEIGHT        = "refHeight";
 }
 
+// ── yed_getfeepayee result (the mint / redeem confirmation shows the fee and its payee) ────
+namespace FeePayee {   // contract: yed_getfeepayee
+    constexpr const char* ELIGIBLE          = "eligible";      // E(refHeight)
+    constexpr const char* FEE_ZAT           = "feeZat";        // FEE-1 for the given collateral
+    constexpr const char* DEFAULT           = "default";       // the FEE-W choice
+    constexpr const char* PREFERRED         = "preferred";     // optional: the configured preference, when eligible
+    constexpr const char* POLICY            = "policy";
+}
+
+namespace FeePayeeDefault {   // contract: yed_getfeepayee.default
+    constexpr const char* PAYOUT_ADDRESS    = "payoutAddress";
+    constexpr const char* WEIGHT            = "weight";
+}
+
 // ── yed_mint result ────────────────────────────────────────────────────────────────────────
 namespace MintResult {   // contract: yed_mint
     constexpr const char* TXID              = "txid";
@@ -328,8 +343,26 @@ namespace Errors {   // contract: errors
     constexpr const char* CHANGE_FLOOR      = "change-floor";
     constexpr const char* NOT_YELLOWBACK_ADDRESS = "not-a-yellowback-address";
     constexpr const char* VAULT_LOCKED      = "vault-locked";
+    constexpr const char* VAULT_NOT_FOUND   = "vault-not-found";
+    constexpr const char* VAULT_NOT_ACTIVE  = "vault-not-active";     // CLOSED or CLAIMED only (L14)
+    constexpr const char* VAULT_NOT_OWNED   = "vault-not-owned";
     constexpr const char* SWEEP_NOT_ABANDONED = "sweep-not-abandoned";
+    constexpr const char* SWEEP_ACKNOWLEDGEMENT_MISSING = "sweep-acknowledgement-missing";
     constexpr const char* INSUFFICIENT_YED  = "insufficient-yed";
+    // yed_mint: MINTPOL-1, one per halt bit and the cap
+    constexpr const char* MINTPOL_NOT_ACTIVE    = "mintpol-not-active";
+    constexpr const char* MINTPOL_NO_PRICE      = "mintpol-no-price";
+    constexpr const char* MINTPOL_PARTICIPATION = "mintpol-participation";
+    constexpr const char* MINTPOL_GLOBAL_RATIO  = "mintpol-global-ratio";
+    constexpr const char* MINTPOL_DIVERGENCE    = "mintpol-divergence";
+    constexpr const char* MINTPOL_CAP           = "mintpol-cap";
+    constexpr const char* MINT_UNSATISFIABLE    = "mint-unsatisfiable";
+    constexpr const char* MINT_BAD_LOCK         = "mint-bad-lock";
+    constexpr const char* CLAIM_NOT_YET         = "claim-not-yet";
+    constexpr const char* CLAIM_NOT_UNDERWATER  = "claim-not-underwater";
+    // The contract lists `mempool-check-failed:<verdict>`; the wallet matches the prefix
+    constexpr const char* MEMPOOL_CHECK_FAILED  = "mempool-check-failed";   // value
+    constexpr const char* FEE_NO_ELIGIBLE_PAYEE = "fee-no-eligible-payee";  // yed_getfeepayee under FEE-0: not an error for the wallet
 }
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).
