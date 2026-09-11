@@ -176,35 +176,48 @@
   "yed_claim": {
     "args": "<vaultTxid> [to]",
     "returns": {
-      "burnedCents": "",
-      "collateralOut": "",
-      "feeZat": "",
-      "payee": "",
-      "to": "",
-      "txid": ""
+      "burnedCents": 100000,
+      "collateralOut": 25062804070,
+      "feeZat": 62814071,
+      "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+      "to": "smExampleTransparentTwin111111111111",
+      "txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d"
     }
   },
   "yed_decodepayload": {
     "args": "<hex>",
-    "returns": {}
+    "returns": {
+      "cents": 100000,
+      "feeVout": 3,
+      "lockHeight": 380,
+      "ownerPubKey": "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "reason": "",
+      "refHeight": 329,
+      "termClass": "A",
+      "type": "mint",
+      "valid": true,
+      "version": 2
+    }
   },
   "yed_estimatecollateral": {
     "args": "<cents> <lockBlocks> [priceMicroUsd]",
     "returns": {
-      "baseRatioBps": "",
-      "claimHeight": "",
-      "lockHeight": "",
-      "minRatioBps": "",
-      "pMint": "",
-      "refHeight": "",
-      "requiredZat": "",
-      "sigmaMultBps": "",
-      "termClass": ""
+      "baseRatioBps": 50000,
+      "claimHeight": 404,
+      "lockHeight": 380,
+      "minRatioBps": 50000,
+      "pMint": 1990000,
+      "refHeight": 329,
+      "requiredZat": 25125628141,
+      "sigmaMultBps": 10000,
+      "termClass": "A"
     }
   },
   "yed_estimatefee": {
     "args": "<collateralZat>",
-    "returns": {}
+    "returns": {
+      "feeZat": 62814071
+    }
   },
   "yed_estimatesend": {
     "args": "",
@@ -213,50 +226,59 @@
   "yed_getactivation": {
     "args": "",
     "returns": {
-      "activateHeight": "",
-      "enforceUntilHeight": "",
-      "enforcementFloor": "",
-      "enforcementResume": "",
-      "enforcementSuspended": "",
-      "enforcing": "",
+      "activateHeight": 193,
+      "enforceUntilHeight": 0,
+      "enforcementFloor": 32,
+      "enforcementResume": 39,
+      "enforcementSuspended": false,
+      "enforcing": true,
       "history": [
         {
-          "height": "",
-          "signalCount": ""
+          "height": 331,
+          "signalCount": 64
         }
       ],
-      "lockInHeight": "",
-      "mintHalted": "",
-      "participationFloor": "",
-      "signalCount": "",
-      "status": "",
-      "sunset": "",
-      "threshold": "",
-      "valveTripped": "",
-      "window": ""
+      "lockInHeight": 129,
+      "mintHalted": false,
+      "participationFloor": 39,
+      "signalCount": 64,
+      "status": "active",
+      "sunset": false,
+      "threshold": 48,
+      "valveTripped": false,
+      "window": 64
     }
   },
   "yed_getbalance": {
     "args": "",
-    "returns": {}
+    "returns": {
+      "confirmedCents": 100000,
+      "height": 331,
+      "unconfirmedCents": 0
+    }
   },
   "yed_getblockverdict": {
     "args": "<blockhash>",
     "returns": {
-      "blockInvalid": "",
-      "enforcementOn": "",
-      "reason": "",
+      "blockInvalid": true,
+      "enforcementOn": true,
+      "reason": "vault-spend-short-burn:6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
       "transactions": [
         {
-          "closedVaults": "",
-          "feeZat": "",
-          "path": "",
-          "payee": "",
-          "txid": "",
-          "type": "",
-          "verdict": "",
-          "yedIn": "",
-          "yedOut": ""
+          "closedVaults": [
+            {
+              "txid": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+              "vout": 0
+            }
+          ],
+          "feeZat": 62814071,
+          "path": "owner",
+          "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+          "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+          "type": "redeem",
+          "verdict": "vault-spend-short-burn",
+          "yedIn": 50000,
+          "yedOut": 0
         }
       ]
     }
@@ -265,167 +287,209 @@
     "args": "<refHeight> <collateralZat> [selectorHex]",
     "returns": {
       "default": {
-        "payoutAddress": "",
-        "weight": ""
+        "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "weight": 19800
       },
       "eligible": [
-        "payoutAddress…"
+        "smQvTmAz2ExamplePayoutAddress1111111"
       ],
-      "feeZat": "",
+      "feeZat": 50000000,
       "policy": {
-        "accuracyWindow": "",
-        "penaltyBlocks": "",
-        "tiltBps": ""
+        "accuracyWindow": 24,
+        "penaltyBlocks": 12,
+        "tiltBps": 10000
       },
-      "preferred": ""
+      "preferred": "smQvTmAz2ExamplePayoutAddress1111111"
     }
   },
   "yed_gethistory": {
     "args": "<from> <to>",
-    "returns": {}
+    "returns": [
+      {
+        "activation": {
+          "activateHeight": 193,
+          "lockInHeight": 129,
+          "status": "active"
+        },
+        "blockHash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
+        "collateralZat": 62500000000,
+        "globalRatioBps": 49750,
+        "haltMask": [],
+        "height": 331,
+        "issuedZat": 1656250000000,
+        "pClaim": 2000000,
+        "pFast": 2000000,
+        "pMid": 2000000,
+        "pMint": 1990000,
+        "pSlow": 1990000,
+        "quote": true,
+        "sigmaMultBps": 10000,
+        "signalCount": 64,
+        "supplyCents": 250000,
+        "tagged": true
+      }
+    ]
   },
   "yed_getinfo": {
     "args": "",
     "returns": {
-      "abandoned": "",
+      "abandoned": false,
       "activation": {
-        "activateHeight": "",
-        "lockInHeight": "",
-        "signalCount": "",
-        "status": "",
-        "window": ""
+        "activateHeight": 193,
+        "lockInHeight": 129,
+        "signalCount": 64,
+        "status": "active",
+        "window": 64
       },
-      "blockhash": "",
-      "chainHeight": "",
-      "enabled": "",
-      "enforcing": "",
-      "healthy": "",
-      "height": "",
+      "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
+      "chainHeight": 331,
+      "enabled": true,
+      "enforcing": true,
+      "healthy": true,
+      "height": 331,
       "miner": {
-        "eligible": "",
-        "payoutAddress": "",
-        "quoteAgeSeconds": "",
-        "quoteKind": "",
-        "registered": "",
-        "signal": ""
+        "eligible": true,
+        "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "quoteAgeSeconds": 12,
+        "quoteKind": "quote",
+        "registered": true,
+        "signal": true
       },
-      "network": "",
+      "network": "regtest",
       "params": {
-        "abandonBlocks": "",
+        "abandonBlocks": 128,
         "classes": [
           {
-            "baseRatioBps": "",
-            "class": "\"A\"|\"B\"|\"C\"",
-            "maxBlocks": "",
-            "minBlocks": ""
+            "baseRatioBps": 50000,
+            "class": "A",
+            "maxBlocks": 96,
+            "minBlocks": 48
           }
         ],
-        "enforceUntilHeight": "",
-        "feeBps": "",
-        "feeMinZat": "",
-        "feeZat": "",
-        "grace": "",
+        "enforceUntilHeight": 0,
+        "feeBps": 25,
+        "feeMinZat": 50000000,
+        "feeZat": 1000,
+        "grace": 24,
         "minFill": {
-          "fast": "",
-          "mid": "",
-          "slow": ""
+          "fast": 4,
+          "mid": 16,
+          "slow": 43
         },
-        "payeeWindow": "",
+        "payeeWindow": 10,
         "policy": {
-          "accuracyWindow": "",
-          "penaltyBlocks": "",
-          "preferredPayee": "",
-          "tiltBps": ""
+          "accuracyWindow": 24,
+          "penaltyBlocks": 12,
+          "preferredPayee": null,
+          "tiltBps": 10000
         },
-        "refLag": "",
-        "refWindow": "",
-        "sigmaRefBps": "",
-        "startHeight": "",
-        "supplyCapBps": "",
-        "tokenValueZat": "",
-        "valveBlocks": "",
+        "refLag": 2,
+        "refWindow": 40,
+        "sigmaRefBps": 0,
+        "startHeight": 1,
+        "supplyCapBps": 0,
+        "tokenValueZat": 10000,
+        "valveBlocks": 6,
         "windows": {
-          "fast": "",
-          "mid": "",
-          "signal": "",
-          "slow": ""
+          "fast": 8,
+          "mid": 24,
+          "signal": 64,
+          "slow": 64
         }
       },
-      "rejectedBlocks": "",
-      "rpcversion": "2",
-      "startHeight": "",
-      "sunset": "",
-      "suppressedBlocks": "",
-      "templatePolicy": "",
+      "rejectedBlocks": 0,
+      "rpcversion": 2,
+      "startHeight": 1,
+      "sunset": false,
+      "suppressedBlocks": 0,
+      "templatePolicy": "strict",
       "unhealthyReason": "",
-      "valveTripped": ""
+      "valveTripped": false
     }
   },
   "yed_getnewaddress": {
     "args": "",
-    "returns": {}
+    "returns": "yrExampleOwnerAddress111111111111111"
   },
   "yed_getprice": {
     "args": "[height]",
     "returns": {
       "fill": {
         "fast": {
-          "minFill": "",
-          "quoteTags": "",
-          "window": ""
+          "minFill": 4,
+          "quoteTags": 8,
+          "window": 8
         },
-        "mid": {},
-        "slow": {}
+        "mid": {
+          "minFill": 16,
+          "quoteTags": 24,
+          "window": 24
+        },
+        "slow": {
+          "minFill": 43,
+          "quoteTags": 60,
+          "window": 64
+        }
       },
-      "height": "",
-      "pClaim": "",
-      "pFast": "",
-      "pMid": "",
-      "pMint": "",
-      "pSlow": "",
-      "tag": {}
+      "height": 331,
+      "pClaim": 2000000,
+      "pFast": 2000000,
+      "pMid": 2000000,
+      "pMint": 1990000,
+      "pSlow": 1990000,
+      "tag": {
+        "found": true,
+        "kind": "quote",
+        "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "priceMicroUsd": 2000000,
+        "signal": true,
+        "sourceMask": 3,
+        "version": 1
+      }
     }
   },
   "yed_getstatehash": {
     "args": "[height]",
-    "returns": {}
+    "returns": {
+      "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
+      "height": 331,
+      "statehash": "9b4e2f1c8d7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c"
+    }
   },
   "yed_getstats": {
     "args": "",
     "returns": {
-      "activeVaults": "",
-      "claimedVaults": "",
-      "closedVaults": "",
-      "collateralZat": "",
-      "globalRatioBps": "",
-      "haltMask": [
-        "names"
-      ],
-      "height": "",
-      "issuedZat": "",
-      "mintingAllowed": "",
-      "pClaim": "",
-      "pFast": "",
-      "pMid": "",
-      "pMint": "",
-      "pSlow": "",
-      "sigmaMultBps": "",
-      "supplyCapCents": "",
-      "supplyCents": "",
-      "unbackedCents": "",
-      "voidVaults": ""
+      "activeVaults": 3,
+      "claimedVaults": 0,
+      "closedVaults": 2,
+      "collateralZat": 62500000000,
+      "globalRatioBps": 49750,
+      "haltMask": [],
+      "height": 331,
+      "issuedZat": 1656250000000,
+      "mintingAllowed": true,
+      "pClaim": 2000000,
+      "pFast": 2000000,
+      "pMid": 2000000,
+      "pMint": 1990000,
+      "pSlow": 1990000,
+      "sigmaMultBps": 10000,
+      "supplyCapCents": null,
+      "supplyCents": 250000,
+      "unbackedCents": 0,
+      "voidVaults": 1
     }
   },
   "yed_gettag": {
     "args": "<height\\|blockhash>",
     "returns": {
-      "found": "",
-      "kind": "",
-      "payoutAddress": "",
-      "priceMicroUsd": "",
-      "signal": "",
-      "sourceMask": "",
-      "version": ""
+      "found": true,
+      "kind": "quote",
+      "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+      "priceMicroUsd": 2000000,
+      "signal": true,
+      "sourceMask": 3,
+      "version": 1
     }
   },
   "yed_gettxinfo": {
@@ -433,69 +497,75 @@
     "returns": {
       "assigned": [
         {
-          "cents": "",
-          "vout": ""
+          "cents": 100000,
+          "vout": 1
         }
       ],
-      "burned": "",
+      "burned": 0,
       "closedVaults": [
-        "outpoint"
+        {
+          "txid": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "vout": 0
+        }
       ],
-      "expired": "",
-      "feeZat": "",
-      "height": "",
+      "expired": false,
+      "feeZat": 62814071,
+      "height": 332,
       "path": "",
-      "payee": "",
+      "payee": "smQvTmAz2ExamplePayoutAddress1111111",
       "spentTokens": [
-        "outpoint"
+        {
+          "txid": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "vout": 1
+        }
       ],
-      "txid": "",
-      "type": "",
-      "verdict": "",
-      "yedIn": "",
-      "yedOut": ""
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+      "type": "mint",
+      "verdict": "ok",
+      "yedIn": 0,
+      "yedOut": 100000
     }
   },
   "yed_getvault": {
     "args": "<txid>",
     "returns": {
-      "burnedCents": "",
-      "claimHeight": "",
-      "claimable": "",
-      "closeHeight": "",
+      "burnedCents": 0,
+      "claimHeight": 404,
+      "claimable": false,
+      "closeHeight": null,
       "closingTxid": "",
-      "collateral": "",
-      "collateralZat": "",
-      "feePaidZat": "",
-      "lockHeight": "",
-      "mintHeight": "",
-      "mintedCents": "",
-      "ownerAddress": "",
-      "ownerKeyId": "",
-      "ownerPubKey": "",
-      "refHeight": "",
-      "status": "",
-      "sweepBefore": "",
-      "termClass": "",
-      "txid": "",
-      "unbacked": "",
-      "underwaterAt": "",
+      "collateral": 251.25628141,
+      "collateralZat": 25125628141,
+      "feePaidZat": 62814071,
+      "lockHeight": 380,
+      "mintHeight": 332,
+      "mintedCents": 100000,
+      "ownerAddress": "yrExampleOwnerAddress111111111111111",
+      "ownerKeyId": "1f2e3d4c5b6a79880706050403020100f1e2d3c4",
+      "ownerPubKey": "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "refHeight": 329,
+      "status": "ACTIVE",
+      "sweepBefore": 404,
+      "termClass": "A",
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+      "unbacked": false,
+      "underwaterAt": 437800,
       "voidReason": "",
-      "vout": ""
+      "vout": 0
     }
   },
   "yed_listclaimable": {
     "args": "",
     "returns": [
       {
-        "claimHeight": "",
-        "collateralZat": "",
-        "feeZat": "",
-        "mintedCents": "",
-        "ownerAddress": "",
-        "pClaim": "",
-        "underwaterAt": "",
-        "vault": ""
+        "claimHeight": 404,
+        "collateralZat": 25125628141,
+        "feeZat": 62814071,
+        "mintedCents": 100000,
+        "ownerAddress": "yrExampleOwnerAddress111111111111111",
+        "pClaim": 400000,
+        "underwaterAt": 437800,
+        "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"
       }
     ]
   },
@@ -503,17 +573,17 @@
     "args": "[height] [window]",
     "returns": [
       {
-        "accuracyBps": "",
-        "eligible": "",
-        "inBand": "",
-        "lastQuote": "",
-        "lastTagHeight": "",
-        "payoutAddress": "",
-        "penalizedUntil": "",
-        "quoteTags": "",
-        "quoted": "",
-        "registered": "",
-        "share": ""
+        "accuracyBps": 9800,
+        "eligible": true,
+        "inBand": 8,
+        "lastQuote": 2000000,
+        "lastTagHeight": 331,
+        "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "penalizedUntil": 0,
+        "quoteTags": 4,
+        "quoted": 8,
+        "registered": true,
+        "share": 4000
       }
     ]
   },
@@ -521,32 +591,32 @@
     "args": "",
     "returns": [
       {
-        "burnedCents": "",
-        "canClaim": "",
-        "canRedeem": "",
-        "canSweep": "",
-        "claimHeight": "",
-        "claimable": "",
-        "closeHeight": "",
+        "burnedCents": 0,
+        "canClaim": false,
+        "canRedeem": false,
+        "canSweep": false,
+        "claimHeight": 404,
+        "claimable": false,
+        "closeHeight": null,
         "closingTxid": "",
-        "collateral": "",
-        "collateralZat": "",
-        "feePaidZat": "",
-        "lockHeight": "",
-        "mintHeight": "",
-        "mintedCents": "",
-        "ownerAddress": "",
-        "ownerKeyId": "",
-        "ownerPubKey": "",
-        "refHeight": "",
-        "status": "",
-        "sweepBefore": "",
-        "termClass": "",
-        "txid": "",
-        "unbacked": "",
-        "underwaterAt": "",
+        "collateral": 251.25628141,
+        "collateralZat": 25125628141,
+        "feePaidZat": 62814071,
+        "lockHeight": 380,
+        "mintHeight": 332,
+        "mintedCents": 100000,
+        "ownerAddress": "yrExampleOwnerAddress111111111111111",
+        "ownerKeyId": "1f2e3d4c5b6a79880706050403020100f1e2d3c4",
+        "ownerPubKey": "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "refHeight": 329,
+        "status": "ACTIVE",
+        "sweepBefore": 404,
+        "termClass": "A",
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "unbacked": false,
+        "underwaterAt": 437800,
         "voidReason": "",
-        "vout": ""
+        "vout": 0
       }
     ]
   },
@@ -554,90 +624,141 @@
     "args": "[count] [skip]",
     "returns": [
       {
-        "amountCents": "",
-        "burned": "",
-        "confirmations": "",
-        "expired": "",
-        "feeZat": "",
-        "height": "",
+        "amountCents": 100000,
+        "burned": 0,
+        "confirmations": 1,
+        "expired": false,
+        "feeZat": 62814071,
+        "height": 332,
         "path": "",
-        "payee": "",
-        "txid": "",
-        "type": "∈ {mint, send, receive, burn, redeem, claim, claimed, sweep}",
-        "unbacked": "",
-        "verdict": "",
-        "yedIn": "",
-        "yedOut": ""
+        "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "type": "mint",
+        "unbacked": false,
+        "verdict": "ok",
+        "yedIn": 0,
+        "yedOut": 100000
       }
     ]
   },
   "yed_listunspent": {
     "args": "",
-    "returns": {}
+    "returns": [
+      {
+        "address": "yrExampleOwnerAddress111111111111111",
+        "cents": 100000,
+        "confirmations": 1,
+        "height": 332,
+        "locked": true,
+        "spentUnconfirmed": false,
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "valueZat": 10000,
+        "vout": 1
+      }
+    ]
   },
   "yed_listvaults": {
     "args": "[status] [count] [skip]",
-    "returns": {}
+    "returns": [
+      {
+        "burnedCents": 0,
+        "claimHeight": 404,
+        "claimable": false,
+        "closeHeight": null,
+        "closingTxid": "",
+        "collateral": 251.25628141,
+        "collateralZat": 25125628141,
+        "feePaidZat": 62814071,
+        "lockHeight": 380,
+        "mintHeight": 332,
+        "mintedCents": 100000,
+        "ownerAddress": "yrExampleOwnerAddress111111111111111",
+        "ownerKeyId": "1f2e3d4c5b6a79880706050403020100f1e2d3c4",
+        "ownerPubKey": "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "refHeight": 329,
+        "status": "ACTIVE",
+        "sweepBefore": 404,
+        "termClass": "A",
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "unbacked": false,
+        "underwaterAt": 437800,
+        "voidReason": "",
+        "vout": 0
+      }
+    ]
   },
   "yed_lockcoins": {
     "args": "",
-    "returns": {}
+    "returns": [
+      {
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "vout": 1
+      }
+    ]
   },
   "yed_mint": {
     "args": "<cents> <lockBlocks> [from]",
     "returns": {
-      "claimHeight": "",
-      "collateralZat": "",
-      "feeZat": "",
-      "fundedFrom": "",
-      "lockHeight": "",
-      "payee": "",
-      "termClass": "",
-      "txid": "",
-      "vault": "",
+      "claimHeight": 404,
+      "collateralZat": 25125628141,
+      "feeZat": 62814071,
+      "fundedFrom": "transparent",
+      "lockHeight": 380,
+      "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+      "termClass": "A",
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+      "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0",
       "warning": ""
     }
   },
   "yed_redeem": {
     "args": "<vaultTxid> [to]",
     "returns": {
-      "burnedCents": "",
-      "collateralOut": "",
-      "feeZat": "",
-      "payee": "",
-      "to": "",
-      "txid": ""
+      "burnedCents": 100000,
+      "collateralOut": 25062804070,
+      "feeZat": 62814071,
+      "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+      "to": "smExampleTransparentTwin111111111111",
+      "txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d"
     }
   },
   "yed_send": {
     "args": "",
-    "returns": {}
+    "returns": {
+      "changeCents": 50000,
+      "expiryHeight": 371,
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"
+    }
   },
   "yed_sendmany": {
     "args": "",
-    "returns": {}
+    "returns": {
+      "changeCents": 50000,
+      "expiryHeight": 371,
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"
+    }
   },
   "yed_setquote": {
     "args": "<priceMicroUsd> <sourceMask>",
     "returns": {
       "nextTag": {
-        "kind": "",
-        "payoutAddress": "",
-        "signal": ""
+        "kind": "quote",
+        "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "signal": true
       },
-      "priceMicroUsd": "",
-      "receivedAt": "",
-      "sourceMask": ""
+      "priceMicroUsd": 2000000,
+      "receivedAt": 1789000000,
+      "sourceMask": 3
     }
   },
   "yed_sweep": {
     "args": "<vaultTxid> <acknowledgement> [to]",
     "returns": {
-      "collateralOut": "",
-      "hex": "",
-      "to": "",
-      "txid": "",
-      "unbackedCents": ""
+      "collateralOut": 25125627141,
+      "hex": "0400008085202f8901…",
+      "to": "smExampleTransparentTwin111111111111",
+      "txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d",
+      "unbackedCents": 100000
     }
   },
   "yed_unlockcoin": {
@@ -646,26 +767,36 @@
   },
   "yed_validateaddress": {
     "args": "",
-    "returns": {}
+    "returns": {
+      "address": "yrExampleOwnerAddress111111111111111",
+      "ismine": true,
+      "isvalid": true,
+      "keyid": "1f2e3d4c5b6a79880706050403020100f1e2d3c4",
+      "reason": "",
+      "transparentAddress": "smExampleTransparentTwin111111111111"
+    }
   },
   "yed_validaterawtransaction": {
     "args": "<hex>",
     "returns": {
-      "blockValid": "",
-      "burned": "",
-      "feeZat": "",
-      "mempoolExpiryOk": "",
-      "path": "",
-      "payee": "",
-      "type": "",
+      "blockValid": true,
+      "burned": 100000,
+      "feeZat": 62814071,
+      "mempoolExpiryOk": true,
+      "path": "owner",
+      "payee": "smQvTmAz2ExamplePayoutAddress1111111",
+      "type": "redeem",
       "unconfirmedInputs": [
-        "outpoint"
+        {
+          "txid": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "vout": 1
+        }
       ],
-      "valid": "",
-      "verdict": "",
-      "wouldBeRejected": "",
-      "yedIn": "",
-      "yedOut": ""
+      "valid": true,
+      "verdict": "ok",
+      "wouldBeRejected": false,
+      "yedIn": 100000,
+      "yedOut": 0
     }
   }
 }
