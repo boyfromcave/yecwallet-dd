@@ -1170,13 +1170,18 @@ private slots:
         h.ctl.refresh(true);
         QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);
         QCOMPARE(h.ctl.positionsModel()->rowCount(QModelIndex()), vaultsBefore + 1);
-        const YellowbackPosition* mine = nullptr;
+        // The row from yed_listpositions, else from yed_getvault <txid> (the same shape minus can*):
+        // a node whose yed_listpositions predates the v2 shape still answers yed_getvault in it.
+        YellowbackPosition vault;
         for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) mine = h.ctl.positionsModel()->positionAt(i);
-        QVERIFY(mine != nullptr);
-        QCOMPARE(mine->status, QString("ACTIVE"));
-        QCOMPARE(mine->mintedCents, (qint64)10000);
-        const YellowbackPosition vault = *mine;
+            if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
+        if (vault.txid.isEmpty()) {
+            qWarning("yed_listpositions has no row with txid %s; reading yed_getvault", qPrintable(mintTxid));
+            h.ctl.getVault(mintTxid, [&](const json& v) { vault = YellowbackPosition::fromJson(v); }, [](const QString& e) { qWarning("%s", qPrintable(e)); });
+        }
+        QCOMPARE(vault.txid, mintTxid);
+        QCOMPARE(vault.status, QString("ACTIVE"));
+        QCOMPARE(vault.mintedCents, (qint64)10000);
 
         // Send $40 to a fresh own Yellowback address (change $60 is above the floor)
         json addr = dev.rpc("yed_getnewaddress");
@@ -1204,13 +1209,11 @@ private slots:
         dev.rpc("generate", json::array({1}));
         h.ctl.refresh(true);
         QCOMPARE(h.ctl.confirmedCents(), yedBefore);
-        const YellowbackPosition* closed = nullptr;
-        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) closed = h.ctl.positionsModel()->positionAt(i);
-        QVERIFY(closed != nullptr);
-        QCOMPARE(closed->status, QString("CLOSED"));
-        QCOMPARE(closed->burnedCents, (qint64)10000);
-        QVERIFY(!closed->unbacked);
+        YellowbackPosition closed;
+        h.ctl.getVault(mintTxid, [&](const json& v) { closed = YellowbackPosition::fromJson(v); }, [](const QString& e) { qWarning("%s", qPrintable(e)); });
+        QCOMPARE(closed.status, QString("CLOSED"));
+        QCOMPARE(closed.burnedCents, (qint64)10000);
+        QVERIFY(!closed.unbacked);
         QVERIFY(h.copyIsClean());
     }
 
