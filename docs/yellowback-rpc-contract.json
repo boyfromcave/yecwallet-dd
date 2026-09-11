@@ -178,6 +178,7 @@
     "returns": {
       "burnedCents": 100000,
       "collateralOut": 25062804070,
+      "extraBurnCents": 0,
       "feeZat": 62814071,
       "payee": "smQvTmAz2ExamplePayoutAddress1111111",
       "to": "smExampleTransparentTwin111111111111",
@@ -220,8 +221,25 @@
     }
   },
   "yed_estimatesend": {
-    "args": "",
-    "returns": {}
+    "args": "<{yedaddress: cents, …}|cents>",
+    "returns": {
+      "alternatives": null,
+      "amountCents": 4000,
+      "changeCents": 6000,
+      "error": "",
+      "inputs": [
+        {
+          "cents": 10000,
+          "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+          "vout": 1
+        }
+      ],
+      "recipients": 1,
+      "selectedCents": 10000,
+      "spendableCents": 10000,
+      "stage": "greedy",
+      "workable": true
+    }
   },
   "yed_getactivation": {
     "args": "",
@@ -347,6 +365,7 @@
       "enforcing": true,
       "healthy": true,
       "height": 331,
+      "lockedOutputs": 2,
       "miner": {
         "eligible": true,
         "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111",
@@ -397,6 +416,7 @@
           "slow": 64
         }
       },
+      "protectedByIndex": true,
       "rejectedBlocks": 0,
       "rpcversion": 2,
       "startHeight": 1,
@@ -716,6 +736,7 @@
     "returns": {
       "burnedCents": 100000,
       "collateralOut": 25062804070,
+      "extraBurnCents": 0,
       "feeZat": 62814071,
       "payee": "smQvTmAz2ExamplePayoutAddress1111111",
       "to": "smExampleTransparentTwin111111111111",
@@ -762,8 +783,14 @@
     }
   },
   "yed_unlockcoin": {
-    "args": "",
-    "returns": {}
+    "args": "<txid> <n> <acknowledgement>",
+    "returns": {
+      "cents": 10000,
+      "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+      "unlocked": true,
+      "vout": 1,
+      "wasYellowbackLocked": true
+    }
   },
   "yed_validateaddress": {
     "args": "",

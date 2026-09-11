@@ -578,6 +578,29 @@ private slots:
         QVERIFY(h.label("lblNotes").contains("enforcement is still on"));
     }
 
+    // H10: the node reports how many of this wallet's outputs it holds locked, and whether the
+    // index is protecting them at all.
+    void bannerLockedOutputsIsInformation() {
+        Harness h;
+        json info = infoActive();
+        info["lockedOutputs"] = 3; info["protectedByIndex"] = true;
+        h.feed(info, statsOpen(), activationActive());
+        QVERIFY(!h.visible("lblBanner"));           // locks working is not a warning
+        QVERIFY(h.label("lblNotes").contains("3 of this wallet's outputs carry YED"));
+        QVERIFY(h.label("lblNotes").contains("yed_unlockcoin"));
+    }
+
+    void bannerUnprotectedYedIsAWarning() {
+        Harness h;
+        json info = infoActive();
+        info["lockedOutputs"] = 0; info["protectedByIndex"] = false;
+        h.feed(info, statsOpen(), activationActive());
+        QVERIFY(h.label("lblBanner").contains("not holding your YED outputs locked"));
+        QVERIFY(h.label("lblBanner").contains("burn the YED"));
+        QVERIFY(!h.label("lblNotes").contains("yed_unlockcoin"));
+        QVERIFY(h.copyIsClean());
+    }
+
     void bannerNotEnforcingNode() {
         Harness h;
         json info = infoActive();
@@ -990,6 +1013,33 @@ private slots:
         QVERIFY(h.notices[0].contains("fee: " % YellowbackFormat::zec(62814071) % " to smQvTmAz2ExamplePayoutAddress1111111"));   // feeZat, payee
         QVERIFY(h.notices[0].contains(YellowbackFormat::zec(25062804070) % " to smExampleTransparentTwin111111111111"));          // collateralOut, to
         QVERIFY(h.copyIsClean());
+    }
+
+    // H4: the node burns a sub-dollar remainder when no selection leaves workable change, reports
+    // it as extraBurnCents, and the dialog says so.
+    void redeemShowsExtraBurn() {
+        Harness h;
+        json p = positionActive(); p["canRedeem"] = true;
+        h.feedActive(381, json::array({p}));
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
+        json r = redeemReply(); r["extraBurnCents"] = 75;
+        h.rpc.results[YellowbackRpc::REDEEM] = r;
+        h.tab.redeemVault(YellowbackPosition::fromJson(p));
+        QCOMPARE(h.notices.size(), 1);
+        QVERIFY(h.notices[0].contains("YED burned: $1,000.00"));
+        QVERIFY2(h.notices[0].contains("plus $0.75 burned as a remainder"), qPrintable(h.notices[0]));
+        QVERIFY(h.copyIsClean());
+    }
+
+    void redeemWithoutExtraBurnSaysNothing() {
+        Harness h;
+        json p = positionActive(); p["canRedeem"] = true;
+        h.feedActive(381, json::array({p}));
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
+        h.rpc.results[YellowbackRpc::REDEEM]      = redeemReply();      // extraBurnCents 0
+        h.tab.redeemVault(YellowbackPosition::fromJson(p));
+        QCOMPARE(h.notices.size(), 1);
+        QVERIFY(!h.notices[0].contains("remainder"));
     }
 
     void redeemWithDestinationFromRedeemPage() {

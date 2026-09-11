@@ -61,6 +61,8 @@ namespace Info {   // contract: yed_getinfo
     constexpr const char* SUPPRESSED_BLOCKS = "suppressedBlocks";   // L11: information, not a warning
     constexpr const char* TEMPLATE_POLICY   = "templatePolicy";
     constexpr const char* ABANDONED         = "abandoned";      // L10 predicate
+    constexpr const char* LOCKED_OUTPUTS    = "lockedOutputs";      // H10: YED outpoints the index holds locked
+    constexpr const char* PROTECTED_BY_INDEX = "protectedByIndex";  // H10: false means ordinary sends could burn YED
     constexpr const char* ACTIVATION        = "activation";
     constexpr const char* MINER             = "miner";
     constexpr const char* PARAMS            = "params";
@@ -312,6 +314,7 @@ namespace RedeemResult {   // contract: yed_redeem
     constexpr const char* PAYEE             = "payee";         // null for a VOID release
     constexpr const char* COLLATERAL_OUT    = "collateralOut";
     constexpr const char* TO                = "to";
+    constexpr const char* EXTRA_BURN_CENTS  = "extraBurnCents";  // H4: a sub-dollar remainder burned with the debt
 }
 
 // ── yed_sweep result ───────────────────────────────────────────────────────────────────────

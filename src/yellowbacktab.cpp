@@ -830,6 +830,14 @@ void YellowbackTab::updateVaultButtons() {
 
 // ── Redeem / Release / Sweep dialogs (one confirmation, one call; V24, L10, L14) ──────────
 
+// H4: a REDEEM or CLAIM whose only workable selection leaves change under the output floor burns
+// that sub-dollar remainder with the debt; the node reports it and the dialog says so.
+QString YellowbackTab::extraBurnLine(const nlohmann::json& r) {
+    qint64 extra = YellowbackJson::toInt(r, YellowbackRpc::RedeemResult::EXTRA_BURN_CENTS);
+    return extra > 0 ? tr(" (plus %1 burned as a remainder too small to pay back as change)").arg(YellowbackFormat::cents(extra))
+                     : QString();
+}
+
 void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
@@ -852,12 +860,13 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             [=, this](const json& r) {
                 QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
                 notice(tr("%1 sent").arg(what),
-                    tr("txid %1\nYED burned: %2\nenforcement fee: %3 to %4\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
+                    tr("txid %1\nYED burned: %2%7\nenforcement fee: %3 to %4\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
                         .arg(YellowbackJson::toStr(r, RedeemResult::TXID))
                         .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)))
                         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee)
                         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::COLLATERAL_OUT)))
-                        .arg(YellowbackJson::toStr(r, RedeemResult::TO)));
+                        .arg(YellowbackJson::toStr(r, RedeemResult::TO))
+                        .arg(extraBurnLine(r)));
                 ctl->refresh(true);
             },
             [=, this](const QString& e) { failed("yed_redeem", e); });
@@ -1005,12 +1014,13 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
         [=, this](const json& r) {
             QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
             notice(tr("Claim sent"),
-                tr("txid %1\nYED burned: %2\nenforcement fee: %3 to %4\ncollateral out: %5 to %6")
+                tr("txid %1\nYED burned: %2%7\nenforcement fee: %3 to %4\ncollateral out: %5 to %6")
                     .arg(YellowbackJson::toStr(r, RedeemResult::TXID))
                     .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)))
                     .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee)
                     .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::COLLATERAL_OUT)))
-                    .arg(YellowbackJson::toStr(r, RedeemResult::TO)));
+                    .arg(YellowbackJson::toStr(r, RedeemResult::TO))
+                    .arg(extraBurnLine(r)));
             ctl->refresh(true);
         },
         [=, this](const QString& e) { failed("yed_claim", e); });

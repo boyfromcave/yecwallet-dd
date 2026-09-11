@@ -385,6 +385,13 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
                        "(catch-up after an outage); enforcement is still on.").arg(suppressed);
     if (rejected > 0)
         st.notes << tr("This node has rejected %1 block(s) for vault-spend rule violations.").arg(rejected);
+    // H10: the node's own report of the coin locks that keep an ordinary send from burning YED
+    if (!YellowbackJson::toBool(info, Info::PROTECTED_BY_INDEX, true))
+        st.warnings << tr("This node is not holding your YED outputs locked, so an ordinary YEC send could spend one and burn the YED it carries. "
+                          "Check that the node runs with yellowback enabled.");
+    else if (YellowbackJson::toInt(info, Info::LOCKED_OUTPUTS) > 0)
+        st.notes << tr("%1 of this wallet's outputs carry YED and are locked by the node, so an ordinary YEC send cannot spend them "
+                       "(yed_unlockcoin releases one deliberately).").arg(YellowbackJson::toInt(info, Info::LOCKED_OUTPUTS));
 
     // The connected node's own quote state, shown only when it can mine (has a payout key)
     const json& miner = YellowbackJson::obj(info, Info::MINER);

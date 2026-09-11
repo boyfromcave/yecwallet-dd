@@ -68,6 +68,7 @@ public:
     void doMint();
     void doSend();
     void redeemVault(const YellowbackPosition& p, const QString& to = QString());   // ACTIVE: Redeem; VOID: Release (L14)
+    static QString extraBurnLine(const nlohmann::json& r);      // H4: the extraBurnCents clause, empty when there is none
     void claimVault(const YellowbackClaimable& c, const QString& to = QString());
     void sweepVault(const YellowbackPosition& p, const QString& to = QString());    // L10: carries the acknowledgement
     QString redeemDestination() const;   // the Redeem page's choice: "" = a fresh own transparent address
