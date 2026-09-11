@@ -290,6 +290,30 @@ struct DevnetTransport {
         if (!e.isEmpty()) qWarning("%s: %s", method, qPrintable(e));
         return r;
     }
+    // Wait until node 0 has fully digested the tip: nothing left in the mempool, the Yellowback
+    // index caught up with the chain (yed_getinfo.height == chainHeight == getblockcount).  getblockcount rises when a
+    // block connects; the wallet and the overlay index follow, and a transaction built in that
+    // gap selects inputs the block has already spent ("AcceptToMemoryPool: inputs already spent").
+    bool settle(const QString& txid = QString()) {
+        for (int w = 0; w < 600; w++) {
+            json pool = rpc("getrawmempool"), info = rpc("yed_getinfo"), count = rpc("getblockcount");
+            bool chain = pool.is_array() && pool.empty() && info.is_object() && count.is_number() &&
+                         info.value("height", -1) == count.get<int>() &&
+                         info.value("chainHeight", -2) == count.get<int>();
+            // The wallet marks the block's inputs spent on its own thread, ~1 s after UpdateTip;
+            // until it has, the next transaction selects an input the block already spent
+            // ("AcceptToMemoryPool: inputs already spent").  gettransaction is the wallet's own
+            // view, so a confirmation there is the signal that it has caught up.
+            bool wallet = txid.isEmpty();
+            if (chain && !wallet) {
+                json t = rpc("gettransaction", json::array({txid.toStdString()}));
+                wallet = t.is_object() && t.value("confirmations", 0) >= 1;
+            }
+            if (chain && wallet) { QTest::qWait(100); return true; }
+            QTest::qWait(25);
+        }
+        return false;
+    }
     // The same, on another devnet node (2-4 are the pools: they tag, signal and quote)
     json rpcOn(int node, const char* method, const json& params = json::array()) {
         if (!nodeRequests.contains(node)) {
@@ -1193,6 +1217,7 @@ private slots:
         QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
 
         dev.rpc("generate", json::array({1}));
+        QVERIFY(dev.settle(mintTxid));
         h.ctl.refresh(true);
         QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);
         QCOMPARE(h.ctl.positionsModel()->rowCount(QModelIndex()), vaultsBefore + 1);
@@ -1217,7 +1242,10 @@ private slots:
         h.tab.doSend();
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY(h.label("lblSendStatus").contains("Sent $40.00"));
+        const QString sendTxid = h.label("lblSendStatus").section("txid: ", 1).section(' ', 0, 0).trimmed();
+        QCOMPARE(sendTxid.size(), 64);
         dev.rpc("generate", json::array({1}));
+        QVERIFY(dev.settle(sendTxid));
         h.ctl.refresh(true);
         QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);     // sent to ourselves
         QVERIFY(h.ctl.transactionsModel()->rowCount(QModelIndex()) >= 2);
@@ -1225,6 +1253,7 @@ private slots:
         // Redeem at lockHeight: burn $100, collateral back minus the fee
         int height = dev.rpc("getblockcount").get<int>();
         if (height < vault.lockHeight) dev.rpc("generate", json::array({vault.lockHeight - height}));
+        QVERIFY(dev.settle());
         h.ctl.refresh(true);
         QVERIFY(h.ctl.height() >= vault.lockHeight);
         int noticesBefore = h.notices.size();
@@ -1232,7 +1261,9 @@ private slots:
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY(h.notices.size() == noticesBefore + 1 && h.notices.last().startsWith("Redeem sent|"));
         QVERIFY(h.notices.last().contains("YED burned: $100.00"));
+        const QString redeemTxid = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
         dev.rpc("generate", json::array({1}));
+        QVERIFY(dev.settle(redeemTxid));
         h.ctl.refresh(true);
         QCOMPARE(h.ctl.confirmedCents(), yedBefore);
         YellowbackPosition closed;
@@ -1288,18 +1319,6 @@ private slots:
             }
             return false;
         };
-        // …and the block that carried it has to reach node 0's wallet and index before the next
-        // action is built (getblockcount rises when the block connects; the wallet follows).
-        auto waitConfirmed = [&](const QString& txid) {
-            for (int w = 0; w < 400; w++) {
-                json t = dev.rpc("gettransaction", json::array({txid.toStdString()}));
-                if (t.is_object() && t.value("confirmations", 0) >= 1 &&
-                    h.ctl.info().value("synced", true)) { h.ctl.refresh(true); return true; }
-                QTest::qWait(25);
-                h.ctl.refresh(true);
-            }
-            return false;
-        };
         auto positionOf = [&](const QString& txid) {
             YellowbackPosition p;
             for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
@@ -1310,8 +1329,15 @@ private slots:
             return p;
         };
 
-        // Two vaults at the devnet's $50: S is swept, C is claimed.
-        QVERIFY(h.ctl.mintBlocker(10000).isEmpty());
+        // Two vaults at the devnet's $50: S is swept, C is claimed.  A previous case may have
+        // mined untagged blocks (devnetEndToEnd mines to a lock height on node 0), which pushes
+        // the trailing signal count under the mint floor: let the pools signal it back up.
+        for (int i = 0; i < 96 && !h.ctl.mintBlocker(10000).isEmpty(); i++) { minePools(1); h.ctl.refresh(true); }
+        // MINTPOL-1 is read at the mint's reference height, REF_LAG blocks behind the tip, so the
+        // tip being allowed again is not yet enough: carry the recovery back past it.
+        minePools(h.ctl.refLag() + 1);
+        h.ctl.refresh(true);
+        QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
         const qint64 yedBefore = h.ctl.confirmedCents();
         auto tier = h.tab.findChild<QComboBox*>("cmbTier");
         QVERIFY(tier != nullptr);
@@ -1327,7 +1353,8 @@ private slots:
             minted << txid;
             QVERIFY2(waitForTx(txid), "the mint did not reach the pool's mempool");
             minePools(1);
-            QVERIFY2(waitConfirmed(txid), "the mint did not confirm");
+            QVERIFY2(dev.settle(txid), "node 0 did not digest the mint's block");
+            h.ctl.refresh(true);
         }
         const QString sweepTxid = minted[0], claimTxid = minted[1];
         YellowbackPosition vaultS = positionOf(sweepTxid), vaultC = positionOf(claimTxid);
@@ -1374,7 +1401,8 @@ private slots:
         const QString claimTx = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
         QVERIFY(waitForTx(claimTx));
         minePools(1);
-        QVERIFY(waitConfirmed(claimTx));
+        QVERIFY(dev.settle(claimTx));
+        h.ctl.refresh(true);
         QCOMPARE(positionOf(claimTxid).status, QString("CLAIMED"));
         QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);      // the claim burned $100 of our YED
 
@@ -1400,7 +1428,9 @@ private slots:
         QCOMPARE(h.notices.size(), noticesBefore + 1);
         QVERIFY(h.notices.last().startsWith("Sweep sent|"));
         QVERIFY2(h.notices.last().contains("YED now unbacked: $100.00"), qPrintable(h.notices.last()));
+        const QString sweptTx = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
         dev.rpc("generate", json::array({1}));
+        QVERIFY(dev.settle(sweptTx));
         h.ctl.refresh(true);
         YellowbackPosition swept = positionOf(sweepTxid);
         QCOMPARE(swept.status, QString("CLOSED"));
