@@ -6,6 +6,7 @@
 #include "ui_mainwindow.h"
 #include "addressbook.h"
 #include "settings.h"
+#include "connection.h"
 
 #include "ui_yellowbacktab.h"
 #include "ui_yellowbackoverview.h"
@@ -35,6 +36,12 @@ YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent
         if (isError) QMessageBox::critical(this, title, text);
         else         QMessageBox::information(this, title, text);
     };
+    inputFn = [this](const QString& title, const QString& label, QString* value) {
+        bool ok = false;
+        QString v = QInputDialog::getText(this, title, label, QLineEdit::Normal, value ? *value : QString(), &ok);
+        if (ok && value) *value = v;
+        return ok;
+    };
 
     setupPages();
 
@@ -48,6 +55,11 @@ YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent
 }
 
 YellowbackTab::~YellowbackTab() {
+    // A subscriber this tab launched dies with the wallet (the node it feeds does too)
+    if (subscriber != nullptr && subscriber->parent() == this && subscriber->state() != QProcess::NotRunning) {
+        subscriber->terminate();
+        if (!subscriber->waitForFinished(3000)) subscriber->kill();
+    }
     delete uiOverview;
     delete uiReceive;
     delete uiSend;
@@ -193,13 +205,21 @@ void YellowbackTab::setActionsEnabled(bool enabled) {
         uiPositions->btnRelease->setEnabled(false);
         uiPositions->btnRedeem->setEnabled(false);
         uiPositions->btnSweep->setEnabled(false);
+        uiPositions->btnNotice->setEnabled(false);
         uiClaim->btnClaim->setEnabled(false);
         uiRedeem->btnStart->setEnabled(false);
+        uiAttestors->btnRegister->setEnabled(false);
+        uiAttestors->btnReport->setEnabled(false);
+        uiAttestors->btnRevive->setEnabled(false);
+        uiAttestors->btnWithdraw->setEnabled(false);
+        uiSettings->btnSweepCarriers->setEnabled(false);
     } else if (ctl != nullptr) {
         updateMintGate();
         updateVaultButtons();
         updateClaimPage();
         updateRedeemPage();
+        updateAttestorButtons();
+        uiSettings->btnSweepCarriers->setEnabled(true);
     }
 }
 
@@ -218,6 +238,47 @@ void YellowbackTab::failed(const QString& what, const QString& e) {
     QString why = YellowbackController::explainError(e);
     if (!why.isEmpty()) msg += "\n\n" % why;
     notice(tr("%1 failed").arg(what), msg, true);
+}
+
+// ── v3 two-step (W7) ──────────────────────────────────────────────────────────────────────
+// A pending reply names the carrier only. The status label says so ("preparing price proof
+// (1 block)") and the controller follows the main transaction; `done` gets its yed_gettxinfo.
+// A reply that is not pending (an older node, or a node that ignored wait) is handed to `done`
+// as it is, so both shapes end in the same summary.
+void YellowbackTab::followPending(const QString& type, const json& r, QLabel* status, std::function<void(const json&)> done) {
+    using namespace YellowbackRpc;
+    if (!YellowbackJson::toBool(r, MintResult::PENDING)) { done(r); return; }
+    const QString carrier = YellowbackJson::toStr(r, MintResult::CARRIER_TXID);
+    const int refHeight   = (int)YellowbackJson::toInt(r, MintResult::REF_HEIGHT, ctl->refHeightNow());
+    if (status != nullptr)
+        status->setText(tr("Preparing price proof (1 block): carrier %1 sent; the %2 transaction follows when it confirms.").arg(carrier).arg(type));
+    ctl->awaitPending(type, carrier, refHeight,
+        [=, this](const json& info) { done(info); },
+        [=, this](const QString& e) {
+            if (status != nullptr) status->setText(tr("%1 did not complete: %2").arg(type).arg(e));
+            notice(tr("%1 not completed").arg(type), e, true);
+        });
+}
+
+// bundle-insufficient: name the missing seqs and offer to re-query yed_getselection (which
+// redraws the "n of m reachable" line) so the user can press the button again when the
+// subscriber has filled the pool. Returns false for any other error.
+bool YellowbackTab::bundleInsufficientRetry(const QString& what, const QString& e) {
+    int count = 0, selected = 0;
+    QList<int> missing;
+    if (!YellowbackController::parseBundleInsufficient(e, &count, &selected, &missing)) return false;
+    QStringList seqs;
+    for (int m : missing) seqs << QString::number(m);
+    QString text = tr("%1 was not sent: only %2 of the %3 selected attestors have a fresh attestation in this node's pool%4.\n\n"
+                      "The subscriber (Settings page) fills the pool as attestors publish; nothing was signed or broadcast. "
+                      "Re-check which attestors are reachable now?")
+                       .arg(what).arg(count).arg(selected)
+                       .arg(seqs.isEmpty() ? QString() : tr(" (missing attestor seq %1)").arg(seqs.join(", ")));
+    if (confirm(tr("Price proof incomplete"), text)) {
+        ctl->refreshSelection();
+        ctl->refresh(true);
+    }
+    return true;
 }
 
 void YellowbackTab::updateBackupNag() {
@@ -724,27 +785,28 @@ void YellowbackTab::doMint() {
                 uiMint->lblMintPageStatus->setText(tr("Minting..."));
                 ctl->mint(cents, lockBlocks, from,
                     [=, this](const json& r) {
+                        // The vault key exists from the carrier step on: nag for the backup at once
                         Settings::getInstance()->setYellowbackBackupPending(true);
                         updateBackupNag();
-                        QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, MintResult::PAYEE);
-                        QString summary = tr("Minted %1 of YED.\ntxid %2\nvault %3 (class %4)\ncollateral %5, lock height %6, claim height %7\nenforcement fee %8 to %9\nfunded from %10")
-                            .arg(YellowbackFormat::cents(cents)).arg(YellowbackJson::toStr(r, MintResult::TXID))
-                            .arg(YellowbackJson::toStr(r, MintResult::VAULT)).arg(YellowbackJson::toStr(r, MintResult::TERM_CLASS))
-                            .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::COLLATERAL_ZAT)))
-                            .arg(YellowbackJson::toInt(r, MintResult::LOCK_HEIGHT)).arg(YellowbackJson::toInt(r, MintResult::CLAIM_HEIGHT))
-                            .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee)
-                            .arg(YellowbackJson::toStr(r, MintResult::FUNDED_FROM));
-                        QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
-                        if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
-                        summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
-                        uiMint->lblMintPageStatus->setText(tr("Minted. txid: ") % YellowbackJson::toStr(r, MintResult::TXID));
-                        uiMint->txtAmount->clear();
-                        notice(tr("Mint sent"), summary);
-                        ctl->refresh(true);
+                        followPending(Transaction::TYPE_MINT, r, uiMint->lblMintPageStatus, [=, this](const json& done) {
+                            QString summary = mintSummary(cents, done);
+                            QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
+                            if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
+                            summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
+                            uiMint->lblMintPageStatus->setText(tr("Minted. txid: ") % YellowbackJson::toStr(done, MintResult::TXID));
+                            uiMint->txtAmount->clear();
+                            notice(tr("Mint sent"), summary);
+                            ctl->refresh(true);
+                        });
                     },
                     [=, this](const QString& e) {
                         updateMintGate();
                         uiMint->lblMintPageStatus->setText(tr("yed_mint failed: ") % e);
+                        if (bundleInsufficientRetry(tr("The mint"), e)) return;
+                        // mint10-diverged: the page's own banner, the same one the estimate shows
+                        QString diverged = YellowbackController::describeDivergenceError(e, ctl->divergeBpsAttest());
+                        uiMint->lblDivergence->setText(diverged);
+                        uiMint->lblDivergence->setVisible(!diverged.isEmpty());
                         failed("yed_mint", e);
                     });
             };
@@ -773,6 +835,74 @@ void YellowbackTab::doMint() {
             uiMint->lblMintPageStatus->setText(tr("yed_estimatecollateral failed: ") % e);
             failed("yed_estimatecollateral", e);
         });
+}
+
+// The mint result, from yed_mint's full shape or from yed_gettxinfo after a pending reply: the
+// keys the two share (txid, feeZat, payee, pMint, xMint, aMint, bundleSeqs, attestFeeZat,
+// attestPayee) are read the same way; what only yed_mint carries (vault, class, heights) is
+// shown when present.
+QString YellowbackTab::mintSummary(qint64 cents, const json& r) const {
+    using namespace YellowbackRpc;
+    const QString txid = YellowbackJson::toStr(r, MintResult::TXID);
+    QString out = tr("Minted %1 of YED.\ntxid %2").arg(YellowbackFormat::cents(cents)).arg(txid);
+    if (YellowbackJson::has(r, MintResult::VAULT))
+        out += "\n" % tr("vault %1 (class %2)\ncollateral %3, lock height %4, claim height %5")
+            .arg(YellowbackJson::toStr(r, MintResult::VAULT)).arg(YellowbackJson::toStr(r, MintResult::TERM_CLASS))
+            .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::COLLATERAL_ZAT)))
+            .arg(YellowbackJson::toInt(r, MintResult::LOCK_HEIGHT)).arg(YellowbackJson::toInt(r, MintResult::CLAIM_HEIGHT));
+    else
+        out += "\n" % tr("vault %1:0").arg(txid);
+    QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, MintResult::PAYEE);
+    out += "\n" % tr("enforcement fee %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee);
+    if (YellowbackJson::has(r, MintResult::FUNDED_FROM))
+        out += "\n" % tr("funded from %1").arg(YellowbackJson::toStr(r, MintResult::FUNDED_FROM));
+    // v3: the price the mint was sized at and which source bound it
+    if (YellowbackJson::has(r, MintResult::P_MINT)) {
+        QString source = YellowbackJson::toStr(r, MintResult::SOURCE);
+        if (source.isEmpty() && YellowbackJson::has(r, MintResult::A_MINT))
+            source = YellowbackJson::toInt(r, MintResult::A_MINT) <= YellowbackJson::toInt(r, MintResult::X_MINT) ? Estimate::SOURCE_A : Estimate::SOURCE_X;
+        out += "\n" % tr("mint price %1 per YEC — %2 (pools %3, attestors %4)")
+            .arg(YellowbackFormat::price(YellowbackJson::toInt(r, MintResult::P_MINT)))
+            .arg(source == Estimate::SOURCE_A ? tr("bound by the attestors") : source == Estimate::SOURCE_X ? tr("bound by the pools") : tr("pool quotes alone, layer not armed"))
+            .arg(YellowbackFormat::priceOrUndefined(r, MintResult::X_MINT)).arg(YellowbackFormat::priceOrUndefined(r, MintResult::A_MINT));
+    }
+    if (r.is_object() && r.find(MintResult::BUNDLE_SEQS) != r.end() && r[MintResult::BUNDLE_SEQS].is_array()) {
+        QStringList seqs;
+        for (auto& it : r[MintResult::BUNDLE_SEQS]) if (it.is_number()) seqs << QString::number(it.get<qint64>());
+        out += "\n" % tr("price proof from attestor seq %1").arg(seqs.isEmpty() ? tr("none (no bundle)") : seqs.join(", "));
+    }
+    qint64 attestFee = YellowbackJson::toInt(r, MintResult::ATTEST_FEE_ZAT);
+    if (YellowbackJson::has(r, MintResult::ATTEST_FEE_ZAT))
+        out += "\n" % (attestFee > 0
+            ? tr("attestation fee %1 to %2").arg(YellowbackFormat::zec(attestFee)).arg(YellowbackJson::toStr(r, MintResult::ATTEST_PAYEE, tr("an attestor")))
+            : tr("attestation fee: none"));
+    return out;
+}
+
+QString YellowbackTab::claimSummary(const json& r) const {
+    using namespace YellowbackRpc;
+    // yed_claim's shape and yed_gettxinfo's differ in the burn key only
+    qint64 burned = YellowbackJson::has(r, RedeemResult::BURNED_CENTS) ? YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)
+                                                                        : YellowbackJson::toInt(r, TxInfo::BURNED);
+    QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
+    QString out = tr("txid %1\nYED burned: %2%3\nenforcement fee: %4 to %5")
+        .arg(YellowbackJson::toStr(r, RedeemResult::TXID)).arg(YellowbackFormat::cents(burned)).arg(extraBurnLine(r))
+        .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee);
+    if (YellowbackJson::has(r, RedeemResult::COLLATERAL_OUT))
+        out += "\n" % tr("collateral out: %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::COLLATERAL_OUT))).arg(YellowbackJson::toStr(r, RedeemResult::TO));
+    QString path = YellowbackJson::toStr(r, ClaimResult::CLAIM_PATH);
+    if (path == ClaimResult::PATH_B)
+        out += "\n" % tr("claim path: emergency clause (b), after a persisted notice; the claimant keeps exactly the debt at the claim price");
+    else if (path == ClaimResult::PATH_A)
+        out += "\n" % tr("claim path: underwater (a) at the combined claim price %1").arg(YellowbackFormat::priceOrUndefined(r, ClaimResult::P_CLAIM));
+    qint64 residual = YellowbackJson::toInt(r, ClaimResult::RESIDUAL_ZAT);
+    if (YellowbackJson::has(r, ClaimResult::RESIDUAL_ZAT))
+        out += "\n" % (residual > 0 ? tr("residual returned to the vault owner: %1").arg(YellowbackFormat::zec(residual)) : tr("residual to the owner: none"));
+    qint64 attestFee = YellowbackJson::toInt(r, ClaimResult::ATTEST_FEE_ZAT);
+    if (YellowbackJson::has(r, ClaimResult::ATTEST_FEE_ZAT))
+        out += "\n" % (attestFee > 0 ? tr("attestation fee %1 to %2").arg(YellowbackFormat::zec(attestFee)).arg(YellowbackJson::toStr(r, ClaimResult::ATTEST_PAYEE, tr("an attestor")))
+                                     : tr("attestation fee: none"));
+    return out;
 }
 
 // ── Vaults (positions) ────────────────────────────────────────────────────────────────────
@@ -835,6 +965,8 @@ void YellowbackTab::setupPositions() {
     uiPositions->btnRelease->setToolTip(tr("Return a VOID vault's collateral: no YED burned, no fee (yed_redeem)."));
     uiPositions->btnRedeem->setToolTip(tr("Burn the vault's YED and take the collateral back, minus the enforcement fee (yed_redeem)."));
     uiPositions->btnSweep->setToolTip(tr("Under abandonment only: move the collateral out with no burn, leaving the YED unbacked (yed_sweep)."));
+    uiPositions->btnNotice->setEnabled(false);
+    uiPositions->btnNotice->setToolTip(tr("Post a claim notice against a vault below the emergency ratio under the attested prices (yed_claimnotice). Anyone may; it costs the carrier and a network fee, no YED."));
 
     auto selected = [=, this]() -> const YellowbackPosition* {
         if (ctl == nullptr) return nullptr;
@@ -844,6 +976,7 @@ void YellowbackTab::setupPositions() {
     QObject::connect(uiPositions->btnRelease, &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnRedeem,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnSweep,   &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) sweepVault(*p); });
+    QObject::connect(uiPositions->btnNotice,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) noticeVault(*p); });
     QObject::connect(uiPositions->btnWhyVoid, &QPushButton::clicked, [=, this]() {
         if (ctl == nullptr) return;
         auto idx = uiPositions->tblPositions->currentIndex();
@@ -875,6 +1008,8 @@ void YellowbackTab::updateVaultButtons() {
         uiPositions->lblVaultAction->setText(ctl->positionsModel()->rowCount(QModelIndex()) == 0
             ? tr("You own no vaults.") : tr("Select a vault to see what can be done with it."));
         uiPositions->btnWhyVoid->setEnabled(false);
+        uiPositions->btnNotice->setVisible(false);
+        uiPositions->btnNotice->setEnabled(false);
         return;
     }
     VaultActions a = vaultActions(*p, ctl->height(), ctl->isAbandoned());
@@ -886,6 +1021,10 @@ void YellowbackTab::updateVaultButtons() {
     uiPositions->btnRelease->setEnabled(actionsEnabled && a.release);
     uiPositions->btnRedeem->setEnabled(actionsEnabled && a.redeem);
     uiPositions->btnSweep->setEnabled(actionsEnabled && a.sweep);
+    // v3: the notice is offered where the node says it could be posted, and not once one stands
+    bool canNotice = p->canNotice && !p->noticed && p->status == YellowbackRpc::Position::STATUS_ACTIVE;
+    uiPositions->btnNotice->setVisible(canNotice);
+    uiPositions->btnNotice->setEnabled(actionsEnabled && canNotice);
 }
 
 // ── Redeem / Release / Sweep dialogs (one confirmation, one call; V24, L10, L14) ──────────
@@ -998,6 +1137,45 @@ void YellowbackTab::sweepVault(const YellowbackPosition& p, const QString& to) {
         [=, this](const QString& e) { failed("yed_sweep", e); });
 }
 
+// v3: yed_claimnotice, step 1 of the emergency claim (NOT-1). Two-step like Mint; the vault
+// row then shows emergencyOpenAt once the notice confirms.
+void YellowbackTab::noticeVault(const YellowbackPosition& p) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    if (p.noticed) {
+        notice(tr("Claim notice"), tr("A claim notice already stands against vault %1 (confirmed at height %2); a second one cannot reset its clock.").arg(p.txid).arg(p.noticeHeight));
+        return;
+    }
+    int persist = (int)YellowbackJson::toInt(YellowbackJson::obj(ctl->params(), Params::ATTEST), ParamsAttest::EMERGENCY_PERSIST);
+    QString text = tr("Post a claim notice against vault %1 (owner %2, %3 minted against %4 of YEC).\n\n"
+                      "Under the attested prices this node holds, the vault is below the emergency ratio. A notice records that on chain; "
+                      "if it still holds %5 blocks after the notice's reference height, anyone may claim the vault under the emergency clause "
+                      "even though the combined price has not put it underwater. The owner can redeem in the meantime.\n\n"
+                      "Cost: the carrier and a network fee from your YEC; no YED is burned by a notice. "
+                      "Your own node builds it in two steps: the carrier now, the notice when the carrier confirms.")
+        .arg(p.txid).arg(p.ownerAddress).arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::zec(p.collateralZat)).arg(persist);
+    if (!confirm(tr("Confirm claim notice"), text)) return;
+    uiPositions->lblVaultAction->setText(tr("Posting the claim notice..."));
+    ctl->claimNotice(p.txid,
+        [=, this](const json& r) {
+            const int openAt = (int)YellowbackJson::toInt(r, NoticeResult::EMERGENCY_OPEN_AT);
+            followPending(Transaction::TYPE_NOTICE, r, uiPositions->lblVaultAction, [=, this](const json& done) {
+                int at = openAt > 0 ? openAt : (int)YellowbackJson::toInt(r, NoticeResult::REF_HEIGHT) + persist;
+                notice(tr("Claim notice sent"),
+                    tr("txid %1\nvault %2\n%3\n\nThe Vaults page shows the notice on the row once it confirms.")
+                        .arg(YellowbackJson::toStr(done, NoticeResult::TXID)).arg(p.vaultName())
+                        .arg(at > 0 ? tr("emergency claim possible from reference height %1 on, while the vault stays below the emergency ratio").arg(at)
+                                    : tr("the emergency clause opens once the notice has persisted")));
+                ctl->refresh(true);
+            });
+        },
+        [=, this](const QString& e) {
+            updateVaultButtons();
+            if (bundleInsufficientRetry(tr("The claim notice"), e)) return;
+            failed("yed_claimnotice", e);
+        });
+}
+
 void YellowbackTab::explainVoid(const YellowbackPosition& p) {
     if (ctl == nullptr) return;
     const QString vault = p.txid;
@@ -1050,6 +1228,27 @@ void YellowbackTab::updateClaimPage() {
                                        .arg(YellowbackFormat::cents(ctl->confirmedCents())));
 }
 
+// v3: which clause opened the claim and what the claim must give back (RED-5), from the
+// yed_listclaimable row; "" for claimPath means the node could build no bundle for it.
+QString YellowbackTab::describeClaimPath(const YellowbackClaimable& c) {
+    using namespace YellowbackRpc::ClaimResult;
+    QString out;
+    if (c.claimPath == PATH_B)
+        out = tr("Claim path: emergency clause (b) — a notice against this vault (height %1) has persisted and it is still below the emergency ratio. "
+                 "Under this clause you keep exactly the debt's worth at the claim price, no margin.").arg(c.noticeHeight);
+    else if (c.claimPath == PATH_A)
+        out = tr("Claim path: underwater (a) at the combined claim price.");
+    else
+        out = tr("Claim path: none yet — this node cannot build the price proof (too few fresh attestations in its pool), so the node will refuse the claim until the subscriber refills it.");
+    if (c.residualZat > 0)
+        out += " " % tr("Residual: %1 of YEC goes back to the vault owner (the collateral above the debt plus the fees); it is not yours.").arg(YellowbackFormat::zec(c.residualZat));
+    else
+        out += " " % tr("Residual to the owner: none.");
+    if (c.attestFeeZat > 0)
+        out += " " % tr("Attestation fee: %1 of YEC from the collateral to an attestor.").arg(YellowbackFormat::zec(c.attestFeeZat));
+    return out;
+}
+
 void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
@@ -1059,31 +1258,34 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
             .arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
         return;
     }
-    QString txid = c.vault.section(':', 0, 0);
+    QString txid = c.txid();
+    const qint64 youGet = c.collateralZat - c.feeZat - c.attestFeeZat - c.residualZat;
     QString text = tr("Claim vault %1 (owner %2).\n\n"
                       "Burn: %3 of YED from this wallet (%4 confirmed).\n"
                       "Enforcement fee: %5 of YEC from the collateral to a pool that published a price quote.\n"
-                      "You receive: about %6 of YEC (collateral %7 minus the fee) to %8.\n\n"
+                      "You receive: about %6 of YEC (collateral %7 minus the fees and the residual) to %8.\n"
+                      "%12\n\n"
                       "The vault is past its claim height (%9) and underwater at the claim price of %10 per YEC (underwater below %11). "
-                      "Your own node checks the claim against the enforcement rules before it signs and sends it.")
+                      "Your own node builds the claim in two steps — the carrier with the price proof now, the claim when it confirms — "
+                      "and checks it against the enforcement rules before it signs and sends it.")
         .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
-        .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(c.collateralZat - c.feeZat)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
-        .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt));
+        .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(youGet)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
+        .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt))
+        .arg(describeClaimPath(c));
     if (!confirm(tr("Confirm claim"), text)) return;
+    uiClaim->lblClaimHint->setText(tr("Claiming..."));
     ctl->claim(txid, to,
         [=, this](const json& r) {
-            QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
-            notice(tr("Claim sent"),
-                tr("txid %1\nYED burned: %2%7\nenforcement fee: %3 to %4\ncollateral out: %5 to %6")
-                    .arg(YellowbackJson::toStr(r, RedeemResult::TXID))
-                    .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)))
-                    .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee)
-                    .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::COLLATERAL_OUT)))
-                    .arg(YellowbackJson::toStr(r, RedeemResult::TO))
-                    .arg(extraBurnLine(r)));
-            ctl->refresh(true);
+            followPending(Transaction::TYPE_CLAIM, r, uiClaim->lblClaimHint, [=, this](const json& done) {
+                notice(tr("Claim sent"), claimSummary(done));
+                ctl->refresh(true);
+            });
         },
-        [=, this](const QString& e) { failed("yed_claim", e); });
+        [=, this](const QString& e) {
+            updateClaimPage();
+            if (bundleInsufficientRetry(tr("The claim"), e)) return;
+            failed("yed_claim", e);
+        });
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────────────────
@@ -1200,6 +1402,55 @@ void YellowbackTab::updateRedeemPage() {
 void YellowbackTab::setupAttestors() {
     uiAttestors->tblAttestors->horizontalHeader()->setStretchLastSection(true);
     uiAttestors->lblArming->setText(tr("Waiting for the node..."));
+    uiAttestors->btnRegister->setEnabled(false);
+    uiAttestors->btnReport->setEnabled(false);
+    uiAttestors->btnRevive->setEnabled(false);
+    uiAttestors->btnWithdraw->setEnabled(false);
+    uiAttestors->btnRegister->setToolTip(tr("Post a bond and register this node's wallet as an attestor (yed_registerattestor). The yellowback-attest agent then signs beside this node."));
+    uiAttestors->btnWithdraw->setToolTip(tr("Spend the selected attestor's bond back to this wallet once its locktime has passed (yed_withdrawbond; needs the bond key)."));
+    uiAttestors->btnRevive->setToolTip(tr("Return a DORMANT attestor of this wallet to ELIGIBLE with one signed price (yed_revive; needs the hot key)."));
+    uiAttestors->btnReport->setToolTip(tr("Report two attestations by one attestor for one height at two prices (yed_reportequivocation); the attestor is ejected and its bond slashed."));
+
+    auto selected = [=, this]() -> const YellowbackAttestor* {
+        if (ctl == nullptr) return nullptr;
+        auto idx = uiAttestors->tblAttestors->currentIndex();
+        return ctl->attestorsModel()->rowAt(idx.isValid() ? idx.row() : -1);
+    };
+    QObject::connect(uiAttestors->btnRegister, &QPushButton::clicked, [=, this]() {
+        if (ctl == nullptr) return;
+        using namespace YellowbackRpc;
+        const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
+        QString bond = QString::number(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT) / 100000000.0, 'f', 8);
+        QString lock = QString::number(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_LOCK));
+        QString tier = "0", pool = "no";
+        if (!inputFn(tr("Register as attestor"), tr("Bond in YEC (minimum %1):").arg(bond), &bond)) return;
+        if (!inputFn(tr("Register as attestor"), tr("Bond lock in blocks (minimum %1):").arg(lock), &lock)) return;
+        if (!inputFn(tr("Register as attestor"), tr("Price source tier: 0 = exchange APIs, 1 = mixed, 2 = aggregator:"), &tier)) return;
+        if (!inputFn(tr("Register as attestor"), tr("Does this attestor operate a mining pool? (yes/no):"), &pool)) return;
+        bool okBond = false, okLock = false;
+        double b = bond.trimmed().toDouble(&okBond);
+        int l = lock.trimmed().toInt(&okLock);
+        int t = tier.trimmed().toInt();
+        if (!okBond || !okLock || b <= 0 || l <= 0 || t < 0 || t > 2) { notice(tr("Register as attestor"), tr("Enter a bond in YEC, a lock in blocks and a tier of 0, 1 or 2."), true); return; }
+        registerAttestor(b, l, t, pool.trimmed().startsWith('y', Qt::CaseInsensitive));
+    });
+    QObject::connect(uiAttestors->btnWithdraw, &QPushButton::clicked, [=, this]() { auto a = selected(); if (a) withdrawBond(*a); });
+    QObject::connect(uiAttestors->btnRevive, &QPushButton::clicked, [=, this]() {
+        auto a = selected();
+        if (a == nullptr) return;
+        QString price;
+        if (!inputFn(tr("Revive attestor"), tr("The YEC price in USD this revival attests (e.g. 1.9850):"), &price)) return;
+        bool ok = false;
+        double usd = price.trimmed().remove('$').toDouble(&ok);
+        if (!ok || usd <= 0) { notice(tr("Revive attestor"), tr("Enter a price in dollars, e.g. 1.9850."), true); return; }
+        reviveAttestor(*a, (qint64)std::llround(usd * 1000000.0));
+    });
+    QObject::connect(uiAttestors->btnReport, &QPushButton::clicked, [=, this]() {
+        QString a, b;
+        if (!inputFn(tr("Report equivocation"), tr("First attestation (148 hex characters):"), &a)) return;
+        if (!inputFn(tr("Report equivocation"), tr("Second attestation, same attestor and height, a different price:"), &b)) return;
+        reportEquivocation(a, b);
+    });
 }
 
 void YellowbackTab::updateAttestors() {
@@ -1207,6 +1458,164 @@ void YellowbackTab::updateAttestors() {
     QString banner = YellowbackController::describeAttest(ctl->attest());
     uiAttestors->lblArming->setText(banner.isEmpty() ? tr("The node reports no attestation state (an rpcversion 2 node, or not answered yet).") : banner);
     uiAttestors->tblAttestors->resizeColumnsToContents();
+    auto sel = uiAttestors->tblAttestors->selectionModel();
+    if (sel != nullptr) {
+        QObject::disconnect(sel, nullptr, this, nullptr);
+        QObject::connect(sel, &QItemSelectionModel::currentRowChanged, this, [=, this](const QModelIndex&, const QModelIndex&) { updateAttestorButtons(); });
+    }
+    updateAttestorButtons();
+}
+
+// The node does not say which attestor records are this wallet's (the bond is not IsMine, R6),
+// so Withdraw and Revive are offered on any row that qualifies by status and height; the node
+// refuses with attest-key-not-held for somebody else's.
+void YellowbackTab::updateAttestorButtons() {
+    if (ctl == nullptr) return;
+    using namespace YellowbackRpc::Attestor;
+    uiAttestors->btnRegister->setEnabled(actionsEnabled);
+    uiAttestors->btnReport->setEnabled(actionsEnabled);
+    auto idx = uiAttestors->tblAttestors->currentIndex();
+    auto a = ctl->attestorsModel()->rowAt(idx.isValid() ? idx.row() : -1);
+    if (a == nullptr) {
+        uiAttestors->btnRevive->setEnabled(false);
+        uiAttestors->btnWithdraw->setEnabled(false);
+        uiAttestors->lblAttestorAction->setText(ctl->attestorsModel()->rowCount(QModelIndex()) == 0
+            ? tr("No attestor is registered yet.") : tr("Select an attestor of yours to withdraw its bond or revive it."));
+        return;
+    }
+    bool withdrawable = a->bondSpentHeight < 0 && a->status != STATUS_WITHDRAWN && ctl->height() >= a->bondLocktime;
+    bool revivable    = a->status == STATUS_DORMANT;
+    uiAttestors->btnWithdraw->setEnabled(actionsEnabled && withdrawable);
+    uiAttestors->btnRevive->setEnabled(actionsEnabled && revivable);
+    QString text;
+    if (a->status == STATUS_WITHDRAWN || a->bondSpentHeight >= 0)
+        text = tr("Attestor %1: its bond was withdrawn at height %2.").arg(a->seq).arg(a->bondSpentHeight);
+    else if (withdrawable)
+        text = tr("Attestor %1: the bond of %2 is past its locktime (%3) and can be withdrawn by the wallet holding its bond key.")
+                   .arg(a->seq).arg(YellowbackFormat::zec(a->bondZat)).arg(a->bondLocktime);
+    else
+        text = tr("Attestor %1: the bond of %2 is locked until height %3 (the chain is at %4).")
+                   .arg(a->seq).arg(YellowbackFormat::zec(a->bondZat)).arg(a->bondLocktime).arg(ctl->height());
+    if (revivable)
+        text += " " % tr("It is DORMANT (no attestation of its reached a bundle for too long): the wallet holding its hot key can revive it with one signed price.");
+    uiAttestors->lblAttestorAction->setText(text);
+}
+
+void YellowbackTab::registerAttestor(double bondYec, int lockBlocks, int tier, bool pool) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
+    const int locktime = ctl->height() + 1 + lockBlocks;
+    const int maturity = (int)YellowbackJson::toInt(ap, ParamsAttest::BOND_MATURITY);
+    QString text = tr("Register this wallet as a Yellowback attestor.\n\n"
+                      "Bond: %1 of YEC, locked in a bond output until height %2 (%3 blocks, about %4 days; estimated %5). "
+                      "Every Ycash node enforces that lock; only the bond key in this wallet can spend it afterwards, and an equivocation report slashes it before then.\n"
+                      "Source tier: %6. Pool operator: %7.\n"
+                      "The attestor becomes eligible for bundles %8 blocks after the registration confirms, and gets its seq number then (see the table).\n\n"
+                      "Two fresh keys are drawn: the hot key the agent signs with and the bond key. Back up wallet.dat after this; both exist only there.\n\n"
+                      "Run the yellowback-attest agent on this node only. One hot key on two nodes defeats the node's equivocation guard: "
+                      "the two would sooner or later sign different prices for one height, and anyone can report that, eject the attestor and take part of the bond.")
+        .arg(QString::number(bondYec, 'f', 8)).arg(locktime).arg(lockBlocks)
+        .arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
+        .arg(YellowbackFormat::estimateDate(locktime, ctl->height()).toString("yyyy-MM-dd"))
+        .arg(YellowbackFormat::sourceTier(tier)).arg(pool ? tr("yes") : tr("no")).arg(maturity);
+    if (!confirm(tr("Confirm attestor registration"), text)) return;
+    ctl->registerAttestor(bondYec, lockBlocks, YellowbackController::attestorFlags(tier, pool),
+        [=, this](const json& r) {
+            Settings::getInstance()->setYellowbackBackupPending(true);
+            updateBackupNag();
+            notice(tr("Registration sent"),
+                tr("txid %1\nbond %2 of YEC in %3, locked until height %4\nhot key %5\nbond key address %6 (attestation fees are paid here)\n"
+                   "eligible from height %7; the seq number appears in the table once the registration confirms.\n\n"
+                   "Back up wallet.dat now, then start the agent: yellowback-attest attest --conf attest.toml with that seq.")
+                    .arg(YellowbackJson::toStr(r, RegisterResult::TXID))
+                    .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RegisterResult::BOND_ZAT)))
+                    .arg(YellowbackJson::toStr(r, RegisterResult::BOND_ADDRESS)).arg(YellowbackJson::toInt(r, RegisterResult::BOND_LOCKTIME))
+                    .arg(YellowbackJson::toStr(r, RegisterResult::ATTESTOR_PUBKEY)).arg(YellowbackJson::toStr(r, RegisterResult::BOND_KEY_ADDRESS))
+                    .arg(YellowbackJson::toInt(r, RegisterResult::MATURES_AT)));
+            ctl->refresh(true);
+        },
+        [=, this](const QString& e) { failed("yed_registerattestor", e); });
+}
+
+void YellowbackTab::withdrawBond(const YellowbackAttestor& a, const QString& to) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    const QString dest = to.isEmpty() ? tr("a fresh transparent address of this wallet") : to;
+    if (ctl->height() < a.bondLocktime) {
+        notice(tr("Withdraw bond"), tr("The bond of attestor %1 is locked until height %2 (the chain is at %3).").arg(a.seq).arg(a.bondLocktime).arg(ctl->height()));
+        return;
+    }
+    QString text = tr("Withdraw the bond of attestor %1.\n\n"
+                      "%2 of YEC, minus the network fee, goes to %3. The record becomes WITHDRAWN: the attestor leaves the set and cannot be revived; "
+                      "registering again means a new bond and a new seq.\n\n"
+                      "This wallet must hold the bond key of that registration.")
+        .arg(a.seq).arg(YellowbackFormat::zec(a.bondZat)).arg(dest);
+    if (!confirm(tr("Confirm bond withdrawal"), text)) return;
+    ctl->withdrawBond(a.seq, to,
+        [=, this](const json& r) {
+            notice(tr("Withdrawal sent"), tr("txid %1\nattestor %2\nbond out: %3 to %4")
+                .arg(YellowbackJson::toStr(r, WithdrawResult::TXID)).arg(YellowbackJson::toInt(r, WithdrawResult::SEQ))
+                .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, WithdrawResult::BOND_OUT))).arg(YellowbackJson::toStr(r, WithdrawResult::TO)));
+            ctl->refresh(true);
+        },
+        [=, this](const QString& e) { failed("yed_withdrawbond", e); });
+}
+
+void YellowbackTab::reviveAttestor(const YellowbackAttestor& a, qint64 priceMicroUsd) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    QString text = tr("Revive attestor %1 with an attestation of %2 per YEC for reference height %3.\n\n"
+                      "The record returns to ELIGIBLE with its age kept. The node signs through the same guard as the agent: "
+                      "if it already signed a different price for that height it refuses, because a second price would be an equivocation.\n\n"
+                      "This wallet must hold the attestor's hot key. Cost: a network fee from your YEC.")
+        .arg(a.seq).arg(YellowbackFormat::price(priceMicroUsd)).arg(ctl->refHeightNow());
+    if (!confirm(tr("Confirm revival"), text)) return;
+    ctl->revive(a.seq, priceMicroUsd,
+        [=, this](const json& r) {
+            notice(tr("Revival sent"), tr("txid %1\nattestor %2 attested %3 per YEC for height %4")
+                .arg(YellowbackJson::toStr(r, ReviveResult::TXID)).arg(YellowbackJson::toInt(r, ReviveResult::SEQ))
+                .arg(YellowbackFormat::price(YellowbackJson::toInt(r, ReviveResult::PRICE_MICRO_USD))).arg(YellowbackJson::toInt(r, ReviveResult::CITED_HEIGHT)));
+            ctl->refresh(true);
+        },
+        [=, this](const QString& e) { failed("yed_revive", e); });
+}
+
+void YellowbackTab::reportEquivocation(const QString& hexA, const QString& hexB) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    const QString a = hexA.trimmed(), b = hexB.trimmed();
+    static const QRegularExpression hex("^[0-9a-fA-F]+$");
+    if (a.length() != ATTESTATION_HEX_LENGTH || b.length() != ATTESTATION_HEX_LENGTH || !hex.match(a).hasMatch() || !hex.match(b).hasMatch()) {
+        notice(tr("Report equivocation"), tr("Each attestation is 74 bytes: %1 characters of hex.").arg(ATTESTATION_HEX_LENGTH), true);
+        return;
+    }
+    if (a.compare(b, Qt::CaseInsensitive) == 0) {
+        notice(tr("Report equivocation"), tr("The two attestations are the same; an equivocation is two different prices from one attestor for one height."), true);
+        return;
+    }
+    QString text = tr("Report an equivocation.\n\n"
+                      "Your node checks that the two attestations come from one attestor, cite one height on this chain and carry different prices, "
+                      "both validly signed. If they do, the report ejects that attestor and its bond is slashed. "
+                      "Anyone may report; the cost is the carrier and a network fee from your YEC, built in two steps like a mint.");
+    if (!confirm(tr("Confirm equivocation report"), text)) return;
+    uiAttestors->lblAttestorAction->setText(tr("Reporting..."));
+    ctl->reportEquivocation(a, b,
+        [=, this](const json& r) {
+            const int seq = (int)YellowbackJson::toInt(r, EquivocationResult::SEQ);
+            followPending(Transaction::TYPE_EQUIVOCATION, r, uiAttestors->lblAttestorAction, [=, this](const json& done) {
+                notice(tr("Equivocation report sent"), tr("txid %1\nattestor %2, cited height %3, prices %4 and %5")
+                    .arg(YellowbackJson::toStr(done, EquivocationResult::TXID)).arg(seq)
+                    .arg(YellowbackJson::toInt(r, EquivocationResult::CITED_HEIGHT))
+                    .arg(YellowbackFormat::price(YellowbackJson::toInt(r, EquivocationResult::PRICE_A)))
+                    .arg(YellowbackFormat::price(YellowbackJson::toInt(r, EquivocationResult::PRICE_B))));
+                ctl->refresh(true);
+            });
+        },
+        [=, this](const QString& e) {
+            updateAttestorButtons();
+            failed("yed_reportequivocation", e);
+        });
 }
 
 // ── Settings page ─────────────────────────────────────────────────────────────────────────
@@ -1222,6 +1631,143 @@ void YellowbackTab::setupSettings() {
     });
     updateSettingsPage();
     QObject::connect(uiSettings->btnSave,   &QPushButton::clicked, [=, this]() { saveSettings(); });
+    QObject::connect(uiSettings->btnSubscriberStart, &QPushButton::clicked, [=, this]() { startSubscriber(); });
+    QObject::connect(uiSettings->btnSubscriberStop,  &QPushButton::clicked, [=, this]() { stopSubscriber(); });
+    QObject::connect(uiSettings->btnSweepCarriers,   &QPushButton::clicked, [=, this]() { sweepCarriers(); });
+    uiSettings->btnSweepCarriers->setEnabled(false);
+}
+
+// ── v3 subscriber launcher (plan §4.8 Settings row) ───────────────────────────────────────
+// The binary is looked for beside the wallet, where build.sh --attest puts it next to ycashd.
+
+QString YellowbackTab::defaultSubscriberBinaryPath() {
+    QDir appPath(QCoreApplication::applicationDirPath());
+#ifdef Q_OS_WIN
+    return appPath.absoluteFilePath("yellowback-attest.exe");
+#else
+    return appPath.absoluteFilePath("yellowback-attest");
+#endif
+}
+
+QString YellowbackTab::subscriberBinaryPath() const {
+    return subscriberBinary.isEmpty() ? defaultSubscriberBinaryPath() : subscriberBinary;
+}
+
+QString YellowbackTab::cookiePathFor(const QString& zcashDir, const QString& network) {
+    QString sub;
+    if (network == "test")         sub = "testnet3/";
+    else if (network == "regtest") sub = "regtest/";
+    return QDir(zcashDir).absoluteFilePath(sub % ".cookie");
+}
+
+// Only the keys the subscriber reads (attest.toml.sample documents them): [node] for its own
+// node's RPC, [transport] as saved on this page, [subscribe] at the default cadence. A value
+// is quoted as a TOML basic string.
+QString YellowbackTab::subscriberConfigToml(const QString& kind, const QString& path, const QString& relays, const QString& peers,
+                                            const QString& rpcUrl, const QString& cookieFile, const QString& rpcUser, const QString& rpcPassword) {
+    auto q = [](const QString& v) { QString e = v; e.replace("\\", "\\\\").replace("\"", "\\\""); return "\"" % e % "\""; };
+    auto list = [&](const QString& csv) {
+        QStringList items;
+        for (const QString& it : csv.split(',', Qt::SkipEmptyParts)) if (!it.trimmed().isEmpty()) items << q(it.trimmed());
+        return "[" % items.join(", ") % "]";
+    };
+    QString out = "# Written by YecWallet for `yellowback-attest subscribe`; edit the Settings page, not this file.\n\n";
+    out += "[node]\n";
+    out += "rpc_url = " % q(rpcUrl) % "\n";
+    if (!cookieFile.isEmpty())  out += "rpc_cookie = " % q(cookieFile) % "\n";
+    else {
+        out += "rpc_user = " % q(rpcUser) % "\n";
+        out += "rpc_password = " % q(rpcPassword) % "\n";
+    }
+    out += "\n[transport]\n";
+    if (kind == "dir") {
+        out += "kind = \"dir\"\n";
+        out += "path = " % q(path) % "\n";
+    } else {
+        out += "kind = \"iroh\"\n";
+        if (!relays.trimmed().isEmpty()) out += "relays = " % list(relays) % "\n";
+        if (!peers.trimmed().isEmpty())  out += "peers = " % list(peers) % "\n";
+    }
+    out += "\n[subscribe]\n";
+    out += "listattestors_seconds = 60\n";
+    return out;
+}
+
+void YellowbackTab::startSubscriber() {
+    if (subscriber != nullptr && subscriber->state() != QProcess::NotRunning) return;
+    const QString bin = subscriberBinaryPath();
+    if (!QFileInfo(bin).isExecutable()) {
+        uiSettings->lblSubscriberStatus->setText(tr("not running — %1 is not an executable file; run `yellowback-attest subscribe` by hand or package it beside the wallet.").arg(bin));
+        return;
+    }
+    auto s = Settings::getInstance();
+    if (s->getYellowbackTransportKind() == "dir" && s->getYellowbackTransportPath().trimmed().isEmpty()) {
+        uiSettings->lblSubscriberStatus->setText(tr("not running — the dir transport needs a directory; set and save it above."));
+        return;
+    }
+    // The node's RPC as this wallet reaches it: the cookie file when the node writes one, else
+    // the rpcuser/rpcpassword of the connection (the wallet's own ycash.conf sets those).
+    QString rpcUrl = "http://127.0.0.1:8832", cookie, user, pass;
+    Connection* conn = ctl != nullptr ? ctl->connection() : nullptr;
+    if (conn != nullptr && conn->config) {
+        const auto& c = conn->config;
+        rpcUrl = "http://" % (c->host.isEmpty() ? QString("127.0.0.1") : c->host) % ":" % (c->port.isEmpty() ? QString("8832") : c->port);
+        user = c->rpcuser; pass = c->rpcpassword;
+        QString candidate = c->zcashDir.isEmpty() ? QString() : cookiePathFor(c->zcashDir, ctl->network());
+        if (!candidate.isEmpty() && QFileInfo::exists(candidate)) cookie = candidate;
+    }
+    QString toml = subscriberConfigToml(s->getYellowbackTransportKind(), s->getYellowbackTransportPath(), s->getYellowbackTransportRelays(),
+                                        s->getYellowbackTransportPeers(), rpcUrl, cookie, user, pass);
+    QDir dir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    dir.mkpath(".");
+    subscriberConfPath = dir.absoluteFilePath("yellowback-subscribe.toml");
+    QFile f(subscriberConfPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        uiSettings->lblSubscriberStatus->setText(tr("not running — cannot write %1").arg(subscriberConfPath));
+        return;
+    }
+    f.write(toml.toUtf8());
+    f.close();
+    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);   // it may carry the RPC password
+
+    if (subscriber == nullptr || subscriber->parent() != this) subscriber = new QProcess(this);
+    QObject::connect(subscriber, &QProcess::stateChanged, this, [=, this](QProcess::ProcessState) { updateSettingsPage(); }, Qt::UniqueConnection);
+    QObject::connect(subscriber, &QProcess::errorOccurred, this, [=, this](QProcess::ProcessError) {
+        uiSettings->lblSubscriberStatus->setText(tr("not running — %1: %2").arg(bin).arg(subscriber->errorString()));
+    }, Qt::UniqueConnection);
+    QObject::connect(subscriber, &QProcess::readyReadStandardError, this, [=, this]() {
+        QString line = QString::fromUtf8(subscriber->readAllStandardError()).trimmed();
+        if (main != nullptr && main->logger != nullptr) main->logger->write("yellowback-attest: " + line);
+    }, Qt::UniqueConnection);
+    subscriber->start(bin, QStringList() << "subscribe" << "--conf" << subscriberConfPath);
+    updateSettingsPage();
+}
+
+void YellowbackTab::stopSubscriber() {
+    if (subscriber == nullptr || subscriber->state() == QProcess::NotRunning) return;
+    subscriber->terminate();
+    if (!subscriber->waitForFinished(3000)) subscriber->kill();
+    updateSettingsPage();
+}
+
+void YellowbackTab::sweepCarriers() {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    uiSettings->lblCarriers->setText(tr("Reclaiming..."));
+    ctl->sweepCarriers(
+        [=, this](const json& r) {
+            int count = (int)YellowbackJson::toInt(r, SweepCarriersResult::COUNT);
+            int outstanding = (int)YellowbackJson::toInt(r, SweepCarriersResult::OUTSTANDING);
+            uiSettings->lblCarriers->setText(count == 0
+                ? tr("No lapsed carrier to reclaim; %1 still inside their window.").arg(outstanding)
+                : tr("Reclaimed %1 carrier(s), %2 of YEC net of the fee, in txid %3; %4 still inside their window.")
+                      .arg(count).arg(YellowbackFormat::zec(YellowbackJson::toInt(r, SweepCarriersResult::RECLAIMED_ZAT)))
+                      .arg(YellowbackJson::toStr(r, SweepCarriersResult::TXID)).arg(outstanding));
+        },
+        [=, this](const QString& e) {
+            uiSettings->lblCarriers->setText(tr("yed_sweepcarriers failed: ") % e);
+            failed("yed_sweepcarriers", e);
+        });
 }
 
 QString YellowbackTab::subscriberStatus(const QProcess* p) {
@@ -1237,9 +1783,16 @@ void YellowbackTab::updateSettingsPage() {
     uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC version %1.").arg(Settings::getYellowbackRpcVersion()) %
         (ctl != nullptr && ctl->isVersionOk() ? tr(" The node matches.") : ""));
     // v3: the subscriber keeps this node's attestation pool filled; without it a mint cannot
-    // build its bundle while the layer is armed. The launcher is A5-b; the status is read here.
+    // build its bundle while the layer is armed.
+    const bool running = subscriber != nullptr && subscriber->state() != QProcess::NotRunning;
     uiSettings->lblSubscriberStatus->setText(subscriberStatus(subscriber) %
-        (subscriber == nullptr ? tr(" — the subscriber is started beside the node; until it runs, this node's attestation pool stays empty.") : QString()));
+        (running ? QString() : tr(" — until the subscriber runs, this node's attestation pool stays empty and a mint cannot build its price proof while the layer is armed.")));
+    const QString bin = subscriberBinaryPath();
+    const bool haveBinary = QFileInfo(bin).isExecutable();
+    uiSettings->lblSubscriberBinary->setText(haveBinary ? bin
+        : tr("%1 not found beside the wallet: the launcher is disabled. Package it (build.sh --attest) or run `yellowback-attest subscribe --conf attest.toml` by hand.").arg(bin));
+    uiSettings->btnSubscriberStart->setEnabled(haveBinary && !running);
+    uiSettings->btnSubscriberStop->setEnabled(running);
     int kind = uiSettings->cmbTransportKind->findData(s->getYellowbackTransportKind());
     uiSettings->cmbTransportKind->setCurrentIndex(kind < 0 ? 0 : kind);
     emit uiSettings->cmbTransportKind->currentIndexChanged(uiSettings->cmbTransportKind->currentIndex());

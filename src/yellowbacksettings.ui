@@ -32,6 +32,34 @@ yellowback=1</string></property>
       <item row="3" column="1"><widget class="QLineEdit" name="txtTransportRelays"><property name="placeholderText"><string>https://relay.example</string></property></widget></item>
       <item row="4" column="0"><widget class="QLabel" name="sb5"><property name="text"><string>Peers (iroh, comma-separated)</string></property></widget></item>
       <item row="4" column="1"><widget class="QLineEdit" name="txtTransportPeers"><property name="placeholderText"><string>node ids</string></property></widget></item>
+      <item row="5" column="0"><widget class="QLabel" name="sb6"><property name="text"><string>Binary</string></property></widget></item>
+      <item row="5" column="1"><widget class="QLabel" name="lblSubscriberBinary"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property><property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property></widget></item>
+      <item row="6" column="1">
+       <layout class="QHBoxLayout" name="subscriberButtons">
+        <item><widget class="QPushButton" name="btnSubscriberStart"><property name="text"><string>Start subscriber</string></property><property name="toolTip"><string>Writes an attest.toml from the transport settings above (save them first) and this node's RPC credentials, then runs yellowback-attest subscribe beside the node.</string></property></widget></item>
+        <item><widget class="QPushButton" name="btnSubscriberStop"><property name="text"><string>Stop subscriber</string></property></widget></item>
+        <item><spacer name="subSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="grpCarriers">
+     <property name="title"><string>Carriers (price proofs)</string></property>
+     <layout class="QVBoxLayout" name="carriersLayout">
+      <item>
+       <widget class="QLabel" name="lblCarriers">
+        <property name="wordWrap"><bool>true</bool></property>
+        <property name="text"><string>Every mint, claim, claim notice and equivocation report first funds a small carrier transaction that commits to its price proof; the main transaction follows one block later. A carrier whose main transaction never confirmed lapses after the reference window and its funds sit idle until reclaimed. The node also reclaims them at startup.</string></property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="carrierButtons">
+        <item><widget class="QPushButton" name="btnSweepCarriers"><property name="text"><string>Reclaim lapsed carriers</string></property></widget></item>
+        <item><spacer name="carrierSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+       </layout>
+      </item>
      </layout>
     </widget>
    </item>
