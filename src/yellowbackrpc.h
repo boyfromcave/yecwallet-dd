@@ -155,6 +155,9 @@ namespace ParamsAttest {   // contract: yed_getinfo.params.attest
     constexpr const char* ARM_MIN             = "armMin";
     constexpr const char* EMERGENCY_PERSIST   = "emergencyPersist";
     constexpr const char* CARRIER_MODE        = "carrierMode";
+    constexpr const char* BOND_MIN_ZAT        = "bondMinZat";       // A5-b: the register dialog states them
+    constexpr const char* BOND_MIN_LOCK       = "bondMinLock";
+    constexpr const char* BOND_MATURITY       = "bondMaturity";
 }
 
 namespace ParamClass {   // contract: yed_getinfo.params.classes[]

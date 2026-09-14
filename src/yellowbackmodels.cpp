@@ -125,6 +125,12 @@ YellowbackClaimable YellowbackClaimable::fromJson(const json& j) {
     c.claimHeight   = (int)YellowbackJson::toInt(j, CLAIM_HEIGHT);
     c.underwaterAt  = YellowbackJson::toInt (j, UNDERWATER_AT);
     c.pClaim        = YellowbackJson::toInt (j, P_CLAIM);
+    c.claimPath     = YellowbackJson::toStr (j, CLAIM_PATH);
+    c.residualZat   = YellowbackJson::toInt (j, RESIDUAL_ZAT);
+    c.attestFeeZat  = YellowbackJson::toInt (j, ATTEST_FEE_ZAT);
+    c.noticed       = YellowbackJson::toBool(j, NOTICED);
+    c.noticeHeight  = (int)YellowbackJson::toInt(j, NOTICE_HEIGHT, -1);
+    c.emergencyOpenAt = (int)YellowbackJson::toInt(j, EMERGENCY_OPEN_AT, -1);
     return c;
 }
 
@@ -203,6 +209,11 @@ QString YellowbackFormat::typeLabel(const QString& type) {
     if (type == TYPE_CLAIM)   return QObject::tr("Claim");
     if (type == TYPE_CLAIMED) return QObject::tr("Vault claimed");
     if (type == TYPE_SWEEP)   return QObject::tr("Sweep");
+    if (type == TYPE_NOTICE)  return QObject::tr("Claim notice");
+    if (type == TYPE_NOTICED) return QObject::tr("Vault noticed");
+    if (type == TYPE_REGISTER)return QObject::tr("Attestor registration");
+    if (type == TYPE_EQUIVOCATION) return QObject::tr("Equivocation report");
+    if (type == TYPE_REVIVE)  return QObject::tr("Attestor revival");
     return type;
 }
 

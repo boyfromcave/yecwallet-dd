@@ -589,6 +589,7 @@ qint64 YellowbackController::minMintCents() const   { return YellowbackRpc::MIN_
 qint64 YellowbackController::maxMintCents() const   { return YellowbackRpc::MAX_MINT_CENTS; }
 qint64 YellowbackController::minOutputCents() const { return YellowbackRpc::MIN_OUTPUT_CENTS; }
 int    YellowbackController::refLag() const         { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_LAG, 0); }
+int    YellowbackController::refWindow() const      { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_WINDOW, 0); }
 int    YellowbackController::grace() const          { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::GRACE, 0); }
 
 QList<YellowbackController::TermClass> YellowbackController::termClasses() const {
@@ -658,9 +659,10 @@ void YellowbackController::estimateCollateral(qint64 cents, int lockBlocks, OkFn
     call(YellowbackRpc::ESTIMATECOLLATERAL, json::array({cents, lockBlocks}), ok, err);
 }
 
+// yed_mint <cents> <lockBlocks> [from] [bundleHex] [wait]: the bundle is always built from the
+// pool ("" = the default) and wait is false, so the reply follows the carrier broadcast (W7).
 void YellowbackController::mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err) {
-    if (from.isEmpty()) call(YellowbackRpc::MINT, json::array({cents, lockBlocks}), ok, err);
-    else                call(YellowbackRpc::MINT, json::array({cents, lockBlocks, from.toStdString()}), ok, err);
+    call(YellowbackRpc::MINT, json::array({cents, lockBlocks, from.toStdString(), "", false}), ok, err);
 }
 
 void YellowbackController::send(const QString& addr, qint64 cents, OkFn ok, ErrFn err) {
@@ -672,9 +674,88 @@ void YellowbackController::redeem(const QString& vaultTxid, const QString& to, O
     else              call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
 }
 
+// yed_claim <vaultTxid> [to] [bundleHex] [wait]: "" for the default destination, the bundle
+// from the pool, wait false (as yed_mint).
 void YellowbackController::claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
-    if (to.isEmpty()) call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString()}), ok, err);
-    else              call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
+    call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString(), "", false}), ok, err);
+}
+
+void YellowbackController::claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::CLAIMNOTICE, json::array({vaultTxid.toStdString(), "", false}), ok, err);
+}
+
+void YellowbackController::sweepCarriers(OkFn ok, ErrFn err) {
+    call(YellowbackRpc::SWEEPCARRIERS, json(nullptr), ok, err);
+}
+
+void YellowbackController::registerAttestor(double bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::REGISTERATTESTOR, json::array({bondYec, lockBlocks, flags}), ok, err);
+}
+
+void YellowbackController::withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err) {
+    if (to.isEmpty()) call(YellowbackRpc::WITHDRAWBOND, json::array({seq}), ok, err);
+    else              call(YellowbackRpc::WITHDRAWBOND, json::array({seq, to.toStdString()}), ok, err);
+}
+
+void YellowbackController::revive(int seq, qint64 priceMicroUsd, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::REVIVE, json::array({seq, priceMicroUsd}), ok, err);
+}
+
+void YellowbackController::reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::REPORTEQUIVOCATION, json::array({hexA.toStdString(), hexB.toStdString(), false}), ok, err);
+}
+
+// ── v3 two-step follow-up (W7) ────────────────────────────────────────────────────────────
+// The rows of `type` present now are the baseline; the first row of that type not in it is
+// the main transaction. The poll is a plain yed_listtransactions on a timer: the block that
+// confirms the carrier is also the ChainTip on which the node builds the main transaction, so
+// one or two polls after the next block usually settle it. The timer is a child of this
+// controller and dies with it.
+void YellowbackController::awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err) {
+    auto known = std::make_shared<QSet<QString>>();
+    for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
+        const YellowbackTx* t = transactions->txAt(i);
+        if (t != nullptr && t->type == type) known->insert(t->txid);
+    }
+    QTimer* timer = new QTimer(this);
+    timer->setInterval(pendingPollMs);
+    auto poll = [=, this]() {
+        call(YellowbackRpc::LISTTRANSACTIONS, json::array({50, 0}),
+            [=, this](const json& arr) {
+                if (arr.is_array()) {
+                    for (auto& it : arr) {
+                        YellowbackTx t = YellowbackTx::fromJson(it);
+                        if (t.type != type || t.expired || known->contains(t.txid)) continue;
+                        timer->stop();
+                        timer->deleteLater();
+                        applyTransactions(arr);
+                        call(YellowbackRpc::GETTXINFO, json::array({t.txid.toStdString()}),
+                            [=](const json& info) { if (done) done(info); },
+                            [=](const QString& e) {
+                                // The row exists; the summary just has fewer fields
+                                json fallback = {{YellowbackRpc::TxInfo::TXID, t.txid.toStdString()}, {YellowbackRpc::TxInfo::TYPE, type.toStdString()}};
+                                log("yed_gettxinfo after " + type + ": " + e);
+                                if (done) done(fallback);
+                            });
+                        return;
+                    }
+                }
+                if (refWindow() > 0 && indexHeight > refHeight + refWindow()) {
+                    timer->stop();
+                    timer->deleteLater();
+                    if (err) err(tr("the carrier %1 lapsed: the chain passed reference height %2 plus the %3-block window and no %4 transaction appeared. "
+                                    "Its funds come back with \"Reclaim lapsed carriers\" on the Settings page.")
+                                     .arg(carrierTxid).arg(refHeight).arg(refWindow()).arg(type));
+                }
+            },
+            [=, this](const QString& e) {
+                timer->stop();
+                timer->deleteLater();
+                if (err) err(tr("yed_listtransactions failed while waiting for the %1 transaction: %2").arg(type).arg(e));
+            });
+    };
+    QObject::connect(timer, &QTimer::timeout, this, poll);
+    timer->start();
 }
 
 void YellowbackController::sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
@@ -750,9 +831,61 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("The lock length falls in no term class.");
     if (is(Errors::MEMPOOL_CHECK_FAILED))
         return tr("The node's own pre-check of the enforcement rules refused the transaction, so nothing was signed or sent.");
+    // v3
+    if (is(Errors::BUNDLE_INSUFFICIENT))
+        return tr("Too few of the selected attestors have a fresh attestation in this node's pool. The subscriber fills the pool (Settings); nothing was sent.");
+    if (is(Errors::MINT10_DIVERGED))
+        return tr("The pools' and the attestors' prices disagree by more than the allowed margin, so minting is paused; nothing was sent.");
+    if (is(Errors::BUNDLE_MALFORMED))
+        return tr("The bundle given to the node is not a bundle.");
+    if (is(Errors::INSUFFICIENT_YEC))
+        return tr("The wallet cannot cover the collateral, the carrier and the fees from confirmed, unlocked YEC.");
+    if (is(Errors::NOTICE_STANDING))
+        return tr("A claim notice already stands against this vault; a second one cannot reset its clock.");
+    if (is(Errors::NOTICE_NOT_UNDERWATER))
+        return tr("Under this node's attested prices the vault is not below the emergency ratio (or the layer is not armed), so a notice would be meaningless.");
+    if (is(Errors::BOND_BELOW_MIN))
+        return tr("The bond is below the minimum an attestor must post.");
+    if (is(Errors::LOCK_BELOW_MIN))
+        return tr("The bond lock is shorter than the minimum (or its locktime is too far out).");
+    if (is(Errors::BOND_LOCKED))
+        return tr("The bond's locktime has not passed; the bond cannot be withdrawn before it (every Ycash node enforces that lock).");
+    if (is(Errors::BOND_SPENT))
+        return tr("The bond has already been withdrawn.");
+    if (is(Errors::NOT_DORMANT))
+        return tr("Only a DORMANT attestor can be revived.");
+    if (is(Errors::NOT_EQUIVOCATION))
+        return tr("The two attestations are not an equivocation: they must be the same attestor, the same cited height, different prices, both validly signed over this chain's block hash.");
+    if (is(Errors::ATTEST_KEY_NOT_HELD))
+        return tr("This wallet does not hold the key this attestor action needs (the hot key for a revival, the bond key for a withdrawal).");
+    if (is(Errors::ATTEST_UNKNOWN_SEQ))
+        return tr("The node knows no attestor with that sequence number (a registration counts once its transaction confirms).");
+    if (is(Errors::ATTEST_MALFORMED))
+        return tr("An attestation is 74 bytes (148 characters of hex).");
+    if (is(Errors::ATTEST_RANGE))
+        return tr("The price is outside the range an attestation may carry.");
+    if (is(Errors::EQUIVOCATION_GUARD))
+        return tr("This node already signed a different price for that height; signing another would be an equivocation, so it refused.");
     if (e.contains(RpcErrors::WALLET_LOCKED))
         return tr("Unlock the wallet first (walletpassphrase in the console tab).");
     return QString();
+}
+
+bool YellowbackController::parseBundleInsufficient(const QString& e, int* count, int* selected, QList<int>* missing) {
+    if (!e.startsWith(YellowbackRpc::Errors::BUNDLE_INSUFFICIENT, Qt::CaseInsensitive)) return false;
+    static const QRegularExpression re("(\\d+) of (\\d+) selected attestors");
+    auto m = re.match(e);
+    if (count)    *count    = m.hasMatch() ? m.captured(1).toInt() : 0;
+    if (selected) *selected = m.hasMatch() ? m.captured(2).toInt() : 0;
+    if (missing) {
+        missing->clear();
+        static const QRegularExpression seqs("missing seq ([0-9, ]+)");
+        auto ms = seqs.match(e);
+        if (ms.hasMatch())
+            for (const QString& n : ms.captured(1).split(',', Qt::SkipEmptyParts))
+                if (!n.trimmed().isEmpty()) missing->append(n.trimmed().toInt());
+    }
+    return true;
 }
 
 bool YellowbackController::parseChangeFloor(const QString& e, qint64* allCents, qint64* atMost) {

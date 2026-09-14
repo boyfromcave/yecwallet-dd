@@ -52,8 +52,15 @@ struct YellowbackClaimable {
     int     claimHeight     = 0;
     qint64  underwaterAt    = 0;
     qint64  pClaim          = 0;
+    QString claimPath;             // v3: "a" | "b" | "" (no bundle could be built: yed_claim refuses until the pool refills)
+    qint64  residualZat     = 0;   // v3: RED-5, what the claim must return to the owner
+    qint64  attestFeeZat    = 0;   // v3: AFEE-1
+    bool    noticed         = false;
+    int     noticeHeight    = -1;
+    int     emergencyOpenAt = -1;
 
     static YellowbackClaimable fromJson(const json& j);
+    QString txid() const { return vault.section(':', 0, 0); }
 };
 
 // One row of yed_listattestors (v3 plan §4.8, the Attestors view). `weight` stays the decimal
