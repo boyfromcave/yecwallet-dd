@@ -1665,8 +1665,9 @@ QString YellowbackTab::cookiePathFor(const QString& zcashDir, const QString& net
 // is quoted as a TOML basic string.
 QString YellowbackTab::subscriberConfigToml(const QString& kind, const QString& path, const QString& relays, const QString& peers,
                                             const QString& rpcUrl, const QString& cookieFile, const QString& rpcUser, const QString& rpcPassword) {
-    auto q = [](const QString& v) { QString e = v; e.replace("\\", "\\\\").replace("\"", "\\\""); return "\"" % e % "\""; };
-    auto list = [&](const QString& csv) {
+    // Explicit return types: a deduced one would return a QStringBuilder over a dead local
+    auto q = [](const QString& v) -> QString { QString e = v; e.replace("\\", "\\\\").replace("\"", "\\\""); return "\"" % e % "\""; };
+    auto list = [&](const QString& csv) -> QString {
         QStringList items;
         for (const QString& it : csv.split(',', Qt::SkipEmptyParts)) if (!it.trimmed().isEmpty()) items << q(it.trimmed());
         return "[" % items.join(", ") % "]";
@@ -1730,16 +1731,19 @@ void YellowbackTab::startSubscriber() {
     f.close();
     f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);   // it may carry the RPC password
 
-    if (subscriber == nullptr || subscriber->parent() != this) subscriber = new QProcess(this);
-    QObject::connect(subscriber, &QProcess::stateChanged, this, [=, this](QProcess::ProcessState) { updateSettingsPage(); }, Qt::UniqueConnection);
-    QObject::connect(subscriber, &QProcess::errorOccurred, this, [=, this](QProcess::ProcessError) {
-        uiSettings->lblSubscriberStatus->setText(tr("not running — %1: %2").arg(bin).arg(subscriber->errorString()));
-    }, Qt::UniqueConnection);
-    QObject::connect(subscriber, &QProcess::readyReadStandardError, this, [=, this]() {
-        QString line = QString::fromUtf8(subscriber->readAllStandardError()).trimmed();
+    // A fresh process per start (a finished one is dropped), so the connections are made once
+    if (subscriber != nullptr && subscriber->parent() == this) subscriber->deleteLater();
+    QProcess* proc = new QProcess(this);
+    subscriber = proc;
+    QObject::connect(proc, &QProcess::stateChanged, this, [=, this](QProcess::ProcessState) { if (subscriber == proc) updateSettingsPage(); });
+    QObject::connect(proc, &QProcess::errorOccurred, this, [=, this](QProcess::ProcessError) {
+        if (subscriber == proc) uiSettings->lblSubscriberStatus->setText(tr("not running — %1: %2").arg(bin).arg(proc->errorString()));
+    });
+    QObject::connect(proc, &QProcess::readyReadStandardError, this, [=, this]() {
+        QString line = QString::fromUtf8(proc->readAllStandardError()).trimmed();
         if (main != nullptr && main->logger != nullptr) main->logger->write("yellowback-attest: " + line);
-    }, Qt::UniqueConnection);
-    subscriber->start(bin, QStringList() << "subscribe" << "--conf" << subscriberConfPath);
+    });
+    proc->start(bin, QStringList() << "subscribe" << "--conf" << subscriberConfPath);
     updateSettingsPage();
 }
 
