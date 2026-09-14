@@ -82,6 +82,15 @@ public:
     bool        getYellowbackBackupPending();           // wallet.dat backup nag after a mint
     void        setYellowbackBackupPending(bool pending);
     static int  getYellowbackRpcVersion();              // the rpcversion this build understands
+    // v3: the attestation subscriber's transport (yellowback-attest subscribe), plan §4.8 Settings row.
+    QString     getYellowbackTransportKind();           // "dir" | "iroh"
+    void        setYellowbackTransportKind(const QString& kind);
+    QString     getYellowbackTransportPath();           // dir: the shared directory
+    void        setYellowbackTransportPath(const QString& path);
+    QString     getYellowbackTransportRelays();         // iroh: comma-separated relay URLs
+    void        setYellowbackTransportRelays(const QString& relays);
+    QString     getYellowbackTransportPeers();          // iroh: comma-separated peer ids
+    void        setYellowbackTransportPeers(const QString& peers);
             
     bool    isSaplingActive();
 

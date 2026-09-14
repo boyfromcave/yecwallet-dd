@@ -144,6 +144,38 @@ int Settings::getYellowbackRpcVersion() {
     return YellowbackRpc::RPC_VERSION;
 }
 
+QString Settings::getYellowbackTransportKind() {
+    return QSettings().value("yellowback/transport.kind", "dir").toString();
+}
+
+void Settings::setYellowbackTransportKind(const QString& kind) {
+    QSettings().setValue("yellowback/transport.kind", kind);
+}
+
+QString Settings::getYellowbackTransportPath() {
+    return QSettings().value("yellowback/transport.path", "").toString();
+}
+
+void Settings::setYellowbackTransportPath(const QString& path) {
+    QSettings().setValue("yellowback/transport.path", path);
+}
+
+QString Settings::getYellowbackTransportRelays() {
+    return QSettings().value("yellowback/transport.relays", "").toString();
+}
+
+void Settings::setYellowbackTransportRelays(const QString& relays) {
+    QSettings().setValue("yellowback/transport.relays", relays);
+}
+
+QString Settings::getYellowbackTransportPeers() {
+    return QSettings().value("yellowback/transport.peers", "").toString();
+}
+
+void Settings::setYellowbackTransportPeers(const QString& peers) {
+    QSettings().setValue("yellowback/transport.peers", peers);
+}
+
 bool Settings::getAutoShield() {
     // Load from Qt settings
     return QSettings().value("options/autoshield", false).toBool();

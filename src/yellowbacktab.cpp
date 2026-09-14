@@ -19,6 +19,7 @@
 #include "ui_yellowbacktransactions.h"
 #include "ui_yellowbackredeem.h"
 #include "ui_yellowbacksettings.h"
+#include "ui_yellowbackattestors.h"
 
 using json = nlohmann::json;
 
@@ -56,6 +57,7 @@ YellowbackTab::~YellowbackTab() {
     delete uiTx;
     delete uiRedeem;
     delete uiSettings;
+    delete uiAttestors;
     delete ui;
 }
 
@@ -74,6 +76,7 @@ void YellowbackTab::setupPages() {
     uiTx        = new Ui::YellowbackTransactions(); uiTx->setupUi(pages[Transactions]);
     uiRedeem    = new Ui::YellowbackRedeem();       uiRedeem->setupUi(pages[Redeem]);
     uiSettings  = new Ui::YellowbackSettings();     uiSettings->setupUi(pages[Settings]);
+    uiAttestors = new Ui::YellowbackAttestors();    uiAttestors->setupUi(pages[Attestors]);
 
     ui->subTabs->addTab(pages[Overview],     tr("Overview"));
     ui->subTabs->addTab(pages[Receive],      tr("Receive"));
@@ -83,6 +86,7 @@ void YellowbackTab::setupPages() {
     ui->subTabs->addTab(pages[Claim],        tr("Claim"));
     ui->subTabs->addTab(pages[Transactions], tr("Transactions"));
     ui->subTabs->addTab(pages[Redeem],       tr("Redeem"));
+    ui->subTabs->addTab(pages[Attestors],    tr("Attestors"));
     ui->subTabs->addTab(pages[Settings],     tr("Settings"));
 
     setupOverview();
@@ -93,6 +97,7 @@ void YellowbackTab::setupPages() {
     setupClaim();
     setupTransactions();
     setupRedeem();
+    setupAttestors();
     setupSettings();
 
     // Backup nag
@@ -118,12 +123,16 @@ void YellowbackTab::setController(YellowbackController* controller) {
     uiTx->tblTransactions->setModel(ctl->transactionsModel());
     uiPositions->tblPositions->setModel(ctl->positionsModel());
     uiClaim->tblClaimable->setModel(ctl->claimableModel());
+    uiAttestors->tblAttestors->setModel(ctl->attestorsModel());
 
     QObject::connect(ctl, &YellowbackController::availabilityChanged, this, [=, this](bool, const QString&) {
         updateBanner();
         updateMintGate();
     });
-    QObject::connect(ctl, &YellowbackController::infoUpdated,         this, [=, this]() { updateBanner(); updateOverview(); updateMintClasses(); updateVaultButtons(); });
+    QObject::connect(ctl, &YellowbackController::infoUpdated,         this, [=, this]() { updateBanner(); updateOverview(); updateMintClasses(); updateVaultButtons(); updateAttestors(); });
+    QObject::connect(ctl, &YellowbackController::priceUpdated,        this, [=, this]() { updateOverview(); });
+    QObject::connect(ctl, &YellowbackController::attestorsUpdated,    this, [=, this]() { updateAttestors(); });
+    QObject::connect(ctl, &YellowbackController::selectionUpdated,    this, [=, this]() { updateMintAttest(); });
     QObject::connect(ctl, &YellowbackController::statsUpdated,        this, [=, this]() { updateBanner(); updateOverview(); updateMintGate(); });
     QObject::connect(ctl, &YellowbackController::balanceUpdated,      this, [=, this]() { updateBalances(); });
     QObject::connect(ctl, &YellowbackController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); });
@@ -141,6 +150,8 @@ void YellowbackTab::setController(YellowbackController* controller) {
     updatePositions();
     updateClaimPage();
     updateRedeemPage();
+    updateAttestors();
+    updateMintAttest();
     updateSettingsPage();
 }
 
@@ -291,6 +302,23 @@ void YellowbackTab::updateOverview() {
                                    QString::number(YellowbackJson::toInt(s, Stats::CLOSED_VAULTS)) % " / " %
                                    QString::number(YellowbackJson::toInt(s, Stats::CLAIMED_VAULTS)));
     uiOverview->lblUnbacked->setText(YellowbackFormat::cents(YellowbackJson::toInt(s, Stats::UNBACKED_CENTS)));
+
+    // v3: the two pool cross-section prices and the arming state at the tip, from yed_getprice
+    const json& pr = ctl->price();
+    if (pr.empty()) {
+        uiOverview->lblPoolPrices->setText("-");
+        uiOverview->lblAttestation->setText("-");
+    } else {
+        uiOverview->lblPoolPrices->setText(YellowbackFormat::priceOrUndefined(pr, Price::X_MINT) % " / " %
+                                           YellowbackFormat::priceOrUndefined(pr, Price::X_CLAIM));
+        QString st = YellowbackJson::toStr(pr, Price::ATTEST_STATUS, "-");
+        if (YellowbackJson::toBool(pr, Price::ARMED))
+            uiOverview->lblAttestation->setText(tr("%1 — mints and claims use attested prices").arg(st));
+        else if (st == Attest::STATUS_ARMED)
+            uiOverview->lblAttestation->setText(tr("%1 — attestation layer disabled by parameter set").arg(st));
+        else
+            uiOverview->lblAttestation->setText(tr("%1 — prices come from pool quotes alone").arg(st));
+    }
 
     refreshFundingSources();
 }
@@ -553,6 +581,8 @@ void YellowbackTab::requestEstimate() {
         uiMint->lblUnlock->setText("-");
         uiMint->lblRatio->setText("-");
         uiMint->lblPrice->setText("-");
+        uiMint->lblSource->setText("-");
+        uiMint->lblDivergence->setVisible(false);
         uiMint->lblMintHint->clear();
         updateMintGate();
         return;
@@ -579,6 +609,18 @@ void YellowbackTab::requestEstimate() {
                 .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(e, BASE_RATIO_BPS)))
                 .arg(YellowbackFormat::bpsAsMultiplier(YellowbackJson::toInt(e, SIGMA_MULT_BPS, 10000))));
             uiMint->lblPrice->setText(YellowbackFormat::priceOrUndefined(e, P_MINT) % tr(" per YEC"));
+            // v3: the two source bounds and which one set pMint (display only; the two-step
+            // mint flow and bundle-insufficient handling come with A5-b)
+            QString source = YellowbackJson::toStr(e, SOURCE);
+            if (!YellowbackJson::toBool(e, ARMED) || source.isEmpty())
+                uiMint->lblSource->setText(tr("pools %1 (attestation layer not armed)").arg(YellowbackFormat::priceOrUndefined(e, X_MINT)));
+            else
+                uiMint->lblSource->setText(tr("pools %1, attestors %2 — %3")
+                    .arg(YellowbackFormat::priceOrUndefined(e, X_MINT)).arg(YellowbackFormat::priceOrUndefined(e, A_MINT))
+                    .arg(source == SOURCE_A ? tr("the attestors' price bound the mint") : tr("the pools' price bound the mint")));
+            QString diverged = YellowbackController::describeDivergence(e, ctl->divergeBpsAttest());
+            uiMint->lblDivergence->setText(diverged);
+            uiMint->lblDivergence->setVisible(!diverged.isEmpty());
             // requiredZat is null when pMint is undefined: no estimate, the gate says why
             if (estimateZat < 0) {
                 uiMint->lblCollateral->setText("-");
@@ -606,8 +648,20 @@ void YellowbackTab::requestEstimate() {
             estimateZat = -1;
             uiMint->lblCollateral->setText("-");
             uiMint->lblMintHint->setText(tr("yed_estimatecollateral failed: ") % err);
+            // v3: mint10-diverged is the one refusal with its own banner (§4.8 Mint row)
+            QString diverged = YellowbackController::describeDivergenceError(err, ctl->divergeBpsAttest());
+            uiMint->lblDivergence->setText(diverged);
+            uiMint->lblDivergence->setVisible(!diverged.isEmpty());
             updateMintGate();
         });
+}
+
+// v3: "n of m selected attestors reachable" from yed_getselection at the reference height a
+// mint built now would cite. Display only; A5-b makes the mint action wait on it.
+void YellowbackTab::updateMintAttest() {
+    if (ctl == nullptr) { uiMint->lblSelection->setText("-"); return; }
+    QString line = YellowbackController::describeSelection(ctl->selection());
+    uiMint->lblSelection->setText(line.isEmpty() ? tr("not required (attestation layer not armed)") : line);
 }
 
 void YellowbackTab::doMint() {
@@ -753,6 +807,12 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
         }
         if (p.claimable)
             a.text += " " % tr("This vault is past its claim height and underwater: anyone may claim it by burning its debt.");
+        // v3: a standing claim notice (NOT-1) opens the emergency claim clause after it persists
+        if (p.noticed)
+            a.text += " " % tr("A claim notice stands against it (confirmed at height %1): from reference height %2 a claim may take the collateral under the emergency clause. Redeem or add collateral before then.")
+                                .arg(p.noticeHeight).arg(p.emergencyOpenAt);
+        else if (p.canNotice)
+            a.text += " " % tr("Under the attested prices this node holds it is below the emergency ratio: a claim notice could be posted against it.");
     } else if (p.status == STATUS_CLOSED) {
         a.text = p.unbacked
             ? tr("Closed without its burn at height %1; the %2 minted against it are unbacked.").arg(p.closeHeight).arg(YellowbackFormat::cents(p.mintedCents))
@@ -1135,11 +1195,39 @@ void YellowbackTab::updateRedeemPage() {
     }
 }
 
+// ── Attestors (v3, read-only) ─────────────────────────────────────────────────────────────
+
+void YellowbackTab::setupAttestors() {
+    uiAttestors->tblAttestors->horizontalHeader()->setStretchLastSection(true);
+    uiAttestors->lblArming->setText(tr("Waiting for the node..."));
+}
+
+void YellowbackTab::updateAttestors() {
+    if (ctl == nullptr) return;
+    QString banner = YellowbackController::describeAttest(ctl->attest());
+    uiAttestors->lblArming->setText(banner.isEmpty() ? tr("The node reports no attestation state (an rpcversion 2 node, or not answered yet).") : banner);
+    uiAttestors->tblAttestors->resizeColumnsToContents();
+}
+
 // ── Settings page ─────────────────────────────────────────────────────────────────────────
 
 void YellowbackTab::setupSettings() {
+    uiSettings->cmbTransportKind->addItem(tr("dir (shared directory)"), "dir");
+    uiSettings->cmbTransportKind->addItem(tr("iroh (gossip network)"), "iroh");
+    QObject::connect(uiSettings->cmbTransportKind, &QComboBox::currentIndexChanged, [=, this](int) {
+        bool dir = uiSettings->cmbTransportKind->currentData().toString() == "dir";
+        uiSettings->txtTransportPath->setEnabled(dir);
+        uiSettings->txtTransportRelays->setEnabled(!dir);
+        uiSettings->txtTransportPeers->setEnabled(!dir);
+    });
     updateSettingsPage();
     QObject::connect(uiSettings->btnSave,   &QPushButton::clicked, [=, this]() { saveSettings(); });
+}
+
+QString YellowbackTab::subscriberStatus(const QProcess* p) {
+    if (p == nullptr || p->state() == QProcess::NotRunning) return tr("not running");
+    if (p->state() == QProcess::Starting) return tr("starting");
+    return tr("running (pid %1)").arg(p->processId());
 }
 
 void YellowbackTab::updateSettingsPage() {
@@ -1148,12 +1236,26 @@ void YellowbackTab::updateSettingsPage() {
     uiSettings->chkAdvanced->setChecked(s->getYellowbackAdvanced());
     uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC version %1.").arg(Settings::getYellowbackRpcVersion()) %
         (ctl != nullptr && ctl->isVersionOk() ? tr(" The node matches.") : ""));
+    // v3: the subscriber keeps this node's attestation pool filled; without it a mint cannot
+    // build its bundle while the layer is armed. The launcher is A5-b; the status is read here.
+    uiSettings->lblSubscriberStatus->setText(subscriberStatus(subscriber) %
+        (subscriber == nullptr ? tr(" — the subscriber is started beside the node; until it runs, this node's attestation pool stays empty.") : QString()));
+    int kind = uiSettings->cmbTransportKind->findData(s->getYellowbackTransportKind());
+    uiSettings->cmbTransportKind->setCurrentIndex(kind < 0 ? 0 : kind);
+    emit uiSettings->cmbTransportKind->currentIndexChanged(uiSettings->cmbTransportKind->currentIndex());
+    uiSettings->txtTransportPath->setText(s->getYellowbackTransportPath());
+    uiSettings->txtTransportRelays->setText(s->getYellowbackTransportRelays());
+    uiSettings->txtTransportPeers->setText(s->getYellowbackTransportPeers());
 }
 
 void YellowbackTab::saveSettings() {
     auto s = Settings::getInstance();
     s->setYellowbackUnitCents(uiSettings->chkUnitCents->isChecked());
     s->setYellowbackAdvanced(uiSettings->chkAdvanced->isChecked());
+    s->setYellowbackTransportKind(uiSettings->cmbTransportKind->currentData().toString());
+    s->setYellowbackTransportPath(uiSettings->txtTransportPath->text().trimmed());
+    s->setYellowbackTransportRelays(uiSettings->txtTransportRelays->text().trimmed());
+    s->setYellowbackTransportPeers(uiSettings->txtTransportPeers->text().trimmed());
     if (ctl != nullptr) {
         updateBalances();
         updateOverview();

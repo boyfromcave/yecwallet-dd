@@ -33,7 +33,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 2, "enabled": true, "network": "regtest", "height": 331,
+      "rpcversion": 3, "enabled": true, "network": "regtest", "height": 331,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 1, "healthy": true, "unhealthyReason": "",
       "enforcing": true, "valveTripped": false, "sunset": false, "rejectedBlocks": 0,
@@ -41,6 +41,8 @@ static json infoActive() {
       "activation": {"status": "active", "lockInHeight": 129, "activateHeight": 193, "signalCount": 64, "window": 64},
       "miner": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "signal": true, "quoteKind": "quote",
                 "quoteAgeSeconds": 12, "registered": true, "eligible": true},
+      "attest": {"status": "ARMED", "triggerHeight": 300, "armHeight": 308, "seatedCount": 3, "poolSize": 9,
+                 "poolFresh": 3, "carrierMode": "scriptsig", "required": true, "armed": true},
       "params": {"startHeight": 1, "enforceUntilHeight": 0, "sigmaRefBps": 0, "supplyCapBps": 0, "refLag": 2,
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
                  "tokenValueZat": 10000, "feeZat": 1000, "valveBlocks": 6, "abandonBlocks": 128,
@@ -49,7 +51,10 @@ static json infoActive() {
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000},
                              {"class": "B", "minBlocks": 97, "maxBlocks": 144, "baseRatioBps": 40000},
                              {"class": "C", "minBlocks": 145, "maxBlocks": 240, "baseRatioBps": 30000}],
-                 "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000, "preferredPayee": null}}
+                 "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000, "preferredPayee": null, "preferredAttestor": null},
+                 "attest": {"required": true, "mSelect": 2, "kSlack": 1, "nSlots": 5, "divergeBpsAttest": 1500, "armDelay": 8,
+                            "armMin": 3, "emergencyPersist": 4, "emergencyRatioBps": 10500, "emergencyNoticeTtl": 64,
+                            "carrierMode": "scriptsig", "attestFeeBps": 2500, "attestMaxAge": 8}}
     })");
 }
 
@@ -104,6 +109,47 @@ static json estimateReply() {
       "requiredZat": 25125628141, "termClass": "A", "lockHeight": 380, "claimHeight": 404, "minRatioBps": 50000,
       "baseRatioBps": 50000, "sigmaMultBps": 10000, "pMint": 1990000, "refHeight": 329
     })");
+}
+
+// ── v3 canned replies (contract example values of docs/yellowback-rpc-contract.json) ──────
+
+static json attestorRow() {
+    return json::parse(R"({
+      "seq": 1, "status": "ELIGIBLE", "statusHeight": 288,
+      "attestorPubKey": "03b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8e9f0",
+      "bondAddress": "smExampleBondAddress11111111111111111", "bondKeyAddress": "smExampleBondKeyAddr11111111111111111",
+      "bondLocktime": 500, "bondOutpoint": {"txid": "7b2c3d4e5f60718293a4b5c6d7e8f9001a2b3c4d5e6f708192a3b4c5d6e7f809", "vout": 0},
+      "bondSpentHeight": null, "bondZat": 1000000000, "flags": {"pool": false, "tier": 0}, "founding": true,
+      "lastBundleHeight": 330, "pinned": false, "poolFresh": true, "registerHeight": 280, "seated": true,
+      "seatedSince": 300, "weight": "31000000000"
+    })");
+}
+
+static json priceReply() {
+    return json::parse(R"({
+      "height": 331, "pFast": 2000000, "pMid": 2000000, "pSlow": 1990000, "pMint": 1990000, "pClaim": 2000000,
+      "xMint": 1990000, "xClaim": 2000000, "armed": true, "attestStatus": "ARMED",
+      "seated": [1, 2, 3], "pinnedSeqs": [3], "pinnedKeys": ["smQvTmAz2ExamplePayoutAddress1111111"],
+      "fill": {"fast": {"window": 8, "minFill": 4, "quoteTags": 8}},
+      "tag": {"found": true, "kind": "quote", "priceMicroUsd": 2000000, "signal": true, "sourceMask": 3, "version": 1,
+              "payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111"}
+    })");
+}
+
+static json selectionReply() {
+    return json::parse(R"({
+      "refHeight": 329, "armed": true, "mSelect": 2, "kSlack": 1, "pool": [1, 2, 3], "fallback": false,
+      "selector": "", "sumWeight": "93000000000", "reachable": 2,
+      "selected": [{"seq": 2, "status": "ELIGIBLE", "weight": "31000000000", "bondKeyAddress": "smExampleBondKeyAddr11111111111111111", "poolFresh": true},
+                   {"seq": 1, "status": "ELIGIBLE", "weight": "31000000000", "bondKeyAddress": "smExampleBondKeyAddr11111111111111111", "poolFresh": true}]
+    })");
+}
+
+static json estimateReplyArmed() {
+    json e = estimateReply();
+    e["xMint"] = 1990000; e["aMint"] = 1985000; e["pMint"] = 1985000; e["source"] = "a"; e["armed"] = true;
+    e["bundleSeqs"] = json::array({1, 2}); e["attestFeeZat"] = 15703517; e["divergenceBps"] = 25;
+    return e;
 }
 
 static json feePayeeReply() {
@@ -229,6 +275,8 @@ struct Harness {
         return l != nullptr && !l->isHidden();
     }
     QPushButton* button(const char* name) { return tab.findChild<QPushButton*>(name); }
+    // The Mint page's estimate is debounced (400 ms): type the amount, then wait for the reply
+    void estimateFor(const QString& amount) { mintAmount(amount); QTest::qWait(600); }
 };
 
 // The devnet transport: synchronous JSON-RPC over HTTP to node 0 (the QTest has no MainWindow,
@@ -361,9 +409,9 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsTwo() {
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 2);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 2);
+    void contractVersionIsThree() {
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 3);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 3);
     }
 
     // ── Helpers and records ───────────────────────────────────────────────────────────────
@@ -447,11 +495,11 @@ private slots:
     void bannerUnavailableOnVersionMismatch() {
         Harness h;
         json info = infoActive();
-        info["rpcversion"] = 1;
+        info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
+        QVERIFY(h.label("lblBanner").contains("version 3"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
-        QVERIFY(h.label("lblBanner").contains("version 1"));
     }
 
     void bannerUnavailableWhileNotAtTip() {
@@ -1235,6 +1283,269 @@ private slots:
     // ── Devnet end-to-end (N28): mint → send → redeem against a running devnet ────────────
     // YELLOWBACK_DEVNET_DIR is the devnet's --dir; node0/ycash.conf holds the RPC port and
     // credentials the wallet would read through --conf.
+
+    // ── v3 (plan §4.8, Phase A5-a): read-only views over the rpcversion 3 contract ────────
+
+    void attestorsPageExists() {
+        YellowbackTab tab(nullptr);
+        auto sub = tab.findChild<QTabWidget*>("subTabs");
+        QCOMPARE(sub->tabText(YellowbackTab::Attestors), QString("Attestors"));
+        QCOMPARE(sub->tabText(YellowbackTab::Settings), QString("Settings"));
+        QVERIFY(tab.page(YellowbackTab::Attestors)->findChild<QTableView*>("tblAttestors") != nullptr);
+    }
+
+    void parsesAttestorRecord() {
+        auto a = YellowbackAttestor::fromJson(attestorRow());
+        QCOMPARE(a.seq, 1);
+        QCOMPARE(a.status, QString("ELIGIBLE"));
+        QCOMPARE(a.bondZat, (qint64)1000000000);
+        QCOMPARE(a.bondLocktime, 500);
+        QCOMPARE(a.bondSpentHeight, -1);          // null
+        QCOMPARE(a.weight, QString("31000000000"));
+        QVERIFY(a.seated && !a.pinned && a.founding && a.poolFresh);
+        QCOMPARE(a.seatedSince, 300);
+        QCOMPARE(a.tier, 0);
+        QVERIFY(!a.pool);
+        QCOMPARE(a.lastBundleHeight, 330);
+        auto e = YellowbackAttestor::fromJson(json::object());   // missing fields degrade, never throw
+        QCOMPARE(e.seq, 0);
+        QCOMPARE(e.seatedSince, -1);
+    }
+
+    void attestorsTableRenders() {
+        Harness h;
+        h.feedActive();
+        json pinned = attestorRow();
+        pinned["seq"] = 3; pinned["pinned"] = true; pinned["founding"] = false; pinned["poolFresh"] = false;
+        pinned["flags"] = json{{"tier", 2}, {"pool", true}}; pinned["lastBundleHeight"] = nullptr; pinned["seatedSince"] = nullptr;
+        pinned["seated"] = false; pinned["status"] = "DORMANT";
+        h.ctl.feedAttest(json(nullptr), json::array({attestorRow(), pinned}), json(nullptr));
+        auto m = h.ctl.attestorsModel();
+        using M = YellowbackAttestorsModel;
+        QCOMPARE(m->rowCount(QModelIndex()), 2);
+        QCOMPARE(m->data(m->index(0, M::Seq), Qt::DisplayRole).toString(), QString("1"));
+        QCOMPARE(m->data(m->index(0, M::Status), Qt::DisplayRole).toString(), QString("ELIGIBLE"));
+        QCOMPARE(m->data(m->index(0, M::Seated), Qt::DisplayRole).toString(), QString("seated"));
+        QCOMPARE(m->data(m->index(0, M::Bond), Qt::DisplayRole).toString(), YellowbackFormat::zec(1000000000) % " (500)");
+        QCOMPARE(m->data(m->index(0, M::Weight), Qt::DisplayRole).toString(), QString("31000000000"));
+        QCOMPARE(m->data(m->index(0, M::SeatedSince), Qt::DisplayRole).toString(), QString("300"));
+        QCOMPARE(m->data(m->index(0, M::Founding), Qt::DisplayRole).toString(), QString("yes"));
+        QCOMPARE(m->data(m->index(0, M::Sources), Qt::DisplayRole).toString(), QString("exchange APIs"));
+        QCOMPARE(m->data(m->index(0, M::LastBundle), Qt::DisplayRole).toString(), QString("330"));
+        QCOMPARE(m->data(m->index(0, M::PoolFresh), Qt::DisplayRole).toString(), QString("fresh"));
+        // The pinned, dormant aggregator that also runs a pool, never in a bundle, never seated
+        QCOMPARE(m->data(m->index(1, M::Seated), Qt::DisplayRole).toString(), QString("pinned"));
+        QCOMPARE(m->data(m->index(1, M::Status), Qt::DisplayRole).toString(), QString("DORMANT"));
+        QCOMPARE(m->data(m->index(1, M::Sources), Qt::DisplayRole).toString(), QString("aggregator, pool"));
+        QCOMPARE(m->data(m->index(1, M::LastBundle), Qt::DisplayRole).toString(), QString("-"));
+        QCOMPARE(m->data(m->index(1, M::SeatedSince), Qt::DisplayRole).toString(), QString("-"));
+        QCOMPARE(m->data(m->index(1, M::Founding), Qt::DisplayRole).toString(), QString("no"));
+        QCOMPARE(m->data(m->index(1, M::PoolFresh), Qt::DisplayRole).toString(), QString("no"));
+        QVERIFY(m->data(m->index(0, M::Seated), Qt::ToolTipRole).toString().contains("pinned"));
+        // The refresh a feedActive() primes also asks for the three v3 lists
+        h.ctl.refresh(true);
+        QCOMPARE(h.rpc.count(YellowbackRpc::LISTATTESTORS), 1);
+        QCOMPARE(h.rpc.count(YellowbackRpc::GETPRICE), 1);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETSELECTION), json::array({329, ""}));   // refHeightNow(), empty selector
+    }
+
+    void armingBannerArmed() {
+        Harness h;
+        h.feedActive();   // the canned yed_getinfo.attest is ARMED since 308, 3 seated, 3 fresh
+        QString b = h.label("lblArming");
+        QVERIFY2(b.startsWith("ARMED since 308"), qPrintable(b));
+        QVERIFY(b.contains("3 attestor(s) seated"));
+        QVERIFY(b.contains("fresh attestations from 3"));
+        QVERIFY(b.contains("both pools and attestors signed off on"));
+        QVERIFY(!b.contains("trustless", Qt::CaseInsensitive) && !b.contains("verified", Qt::CaseInsensitive));
+    }
+
+    void armingBannerTriggered() {
+        Harness h;
+        json info = infoActive();
+        info["attest"] = json::parse(R"({"status": "TRIGGERED", "triggerHeight": 300, "armHeight": 308, "seatedCount": 3,
+                                          "poolSize": 0, "poolFresh": 0, "carrierMode": "scriptsig", "required": true, "armed": false})");
+        h.feed(info, statsOpen(), activationActive());
+        QVERIFY2(h.label("lblArming").startsWith("TRIGGERED at 300, arms at 308"), qPrintable(h.label("lblArming")));
+    }
+
+    void armingBannerUnarmed() {
+        Harness h;
+        json info = infoActive();
+        info["attest"] = json::parse(R"({"status": "UNARMED", "triggerHeight": 0, "armHeight": 0, "seatedCount": 1,
+                                          "poolSize": 0, "poolFresh": 0, "carrierMode": "scriptsig", "required": true, "armed": false})");
+        h.feed(info, statsOpen(), activationActive());
+        QVERIFY2(h.label("lblArming").startsWith("UNARMED"), qPrintable(h.label("lblArming")));
+        QVERIFY(h.label("lblArming").contains("pool quotes alone"));
+    }
+
+    void armingBannerDisabledByParameterSet() {
+        // required=false: every bundle-reading rule is vacuous whatever the status says (W15)
+        Harness h;
+        json info = infoActive();
+        info["attest"]["required"] = false; info["attest"]["armed"] = false;
+        h.feed(info, statsOpen(), activationActive());
+        QVERIFY2(h.label("lblArming").startsWith("Attestation layer disabled by parameter set"), qPrintable(h.label("lblArming")));
+        // An rpcversion 2 node without the block: said so, never a crash
+        QCOMPARE(YellowbackController::describeAttest(json::object()), QString());
+        info.erase("attest");
+        h.feed(info);
+        QVERIFY(h.label("lblArming").contains("no attestation state"));
+    }
+
+    void overviewSourcePricesArmed() {
+        Harness h;
+        h.feedActive();
+        QCOMPARE(h.label("lblPoolPrices"), QString("-"));      // before yed_getprice answered
+        h.ctl.feedAttest(priceReply(), json(nullptr), json(nullptr));
+        QCOMPARE(h.label("lblPoolPrices"), QString("$1.9900 / $2.0000"));
+        QVERIFY2(h.label("lblAttestation").startsWith("ARMED"), qPrintable(h.label("lblAttestation")));
+        QVERIFY(h.label("lblAttestation").contains("attested prices"));
+    }
+
+    void overviewSourcePricesUnarmed() {
+        Harness h;
+        h.feedActive();
+        json p = priceReply();
+        p["armed"] = false; p["attestStatus"] = "UNARMED"; p["xMint"] = nullptr; p["pMint"] = nullptr;
+        h.ctl.feedAttest(p, json(nullptr), json(nullptr));
+        QCOMPARE(h.label("lblPoolPrices"), QString("undefined / $2.0000"));
+        QVERIFY(h.label("lblAttestation").startsWith("UNARMED"));
+        QVERIFY(h.label("lblAttestation").contains("pool quotes alone"));
+        // ARMED but not required: the parameter set disabled the layer
+        p["attestStatus"] = "ARMED";
+        h.ctl.feedAttest(p, json(nullptr), json(nullptr));
+        QVERIFY(h.label("lblAttestation").contains("disabled by parameter set"));
+    }
+
+    void mintSelectionLine() {
+        Harness h;
+        h.feedActive();
+        QVERIFY2(h.label("lblSelection").contains("not armed"), qPrintable(h.label("lblSelection")));
+        h.ctl.feedAttest(json(nullptr), json(nullptr), selectionReply());
+        QCOMPARE(h.label("lblSelection"), QString("2 of 2 selected attestors reachable"));
+        // One selected attestor missing from the pool: below mSelect, the line says what it waits for
+        json sel = selectionReply();
+        sel["reachable"] = 1; sel["selected"][1]["poolFresh"] = false;
+        h.ctl.feedAttest(json(nullptr), json(nullptr), sel);
+        QVERIFY2(h.label("lblSelection").startsWith("1 of 2 selected attestors reachable"), qPrintable(h.label("lblSelection")));
+        QVERIFY(h.label("lblSelection").contains("a mint needs 2"));
+        // Not armed at the reference height: nothing to count
+        sel["armed"] = false;
+        h.ctl.feedAttest(json(nullptr), json(nullptr), sel);
+        QVERIFY(h.label("lblSelection").contains("not armed"));
+        QCOMPARE(YellowbackController::describeSelection(json::object()), QString());
+    }
+
+    void mintEstimateShowsSourceBound() {
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReplyArmed();
+        h.estimateFor("1000");
+        QCOMPARE(h.label("lblPrice"), QString("$1.9850 per YEC"));
+        QString src = h.label("lblSource");
+        QVERIFY2(src.contains("pools $1.9900, attestors $1.9850"), qPrintable(src));
+        QVERIFY(src.contains("the attestors' price bound the mint"));
+        QVERIFY(!h.visible("lblDivergence"));     // 25 bps, well under divergeBpsAttest 1500
+        // The pools' bound
+        json e = estimateReplyArmed(); e["source"] = "x"; e["aMint"] = 1995000; e["pMint"] = 1990000;
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+        h.estimateFor("1100");
+        QVERIFY(h.label("lblSource").contains("the pools' price bound the mint"));
+        // Not armed: the v2 reply, one source
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
+        h.estimateFor("1200");
+        QVERIFY2(h.label("lblSource").contains("attestation layer not armed"), qPrintable(h.label("lblSource")));
+    }
+
+    void mintDivergencePausesMinting() {
+        Harness h;
+        h.feedActive();
+        // divergenceBps above params.attest.divergeBpsAttest (1500): the mint10-diverged banner
+        json e = estimateReplyArmed(); e["divergenceBps"] = 1800;
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+        h.estimateFor("1000");
+        QVERIFY(h.visible("lblDivergence"));
+        QCOMPARE(h.label("lblDivergence"), QString("pools and attestors disagree by 18.00 %; minting paused"));
+        // The node itself refusing the estimate with mint10-diverged
+        h.rpc.results.remove(YellowbackRpc::ESTIMATECOLLATERAL);
+        h.rpc.errors[YellowbackRpc::ESTIMATECOLLATERAL] = "mint10-diverged: xMint 1990000 aMint 2400000";
+        h.estimateFor("1100");
+        QVERIFY(h.visible("lblDivergence"));
+        QVERIFY2(h.label("lblDivergence").contains("disagree by more than 15.00 %; minting paused"), qPrintable(h.label("lblDivergence")));
+        QVERIFY(h.label("lblMintHint").contains("mint10-diverged"));   // the identifier stays verbatim
+        QVERIFY(!h.button("btnMint")->isEnabled());
+        // A null divergence (a source undefined) is not a divergence
+        QCOMPARE(YellowbackController::describeDivergence(json::parse(R"({"divergenceBps": null})"), 1500), QString());
+        QCOMPARE(YellowbackController::describeDivergenceError("bundle-insufficient: 1 of 2", 1500), QString());
+    }
+
+    void vaultsRenderNoticedRow() {
+        Harness h;
+        json p = positionActive();
+        p["noticed"] = true; p["noticeHeight"] = 338; p["emergencyOpenAt"] = 342; p["canNotice"] = false;
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({p}));
+        auto m = h.ctl.positionsModel();
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Notice), Qt::DisplayRole).toString(), QString("noticed, emergency claim from 342"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Notice), Qt::ToolTipRole).toString().contains("height 338"));
+        auto pos = YellowbackPosition::fromJson(p);
+        QVERIFY(pos.noticed && !pos.canNotice);
+        QCOMPARE(pos.noticeHeight, 338);
+        QCOMPARE(pos.emergencyOpenAt, 342);
+        auto a = YellowbackTab::vaultActions(pos, 339, false);
+        QVERIFY2(a.text.contains("A claim notice stands against it (confirmed at height 338)"), qPrintable(a.text));
+        QVERIFY(a.text.contains("from reference height 342"));
+        // The contract's plain row: no notice
+        h.feed(json(nullptr), json(nullptr), json(nullptr), json::array({positionActive()}));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Notice), Qt::DisplayRole).toString(), QString("-"));
+        QCOMPARE(YellowbackPosition::fromJson(positionActive()).emergencyOpenAt, -1);
+    }
+
+    void vaultsRenderCanNoticeRow() {
+        Harness h;
+        json p = positionActive();
+        p["canNotice"] = true;
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({p}));
+        auto m = h.ctl.positionsModel();
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Notice), Qt::DisplayRole).toString(), QString("notice possible"));
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, false);
+        QVERIFY2(a.text.contains("a claim notice could be posted"), qPrintable(a.text));
+        QVERIFY(!a.text.contains("trustless", Qt::CaseInsensitive));
+    }
+
+    void settingsSubscriberStatusAndTransport() {
+        Harness h;
+        // No launcher yet (A5-b): the status reads from a null process, and from an unstarted one
+        QCOMPARE(YellowbackTab::subscriberStatus(nullptr), QString("not running"));
+        QProcess idle;
+        QCOMPARE(YellowbackTab::subscriberStatus(&idle), QString("not running"));
+        QVERIFY2(h.label("lblSubscriberStatus").startsWith("not running"), qPrintable(h.label("lblSubscriberStatus")));
+        h.tab.setSubscriberProcess(&idle);
+        QCOMPARE(h.label("lblSubscriberStatus"), QString("not running"));
+
+        // The transport config round-trips through Settings
+        auto page = h.tab.page(YellowbackTab::Settings);
+        auto kind = page->findChild<QComboBox*>("cmbTransportKind");
+        QVERIFY(kind != nullptr);
+        kind->setCurrentIndex(kind->findData("iroh"));
+        page->findChild<QLineEdit*>("txtTransportRelays")->setText("https://relay.example ");
+        page->findChild<QLineEdit*>("txtTransportPeers")->setText("peer1,peer2");
+        page->findChild<QLineEdit*>("txtTransportPath")->setText("/tmp/attest-dir");
+        QVERIFY(!page->findChild<QLineEdit*>("txtTransportPath")->isEnabled());      // dir-only field under iroh
+        QVERIFY(page->findChild<QLineEdit*>("txtTransportRelays")->isEnabled());
+        h.button("btnSave")->click();
+        auto s = Settings::getInstance();
+        QCOMPARE(s->getYellowbackTransportKind(), QString("iroh"));
+        QCOMPARE(s->getYellowbackTransportRelays(), QString("https://relay.example"));
+        QCOMPARE(s->getYellowbackTransportPeers(), QString("peer1,peer2"));
+        QCOMPARE(s->getYellowbackTransportPath(), QString("/tmp/attest-dir"));
+        // A fresh tab reads them back
+        Harness h2;
+        auto page2 = h2.tab.page(YellowbackTab::Settings);
+        QCOMPARE(page2->findChild<QComboBox*>("cmbTransportKind")->currentData().toString(), QString("iroh"));
+        QCOMPARE(page2->findChild<QLineEdit*>("txtTransportPeers")->text(), QString("peer1,peer2"));
+        s->setYellowbackTransportKind("dir"); s->setYellowbackTransportRelays(""); s->setYellowbackTransportPeers(""); s->setYellowbackTransportPath("");
+    }
 
     void devnetEndToEnd() {
         QString dir = qEnvironmentVariable("YELLOWBACK_DEVNET_DIR");

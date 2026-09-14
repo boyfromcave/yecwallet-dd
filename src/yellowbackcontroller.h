@@ -43,6 +43,8 @@ public:
     // emitting the same signals. No Connection is touched. Pass json(nullptr) to skip one.
     void feed(const json& info, const json& stats, const json& activation,
               const json& balance, const json& positions, const json& claimable, const json& transactions);
+    // v3: the same for yed_getprice, yed_listattestors and yed_getselection.
+    void feedAttest(const json& price, const json& attestors, const json& selection);
 
     // ── Availability (status banner) ──────────────────────────────────────────────────────
     // "available" means: node answers yed_getinfo, enabled, rpcversion matches, synced and healthy.
@@ -68,6 +70,9 @@ public:
     const json& stats() const { return statsJson; }             // yed_getstats
     const json& activation() const { return activationJson; }   // yed_getactivation
     const json& params() const { return paramsJson; }           // yed_getinfo.params
+    const json& attest() const;                                 // v3: yed_getinfo.attest (empty object until answered)
+    const json& price() const { return priceJson; }             // v3: yed_getprice at the tip
+    const json& selection() const { return selectionJson; }     // v3: yed_getselection at refHeightNow()
     bool    isAbandoned() const;                                // yed_getinfo.abandoned (L10)
     bool    isEnforcing() const;                                // yed_getinfo.enforcing
     qint64  confirmedCents() const { return confirmed; }
@@ -82,6 +87,7 @@ public:
     YellowbackPositionsModel* positionsModel() { return positions; }
     YellowbackClaimableModel* claimableModel() { return claimable; }
     YellowbackTxModel*        transactionsModel() { return transactions; }
+    YellowbackAttestorsModel* attestorsModel() { return attestors; }   // v3
 
     // ── Protocol parameters: yed_getinfo.params when present, else the compiled-in defaults ─
     qint64  minMintCents() const;
@@ -92,6 +98,18 @@ public:
     // Term classes from yed_getinfo.params.classes, in class order (empty until the node answered)
     struct TermClass { QString name; int minBlocks = 0; int maxBlocks = 0; qint64 baseRatioBps = 0; };
     QList<TermClass> termClasses() const;
+
+    // ── v3 attestation layer (plan §4.8), pure functions of the replies so the QTest reads them ──
+    // The arming banner: "UNARMED" / "TRIGGERED at h, arms at h'" / "ARMED", or the disabled
+    // sentence when `required` is false. Empty until the node has answered.
+    static QString describeAttest(const json& attest);
+    // "n of m selected attestors reachable" from yed_getselection; empty while not armed.
+    static QString describeSelection(const json& selection);
+    // The mint10-diverged sentence when an estimate's divergenceBps exceeds params.attest
+    // .divergeBpsAttest (or the node already refused with mint10-diverged); empty otherwise.
+    static QString describeDivergence(const json& estimate, qint64 divergeBpsAttest);
+    static QString describeDivergenceError(const QString& errorMessage, qint64 divergeBpsAttest);
+    qint64  divergeBpsAttest() const;             // params.attest.divergeBpsAttest, 0 when unknown
 
     // ── Mint gate: empty string when a mint of `cents` is allowed, else the reason ─────────
     // MINTPOL-1 as yed_getstats reports it: mintingAllowed, and every haltMask name by name.
@@ -148,6 +166,9 @@ signals:
     void positionsUpdated();
     void claimableUpdated();
     void transactionsUpdated();
+    void priceUpdated();          // v3
+    void attestorsUpdated();      // v3
+    void selectionUpdated();      // v3
 
 private:
     void applyInfo(const json& info);
@@ -157,12 +178,18 @@ private:
     void applyPositions(const json& arr);
     void applyClaimable(const json& arr);
     void applyTransactions(const json& arr);
+    void applyPrice(const json& p);
+    void applyAttestors(const json& arr);
+    void applySelection(const json& s);
     void refreshStats();
     void refreshActivation();
     void refreshBalance();
     void refreshPositions();
     void refreshClaimable();
     void refreshTransactions();
+    void refreshPrice();
+    void refreshAttestors();
+    void refreshSelection();
     void setAvailability(bool avail, const QString& why);
     void log(const QString& line);
 
@@ -173,6 +200,7 @@ private:
     YellowbackPositionsModel* positions    = nullptr;
     YellowbackClaimableModel* claimable    = nullptr;
     YellowbackTxModel*        transactions = nullptr;
+    YellowbackAttestorsModel* attestors    = nullptr;
 
     bool    available   = false;
     bool    enabled     = false;
@@ -190,6 +218,8 @@ private:
     json    statsJson      = json::object();
     json    activationJson = json::object();
     json    paramsJson     = json::object();
+    json    priceJson      = json::object();
+    json    selectionJson  = json::object();
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
 };

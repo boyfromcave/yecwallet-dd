@@ -27,6 +27,7 @@ YellowbackController::YellowbackController(MainWindow* main, Controller* rpc) : 
     positions    = new YellowbackPositionsModel(this);
     claimable    = new YellowbackClaimableModel(this);
     transactions = new YellowbackTxModel(this);
+    attestors    = new YellowbackAttestorsModel(this);
 
     reason = tr("Not connected to ycashd yet.");
 }
@@ -202,6 +203,9 @@ void YellowbackController::refresh(bool force) {
                 refreshPositions();
                 refreshClaimable();
                 refreshTransactions();
+                refreshPrice();
+                refreshAttestors();
+                refreshSelection();
             }
         },
         [=, this](const QString& e) {
@@ -220,6 +224,110 @@ void YellowbackController::feed(const json& info, const json& stats, const json&
     if (!positionsArr.is_null())    applyPositions(positionsArr);
     if (!claimableArr.is_null())    applyClaimable(claimableArr);
     if (!transactionsArr.is_null()) applyTransactions(transactionsArr);
+}
+
+void YellowbackController::feedAttest(const json& price, const json& attestorsArr, const json& selection) {
+    if (!price.is_null())        applyPrice(price);
+    if (!attestorsArr.is_null()) applyAttestors(attestorsArr);
+    if (!selection.is_null())    applySelection(selection);
+}
+
+void YellowbackController::applyPrice(const json& p) {
+    priceJson = p.is_object() ? p : json::object();
+    emit priceUpdated();
+}
+
+void YellowbackController::applyAttestors(const json& arr) {
+    QList<YellowbackAttestor> list;
+    if (arr.is_array())
+        for (auto& it : arr) list.append(YellowbackAttestor::fromJson(it));
+    attestors->setNewData(list, indexHeight);
+    emit attestorsUpdated();
+}
+
+void YellowbackController::applySelection(const json& s) {
+    selectionJson = s.is_object() ? s : json::object();
+    emit selectionUpdated();
+}
+
+void YellowbackController::refreshPrice() {
+    call(YellowbackRpc::GETPRICE, json(nullptr),
+        [=, this](const json& p) { applyPrice(p); },
+        [=, this](const QString& e) { log("yed_getprice: " + e); });
+}
+
+void YellowbackController::refreshAttestors() {
+    call(YellowbackRpc::LISTATTESTORS, json(nullptr),
+        [=, this](const json& arr) { applyAttestors(arr); },
+        [=, this](const QString& e) { log("yed_listattestors: " + e); });
+}
+
+void YellowbackController::refreshSelection() {
+    // A MINT built now cites refHeightNow() with the empty selector (W9), as yed_estimatecollateral does.
+    call(YellowbackRpc::GETSELECTION, json::array({refHeightNow(), ""}),
+        [=, this](const json& s) { applySelection(s); },
+        [=, this](const QString& e) { log("yed_getselection: " + e); });
+}
+
+const json& YellowbackController::attest() const {
+    return YellowbackJson::obj(infoJson, YellowbackRpc::Info::ATTEST);
+}
+
+qint64 YellowbackController::divergeBpsAttest() const {
+    return YellowbackJson::toInt(YellowbackJson::obj(paramsJson, YellowbackRpc::Params::ATTEST),
+                                 YellowbackRpc::ParamsAttest::DIVERGE_BPS_ATTEST, 0);
+}
+
+// ── v3 attestation layer: banner, selection line, divergence (plan §4.8) ──────────────────
+
+QString YellowbackController::describeAttest(const json& attest) {
+    using namespace YellowbackRpc::Attest;
+    if (!attest.is_object() || attest.empty()) return QString();
+    // `required` false: every bundle-reading rule is vacuous whatever the status says (W15)
+    if (!YellowbackJson::toBool(attest, REQUIRED, true))
+        return tr("Attestation layer disabled by parameter set: prices come from pool quotes alone.");
+    QString status = YellowbackJson::toStr(attest, STATUS);
+    if (status == STATUS_UNARMED)
+        return tr("UNARMED: prices come from pool quotes alone; %1 attestor(s) seated, the layer arms once enough bonds have matured.")
+                   .arg(YellowbackJson::toInt(attest, SEATED_COUNT));
+    if (status == STATUS_TRIGGERED)
+        return tr("TRIGGERED at %1, arms at %2: from then on every mint and claim carries an attested price.")
+                   .arg(YellowbackJson::toInt(attest, TRIGGER_HEIGHT)).arg(YellowbackJson::toInt(attest, ARM_HEIGHT));
+    if (status == STATUS_ARMED)
+        return tr("ARMED since %1: every mint and claim carries a price both pools and attestors signed off on. "
+                  "%2 attestor(s) seated; this node's pool holds fresh attestations from %3 of them.")
+                   .arg(YellowbackJson::toInt(attest, ARM_HEIGHT))
+                   .arg(YellowbackJson::toInt(attest, SEATED_COUNT)).arg(YellowbackJson::toInt(attest, POOL_FRESH));
+    return status;
+}
+
+QString YellowbackController::describeSelection(const json& selection) {
+    using namespace YellowbackRpc::Selection;
+    if (!selection.is_object() || selection.empty()) return QString();
+    if (!YellowbackJson::toBool(selection, ARMED)) return QString();
+    int selected = selection.find(SELECTED) != selection.end() && selection[SELECTED].is_array() ? (int)selection[SELECTED].size() : 0;
+    int reachable = (int)YellowbackJson::toInt(selection, REACHABLE);
+    int need = (int)YellowbackJson::toInt(selection, M_SELECT);
+    QString line = tr("%1 of %2 selected attestors reachable").arg(reachable).arg(selected);
+    if (reachable < need)
+        line += tr(" (a mint needs %1: waiting for the subscriber to fill the pool)").arg(need);
+    return line;
+}
+
+QString YellowbackController::describeDivergence(const json& estimate, qint64 divergeBpsAttest) {
+    using namespace YellowbackRpc::Estimate;
+    if (YellowbackJson::isNull(estimate, DIVERGENCE_BPS) || divergeBpsAttest <= 0) return QString();
+    qint64 bps = YellowbackJson::toInt(estimate, DIVERGENCE_BPS);
+    if (bps <= divergeBpsAttest) return QString();
+    return tr("pools and attestors disagree by %1 %; minting paused").arg(QString::number(bps / 100.0, 'f', 2));
+}
+
+QString YellowbackController::describeDivergenceError(const QString& errorMessage, qint64 divergeBpsAttest) {
+    if (!errorMessage.startsWith(YellowbackRpc::Errors::MINT10_DIVERGED)) return QString();
+    // The message carries no number the contract fixes; the threshold is what the user can act on.
+    return divergeBpsAttest > 0
+        ? tr("pools and attestors disagree by more than %1 %; minting paused").arg(QString::number(divergeBpsAttest / 100.0, 'f', 2))
+        : tr("pools and attestors disagree; minting paused");
 }
 
 void YellowbackController::applyStats(const json& s) {

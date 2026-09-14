@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>YellowbackAttestors</class>
+ <widget class="QWidget" name="YellowbackAttestors">
+  <layout class="QVBoxLayout" name="attestorsLayout">
+   <item>
+    <widget class="QLabel" name="lblArming">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string notr="true">QLabel { background-color: #eef3fb; color: #1f3a5f; border: 1px solid #b9cbe6; padding: 6px; }</string></property>
+     <property name="text"><string>-</string></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblAttestorsIntro">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>Attestors are bonded price reporters. Once the layer is armed, every mint and claim carries a bundle of their signed attestations next to the pool quotes, and the price used is the one both sources signed off on. This table is read-only: registering, signing and withdrawing are done by the yellowback-attest agent beside the node.</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableView" name="tblAttestors">
+     <property name="selectionMode"><enum>QAbstractItemView::SingleSelection</enum></property>
+     <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblAttestorsNote">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string>"Seated" attestors are the ones a bundle may draw from at this height; "pinned" ones are excluded for now because their attestations sit too far from the pool quotes. "In pool" says whether this node's own subscriber has a fresh attestation from that attestor. Hover a cell for details.</string></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
