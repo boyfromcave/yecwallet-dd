@@ -46,6 +46,13 @@ constexpr const char* CLAIM               = "yed_claim";
 constexpr const char* SWEEP               = "yed_sweep";
 constexpr const char* LISTPOSITIONS       = "yed_listpositions";
 constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
+// v3 (plan §4.8, A5-b): the two-step notice, the carrier sweep and the attestor actions
+constexpr const char* CLAIMNOTICE         = "yed_claimnotice";        // step 1 of the emergency claim (NOT-1)
+constexpr const char* SWEEPCARRIERS       = "yed_sweepcarriers";      // reclaim lapsed carriers (W7)
+constexpr const char* REGISTERATTESTOR    = "yed_registerattestor";
+constexpr const char* WITHDRAWBOND        = "yed_withdrawbond";
+constexpr const char* REVIVE              = "yed_revive";
+constexpr const char* REPORTEQUIVOCATION  = "yed_reportequivocation";
 
 // ── yed_getinfo result ─────────────────────────────────────────────────────────────────────
 namespace Info {   // contract: yed_getinfo
@@ -148,6 +155,9 @@ namespace ParamsAttest {   // contract: yed_getinfo.params.attest
     constexpr const char* ARM_MIN             = "armMin";
     constexpr const char* EMERGENCY_PERSIST   = "emergencyPersist";
     constexpr const char* CARRIER_MODE        = "carrierMode";
+    constexpr const char* BOND_MIN_ZAT        = "bondMinZat";       // A5-b: the register dialog states them
+    constexpr const char* BOND_MIN_LOCK       = "bondMinLock";
+    constexpr const char* BOND_MATURITY       = "bondMaturity";
 }
 
 namespace ParamClass {   // contract: yed_getinfo.params.classes[]
@@ -265,6 +275,12 @@ namespace Claimable {   // contract: yed_listclaimable[]
     constexpr const char* CLAIM_HEIGHT      = "claimHeight";
     constexpr const char* UNDERWATER_AT     = "underwaterAt";
     constexpr const char* P_CLAIM           = "pClaim";
+    constexpr const char* CLAIM_PATH        = "claimPath";     // v3: "a" | "b" | "" (no bundle could be built)
+    constexpr const char* RESIDUAL_ZAT      = "residualZat";   // v3: RED-5, returned to the owner by the claim
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";  // v3: AFEE-1
+    constexpr const char* NOTICED           = "noticed";       // v3
+    constexpr const char* NOTICE_HEIGHT     = "noticeHeight";  // v3: null unless noticed
+    constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: null unless noticed
 }
 
 // ── yed_listtransactions element ───────────────────────────────────────────────────────────
@@ -292,6 +308,11 @@ namespace Transaction {   // contract: yed_listtransactions[]
     constexpr const char* TYPE_CLAIM        = "claim";         // value
     constexpr const char* TYPE_CLAIMED      = "claimed";       // value
     constexpr const char* TYPE_SWEEP        = "sweep";         // value
+    constexpr const char* TYPE_NOTICE       = "notice";        // value, v3: a CLAIM_NOTICE this wallet posted
+    constexpr const char* TYPE_NOTICED      = "noticed";       // value, v3: a notice against a vault of ours
+    constexpr const char* TYPE_REGISTER     = "register";      // value, v3
+    constexpr const char* TYPE_EQUIVOCATION = "equivocation";  // value, v3
+    constexpr const char* TYPE_REVIVE       = "revive";        // value, v3
 
     constexpr const char* VERDICT_EXPIRED   = "expired";       // value
 }
@@ -413,6 +434,19 @@ namespace MintResult {   // contract: yed_mint
     constexpr const char* PAYEE             = "payee";         // null under FEE-0
     constexpr const char* FUNDED_FROM       = "fundedFrom";    // "transparent" | "sapling"
     constexpr const char* WARNING           = "warning";       // keypool-low nag, "" when none
+    // v3 (W7): with wait = false the call returns after the carrier broadcast with pending = true,
+    // carrierTxid set and every other field at its zero value; the main transaction follows on
+    // the next ChainTip and yed_listtransactions / yed_gettxinfo then carry it.
+    constexpr const char* CARRIER_TXID      = "carrierTxid";
+    constexpr const char* PENDING           = "pending";
+    constexpr const char* REF_HEIGHT        = "refHeight";
+    constexpr const char* X_MINT            = "xMint";
+    constexpr const char* A_MINT            = "aMint";         // null when not armed
+    constexpr const char* P_MINT            = "pMint";
+    constexpr const char* SOURCE            = "source";        // "x" | "a" | ""
+    constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";
+    constexpr const char* ATTEST_PAYEE      = "attestPayee";   // the bondKeyAddress paid; null under AFEE-0
 }
 
 // ── yed_send result ────────────────────────────────────────────────────────────────────────
@@ -431,6 +465,111 @@ namespace RedeemResult {   // contract: yed_redeem
     constexpr const char* COLLATERAL_OUT    = "collateralOut";
     constexpr const char* TO                = "to";
     constexpr const char* EXTRA_BURN_CENTS  = "extraBurnCents";  // H4: a sub-dollar remainder burned with the debt
+}
+
+// v3: the fields yed_claim adds to the yed_redeem shape (read alongside RedeemResult).
+namespace ClaimResult {   // contract: yed_claim
+    constexpr const char* CARRIER_TXID      = "carrierTxid";
+    constexpr const char* PENDING           = "pending";
+    constexpr const char* REF_HEIGHT        = "refHeight";
+    constexpr const char* X_CLAIM           = "xClaim";
+    constexpr const char* A_CLAIM           = "aClaim";
+    constexpr const char* P_CLAIM           = "pClaim";
+    constexpr const char* P_EMERG           = "pEmerg";        // null under clause (a)
+    constexpr const char* CLAIM_PATH        = "claimPath";     // "a" underwater | "b" emergency clause
+    constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";
+    constexpr const char* ATTEST_PAYEE      = "attestPayee";
+    constexpr const char* RESIDUAL_ZAT      = "residualZat";   // RED-5: returned to the vault owner
+
+    constexpr const char* PATH_A            = "a";             // value
+    constexpr const char* PATH_B            = "b";             // value
+}
+
+// v3: yed_claimnotice result (step 1 of the emergency claim, NOT-1).
+namespace NoticeResult {   // contract: yed_claimnotice
+    constexpr const char* TXID              = "txid";
+    constexpr const char* VAULT             = "vault";
+    constexpr const char* CARRIER_TXID      = "carrierTxid";
+    constexpr const char* PENDING           = "pending";
+    constexpr const char* REF_HEIGHT        = "refHeight";
+    constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt";  // refHeight + EMERGENCY_PERSIST
+    constexpr const char* X_CLAIM           = "xClaim";
+    constexpr const char* A_CLAIM           = "aClaim";
+    constexpr const char* P_EMERG           = "pEmerg";
+    constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
+}
+
+// v3: yed_gettxinfo, the fields the two-step actions read once the main transaction exists
+// (the v2 fields the Transactions view reads are in the Transaction namespace above).
+namespace TxInfo {   // contract: yed_gettxinfo
+    constexpr const char* TXID              = "txid";
+    constexpr const char* TYPE              = "type";
+    constexpr const char* HEIGHT            = "height";
+    constexpr const char* VERDICT           = "verdict";
+    constexpr const char* FEE_ZAT           = "feeZat";
+    constexpr const char* PAYEE             = "payee";
+    constexpr const char* P_MINT            = "pMint";
+    constexpr const char* X_MINT            = "xMint";
+    constexpr const char* A_MINT            = "aMint";
+    constexpr const char* P_CLAIM           = "pClaim";
+    constexpr const char* X_CLAIM           = "xClaim";
+    constexpr const char* A_CLAIM           = "aClaim";
+    constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";
+    constexpr const char* ATTEST_PAYEE      = "attestPayee";
+    constexpr const char* CLAIM_PATH        = "claimPath";
+    constexpr const char* RESIDUAL_ZAT      = "residualZat";
+    constexpr const char* NOTICE            = "notice";        // true when this transaction wrote a notice
+    constexpr const char* BURNED            = "burned";
+}
+
+// v3: yed_sweepcarriers result (W7).
+namespace SweepCarriersResult {   // contract: yed_sweepcarriers
+    constexpr const char* TXID              = "txid";          // "" when count is 0
+    constexpr const char* COUNT             = "count";
+    constexpr const char* RECLAIMED_ZAT     = "reclaimedZat";
+    constexpr const char* OUTSTANDING       = "outstanding";   // carriers still inside their window
+}
+
+// v3: yed_registerattestor result. `seq` is null until the registration confirms (REG-A1).
+namespace RegisterResult {   // contract: yed_registerattestor
+    constexpr const char* TXID              = "txid";
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* ATTESTOR_PUBKEY   = "attestorPubKey";
+    constexpr const char* BOND_ADDRESS      = "bondAddress";
+    constexpr const char* BOND_KEY_ADDRESS  = "bondKeyAddress";
+    constexpr const char* BOND_ZAT          = "bondZat";
+    constexpr const char* BOND_LOCKTIME     = "bondLocktime";
+    constexpr const char* MATURES_AT        = "maturesAt";
+}
+
+// v3: yed_withdrawbond result.
+namespace WithdrawResult {   // contract: yed_withdrawbond
+    constexpr const char* TXID              = "txid";
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* BOND_ZAT          = "bondZat";
+    constexpr const char* BOND_OUT          = "bondOut";       // net of the network fee
+    constexpr const char* TO                = "to";
+}
+
+// v3: yed_revive result.
+namespace ReviveResult {   // contract: yed_revive
+    constexpr const char* TXID              = "txid";
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* CITED_HEIGHT      = "citedHeight";
+    constexpr const char* PRICE_MICRO_USD   = "priceMicroUsd";
+}
+
+// v3: yed_reportequivocation result (two-step, as yed_mint).
+namespace EquivocationResult {   // contract: yed_reportequivocation
+    constexpr const char* TXID              = "txid";
+    constexpr const char* CARRIER_TXID      = "carrierTxid";
+    constexpr const char* PENDING           = "pending";
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* CITED_HEIGHT      = "citedHeight";
+    constexpr const char* PRICE_A           = "priceA";
+    constexpr const char* PRICE_B           = "priceB";
 }
 
 // ── yed_sweep result ───────────────────────────────────────────────────────────────────────
@@ -484,8 +623,25 @@ namespace Errors {   // contract: errors
     constexpr const char* FEE_NO_ELIGIBLE_PAYEE = "fee-no-eligible-payee";  // yed_getfeepayee under FEE-0: not an error for the wallet
     // v3: yed_estimatecollateral / yed_mint while armed. The Mint page shows the first as the
     // selection line and the second as "pools and attestors disagree by N %; minting paused".
-    constexpr const char* BUNDLE_INSUFFICIENT   = "bundle-insufficient";     // "<count> of <selected> selected attestors have a fresh attestation"
+    constexpr const char* BUNDLE_INSUFFICIENT   = "bundle-insufficient";     // "<count> of <selected> selected attestors have a fresh attestation; missing seq <a,b,…>"
     constexpr const char* MINT10_DIVERGED       = "mint10-diverged";
+    constexpr const char* BUNDLE_MALFORMED      = "bundle-malformed";
+    constexpr const char* INSUFFICIENT_YEC      = "insufficient-yec";        // yed_mint: the carrier and two fees are part of the need
+    // v3: yed_claimnotice
+    constexpr const char* NOTICE_STANDING       = "notice-standing";
+    constexpr const char* NOTICE_NOT_UNDERWATER = "notice-not-underwater";
+    // v3: the attestor actions
+    constexpr const char* BOND_BELOW_MIN        = "bond-below-min";
+    constexpr const char* LOCK_BELOW_MIN        = "lock-below-min";
+    constexpr const char* BOND_LOCKED           = "bond-locked";
+    constexpr const char* BOND_SPENT            = "bond-spent";
+    constexpr const char* NOT_DORMANT           = "not-dormant";
+    constexpr const char* NOT_EQUIVOCATION      = "not-equivocation";
+    constexpr const char* ATTEST_KEY_NOT_HELD   = "attest-key-not-held";
+    constexpr const char* ATTEST_UNKNOWN_SEQ    = "attest-unknown-seq";
+    constexpr const char* ATTEST_MALFORMED      = "attest-malformed";
+    constexpr const char* ATTEST_RANGE          = "attest-range";
+    constexpr const char* EQUIVOCATION_GUARD    = "equivocation-guard";
 }
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).
@@ -506,6 +662,8 @@ constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000 (§3.1 MAX_MINT)
 constexpr qint64 MIN_OUTPUT_CENTS    = 100;       // $1 change floor (§3.1 MIN_OUTPUT)
 // The exact acknowledgement yed_sweep requires as its second argument (L10).
 constexpr const char* SWEEP_ACKNOWLEDGEMENT = "I understand this leaves YED unbacked";
+// v3: an attestation travels through RPC as 74 bytes of hex (yed_reportequivocation's arguments).
+constexpr int ATTESTATION_HEX_LENGTH = 148;
 
 }
 

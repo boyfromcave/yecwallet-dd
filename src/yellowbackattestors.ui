@@ -14,7 +14,7 @@
    <item>
     <widget class="QLabel" name="lblAttestorsIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Attestors are bonded price reporters. Once the layer is armed, every mint and claim carries a bundle of their signed attestations next to the pool quotes, and the price used is the one both sources signed off on. This table is read-only: registering, signing and withdrawing are done by the yellowback-attest agent beside the node.</string></property>
+     <property name="text"><string>Attestors are bonded price reporters. Once the layer is armed, every mint and claim carries a bundle of their signed attestations next to the pool quotes, and the price used is the one both sources signed off on. Registering, withdrawing a bond and reviving are done here through your own node; the signing itself is the yellowback-attest agent's job beside that node.</string></property>
     </widget>
    </item>
    <item>
@@ -28,6 +28,22 @@
      <property name="wordWrap"><bool>true</bool></property>
      <property name="text"><string>"Seated" attestors are the ones a bundle may draw from at this height; "pinned" ones are excluded for now because their attestations sit too far from the pool quotes. "In pool" says whether this node's own subscriber has a fresh attestation from that attestor. Hover a cell for details.</string></property>
     </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="lblAttestorAction">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string/></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; }</string></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="attestorButtons">
+     <item><widget class="QPushButton" name="btnRegister"><property name="text"><string>Register as attestor…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnReport"><property name="text"><string>Report equivocation…</string></property></widget></item>
+     <item><spacer name="attSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
+     <item><widget class="QPushButton" name="btnRevive"><property name="text"><string>Revive…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnWithdraw"><property name="text"><string>Withdraw bond…</string></property></widget></item>
+    </layout>
    </item>
   </layout>
  </widget>

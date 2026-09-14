@@ -94,6 +94,7 @@ public:
     qint64  maxMintCents() const;
     qint64  minOutputCents() const;
     int     refLag() const;
+    int     refWindow() const;                    // v3: the carrier and its main transaction expire together after it
     int     grace() const;
     // Term classes from yed_getinfo.params.classes, in class order (empty until the node answered)
     struct TermClass { QString name; int minBlocks = 0; int maxBlocks = 0; qint64 baseRatioBps = 0; };
@@ -130,10 +131,31 @@ public:
     void getNewAddress(OkFn ok, ErrFn err);
     void validateAddress(const QString& addr, OkFn ok, ErrFn err);
     void estimateCollateral(qint64 cents, int lockBlocks, OkFn ok, ErrFn err);
+    // v3: the two-step commands are issued with wait = false (W7), so the reply comes back
+    // right after the carrier broadcast with pending = true; awaitPending() follows the main
+    // transaction from there.
     void mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);     // to: "" | s1... | ys1... (I2)
     void claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);
+    void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)
+    void sweepCarriers(OkFn ok, ErrFn err);                                           // v3: yed_sweepcarriers (W7)
+    void registerAttestor(double bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3
+    void withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err);                // v3
+    void revive(int seq, qint64 priceMicroUsd, OkFn ok, ErrFn err);                   // v3
+    void reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err);   // v3, two-step
+
+    // v3 two-step follow-up (W7). A pending reply names only the carrier; the main
+    // transaction is built by the node on the next ChainTip and shows up in
+    // yed_listtransactions as a new row of `type`. This polls that list until a row of the type
+    // appears that was not there when the action started, then answers `done` with its
+    // yed_gettxinfo. `err` fires when the carrier's window lapses (tip past refHeight +
+    // refWindow: yed_sweepcarriers reclaims it) or the poll itself fails.
+    void awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err);
+    void setPendingPollMs(int ms) { pendingPollMs = ms; }   // the QTest shortens it
+    // The flags byte yed_registerattestor takes (proposal §5.2): bits 0-1 the source tier, bit 2 pool operator.
+    static int attestorFlags(int tier, bool pool) { return (tier & 3) | (pool ? 4 : 0); }
+    void refreshSelection();                      // v3: public so the Mint page's retry can re-query it
     void sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);      // sends the L10 acknowledgement
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
@@ -150,6 +172,10 @@ public:
     // change-floor: the two workable amounts the message names (§4.6), "send exactly `all` or at
     // most `atMost`"; false when the message carries no amounts (then only the text is shown).
     static bool parseChangeFloor(const QString& errorMessage, qint64* allCents, qint64* atMostCents);
+    // v3 bundle-insufficient: "<count> of <selected> selected attestors have a fresh attestation;
+    // missing seq <a,b,…>" — the two numbers and the missing seqs; false when the message is not
+    // that identifier (then only the text is shown).
+    static bool parseBundleInsufficient(const QString& errorMessage, int* count, int* selected, QList<int>* missingSeqs);
 
     // Static helpers
     static bool isMethodNotFound(const QString& errorMessage);
@@ -189,7 +215,6 @@ private:
     void refreshTransactions();
     void refreshPrice();
     void refreshAttestors();
-    void refreshSelection();
     void setAvailability(bool avail, const QString& why);
     void log(const QString& line);
 
@@ -222,6 +247,7 @@ private:
     json    selectionJson  = json::object();
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
+    int     pendingPollMs = 5000;
 };
 
 #endif // YELLOWBACKCONTROLLER_H

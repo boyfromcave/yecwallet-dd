@@ -26,6 +26,10 @@
 #                       yecwallet.app/Contents/MacOS; Linux/Windows: beside the
 #                       executable). The wallet starts the ycashd found beside its
 #                       own executable, so a package without one ships no node.
+#   --attest PATH       Bundle this yellowback-attest binary beside ycashd (built with
+#                       cargo from ycash-dd/contrib/yellowback/attest). The wallet's
+#                       Settings page launches `yellowback-attest subscribe` from
+#                       beside its own executable; without it the launcher is disabled.
 #   -h, --help          Show this help
 #
 # ENVIRONMENT VARIABLES (override defaults)
@@ -49,7 +53,8 @@
 #   bash build.sh macos-universal
 
 #   # macOS release: static Qt, the app, the node inside the bundle, a .dmg under artifacts/
-#   bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd
+#   bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd \
+#       --attest ../ycash-dd/target/release/yellowback-attest
 #
 #   # Use a pre-built Qt, only compile the app
 #   QT_STATIC_ROOT=/opt/myqt bash build.sh --app-only linux-x86_64
@@ -71,6 +76,7 @@ APP_ONLY=false
 DO_PACKAGE=false
 REBUILD_QT=false
 YCASHD_BIN=""
+ATTEST_BIN=""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 info()    { echo ""; echo "━━━ $* ━━━"; }
@@ -86,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         --rebuild-qt)      REBUILD_QT=true ;;
         --package)         DO_PACKAGE=true ;;
         --ycashd)          YCASHD_BIN="$2"; shift ;;
+        --attest)          ATTEST_BIN="$2"; shift ;;
         --build-type)      BUILD_TYPE="$2"; shift ;;
         --qt-version)      QT_VERSION="$2"; shift ;;
         --prefix)          DEPS_PREFIX="$2"; shift ;;
@@ -197,6 +204,37 @@ bundle_ycashd() {
     chmod 755 "${dest_dir}/ycashd"
     strip "${dest_dir}/ycashd" 2>/dev/null || true
     step "Bundled ycashd: ${dest_dir}/ycashd ($(du -h "${dest_dir}/ycashd" | cut -f1))"
+}
+
+# ── Attestation subscriber binary to bundle (--attest) ───────────────────────
+# Checked the way --ycashd is; it lands beside ycashd, where the wallet's launcher looks.
+if [[ -n "$ATTEST_BIN" ]]; then
+    [[ -f "$ATTEST_BIN" && -x "$ATTEST_BIN" ]] || die "--attest: not an executable file: $ATTEST_BIN"
+    ATTEST_BIN="$(cd "$(dirname "$ATTEST_BIN")" && pwd)/$(basename "$ATTEST_BIN")"
+    if [[ "$TARGET" == macos-* ]]; then
+        _archs="$(lipo -archs "$ATTEST_BIN" 2>/dev/null || echo unknown)"
+        case "$TARGET" in
+            macos-arm64)      [[ "$_archs" == *arm64*  ]] || die "--attest: $ATTEST_BIN is [$_archs], need arm64" ;;
+            macos-x86_64)     [[ "$_archs" == *x86_64* ]] || die "--attest: $ATTEST_BIN is [$_archs], need x86_64" ;;
+            macos-universal)  [[ "$_archs" == *arm64* && "$_archs" == *x86_64* ]] || die "--attest: $ATTEST_BIN is [$_archs], need x86_64 and arm64" ;;
+        esac
+    fi
+    step "Attestation subscriber to bundle: ${ATTEST_BIN}"
+elif $DO_PACKAGE && [[ -n "$YCASHD_BIN" ]]; then
+    echo "WARNING: --package without --attest: the package will not contain yellowback-attest; the" >&2
+    echo "         wallet's subscriber launcher will be disabled (run the subscriber by hand)." >&2
+fi
+
+bundle_attest() {
+    local dest_dir="$1"
+    [[ -n "$ATTEST_BIN" ]] || return 0
+    local name="yellowback-attest"
+    [[ "$TARGET" == windows-* ]] && name="yellowback-attest.exe"
+    mkdir -p "${dest_dir}"
+    cp "$ATTEST_BIN" "${dest_dir}/${name}"
+    chmod 755 "${dest_dir}/${name}"
+    strip "${dest_dir}/${name}" 2>/dev/null || true
+    step "Bundled yellowback-attest: ${dest_dir}/${name} ($(du -h "${dest_dir}/${name}" | cut -f1))"
 }
 
 
@@ -316,6 +354,7 @@ if $DO_PACKAGE; then
         cp "${BIN}"             "${PKG_DIR}/"
         cp "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/"
         bundle_ycashd "${PKG_DIR}"
+        bundle_attest "${PKG_DIR}"
         TARBALL="${ARTIFACTS_DIR}/linux-x86_64-yecwallet-v${APP_VERSION}.tar.gz"
         tar -czf "${TARBALL}" -C "${BUILD_DIR}/pkg" "yecwallet-v${APP_VERSION}"
         step "Package: ${TARBALL}"
@@ -326,6 +365,7 @@ if $DO_PACKAGE; then
         cp "${BIN}"             "${PKG_DIR}/"
         cp "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/"
         bundle_ycashd "${PKG_DIR}"
+        bundle_attest "${PKG_DIR}"
         ZIPFILE="${ARTIFACTS_DIR}/windows-x86_64-yecwallet-v${APP_VERSION}.zip"
         (cd "${BUILD_DIR}/pkg" && zip -r "${ZIPFILE}" "yecwallet-v${APP_VERSION}")
         step "Package: ${ZIPFILE}"
@@ -334,6 +374,7 @@ if $DO_PACKAGE; then
         APP_BUNDLE="${BUILD_DIR}/bin/yecwallet.app"
         [[ -d "${APP_BUNDLE}" ]] || die "App bundle not found: ${APP_BUNDLE}"
         bundle_ycashd "${APP_BUNDLE}/Contents/MacOS"
+        bundle_attest "${APP_BUNDLE}/Contents/MacOS"
         step "Running macdeployqt..."
         # Static Qt: macdeployqt finds no frameworks to copy and says so; it still fixes up the
         # bundle's plugin/rpath layout, so keep it. The .dmg is made with hdiutil rather than
