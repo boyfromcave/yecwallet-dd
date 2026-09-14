@@ -161,6 +161,7 @@ set(APP_FORMS
     src/yellowbacktransactions.ui
     src/yellowbackredeem.ui
     src/yellowbacksettings.ui
+    src/yellowbackattestors.ui
 )
 
 # ── Platform-specific extras ──────────────────────────────────────────────────

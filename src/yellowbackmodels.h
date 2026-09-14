@@ -33,6 +33,10 @@ struct YellowbackPosition {
     bool    canRedeem       = false;   // ACTIVE or VOID at or past lockHeight (VOID: the Release, L14)
     bool    canClaim        = false;
     bool    canSweep        = false;
+    bool    noticed         = false;   // v3: a claim notice stands against this vault (NOT-1)
+    int     noticeHeight    = -1;      // v3: null (-1) unless noticed
+    int     emergencyOpenAt = -1;      // v3: the first reference height an emergency claim may cite; null (-1) unless noticed
+    bool    canNotice       = false;   // v3, listpositions only: this node could post a notice now
 
     static YellowbackPosition fromJson(const json& j);
     QString vaultName() const { return txid % ":" % QString::number(vout); }
@@ -50,6 +54,32 @@ struct YellowbackClaimable {
     qint64  pClaim          = 0;
 
     static YellowbackClaimable fromJson(const json& j);
+};
+
+// One row of yed_listattestors (v3 plan §4.8, the Attestors view). `weight` stays the decimal
+// string the node reports; a nullable height is -1 when absent.
+struct YellowbackAttestor {
+    int     seq             = 0;
+    QString status;             // PENDING | ELIGIBLE | DORMANT | EJECTED | WITHDRAWN
+    int     statusHeight    = 0;
+    QString attestorPubKey;
+    QString bondAddress;
+    QString bondKeyAddress;
+    qint64  bondZat         = 0;
+    int     bondLocktime    = 0;
+    int     bondSpentHeight = -1;      // null until the bond is spent
+    int     registerHeight  = 0;
+    QString weight;                    // decimal string, "0" before ageOrigin
+    bool    seated          = false;
+    int     seatedSince     = -1;      // null while unseated
+    bool    pinned          = false;
+    bool    founding        = false;
+    int     tier            = 0;       // flags.tier: 0 exchange APIs, 1 mixed, 2 aggregator
+    bool    pool            = false;   // flags.pool: operates a mining pool
+    int     lastBundleHeight = -1;     // null when none
+    bool    poolFresh       = false;   // this node's pool holds a fresh attestation of this seq
+
+    static YellowbackAttestor fromJson(const json& j);
 };
 
 // One row of yed_listtransactions (plan §4.5).
@@ -98,6 +128,7 @@ namespace YellowbackFormat {
     QString typeLabel(const QString& type);
     QString haltReason(const QString& name);               // haltMask name -> sentence
     QString voidReason(const QString& verdict);            // MINT verdict -> sentence
+    QString sourceTier(int tier);                          // v3 flags.tier -> "exchange APIs" | "mixed" | "aggregator"
 }
 
 // Positions (vaults) table, pattern of src/balancestablemodel.h.
@@ -116,6 +147,7 @@ public:
         Claimable,
         Unbacked,
         SweepBefore,
+        Notice,          // v3: "noticed, emergency claim from <h>" | "notice possible" | "-"
         Vault,
         ColumnCount
     };
@@ -167,6 +199,41 @@ private:
     QList<QString>           headers;
     int                      currentHeight = 0;
     bool                     loading       = true;
+};
+
+// Attestors table (yed_listattestors), the v3 Attestors view. Read-only.
+class YellowbackAttestorsModel : public QAbstractTableModel {
+public:
+    YellowbackAttestorsModel(QObject* parent);
+    ~YellowbackAttestorsModel();
+
+    enum Column {
+        Seq = 0,
+        Status,
+        Seated,          // seated / pinned marks
+        Bond,            // bond amount and lock height
+        Weight,
+        SeatedSince,
+        Founding,
+        Sources,         // source tier and pool flag
+        LastBundle,      // lastBundleHeight
+        PoolFresh,
+        ColumnCount
+    };
+
+    void setNewData(const QList<YellowbackAttestor>& rows, int currentHeight);
+    const YellowbackAttestor* rowAt(int row) const;
+
+    int      rowCount(const QModelIndex& parent) const override;
+    int      columnCount(const QModelIndex& parent) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+
+private:
+    QList<YellowbackAttestor>* modeldata     = nullptr;
+    QList<QString>          headers;
+    int                     currentHeight = 0;
+    bool                    loading       = true;
 };
 
 // Yellowback transactions table, pattern of src/txtablemodel.h.

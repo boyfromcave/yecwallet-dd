@@ -19,6 +19,23 @@ yellowback=1</string></property>
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="grpSubscriber">
+     <property name="title"><string>Attestation subscriber (yellowback-attest subscribe)</string></property>
+     <layout class="QFormLayout" name="subscriberForm">
+      <item row="0" column="0"><widget class="QLabel" name="sb1"><property name="text"><string>Status</string></property></widget></item>
+      <item row="0" column="1"><widget class="QLabel" name="lblSubscriberStatus"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
+      <item row="1" column="0"><widget class="QLabel" name="sb2"><property name="text"><string>Transport</string></property></widget></item>
+      <item row="1" column="1"><widget class="QComboBox" name="cmbTransportKind"><property name="toolTip"><string>dir: attestations are exchanged through a shared directory (a local devnet). iroh: the gossip network, through the relays and peers below.</string></property></widget></item>
+      <item row="2" column="0"><widget class="QLabel" name="sb3"><property name="text"><string>Directory (dir)</string></property></widget></item>
+      <item row="2" column="1"><widget class="QLineEdit" name="txtTransportPath"><property name="placeholderText"><string>/path/to/attest-dir</string></property></widget></item>
+      <item row="3" column="0"><widget class="QLabel" name="sb4"><property name="text"><string>Relays (iroh, comma-separated)</string></property></widget></item>
+      <item row="3" column="1"><widget class="QLineEdit" name="txtTransportRelays"><property name="placeholderText"><string>https://relay.example</string></property></widget></item>
+      <item row="4" column="0"><widget class="QLabel" name="sb5"><property name="text"><string>Peers (iroh, comma-separated)</string></property></widget></item>
+      <item row="4" column="1"><widget class="QLineEdit" name="txtTransportPeers"><property name="placeholderText"><string>node ids</string></property></widget></item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <layout class="QHBoxLayout" name="settingsButtons">
      <item><spacer name="settingsSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
      <item><widget class="QPushButton" name="btnSave"><property name="text"><string>Save</string></property></widget></item>

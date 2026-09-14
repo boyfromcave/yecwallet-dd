@@ -19,11 +19,12 @@ namespace Ui {
     class YellowbackTransactions;
     class YellowbackRedeem;
     class YellowbackSettings;
+    class YellowbackAttestors;
 }
 
 // The Yellowback tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
-// in the order Overview, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Settings
-// (plan §4.8). Every action goes through YellowbackController; nothing here touches keys or
+// in the order Overview, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Attestors,
+// Settings (plan §4.8; Attestors is the read-only v3 view). Every action goes through YellowbackController; nothing here touches keys or
 // the network.
 //
 // The spending actions — Mint, Send, Redeem/Release, Claim, Sweep — are each one confirmation
@@ -43,7 +44,7 @@ public:
     YellowbackController* controller() { return ctl; }
 
     // Sub-page indices in subTabs
-    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Settings, PageCount };
+    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Attestors, Settings, PageCount };
     QWidget* page(Page p) { return pages[p]; }
 
     // Parses "12.34" / "12" / "$12.34" / "1,234.56" into cents; false on anything else
@@ -73,6 +74,11 @@ public:
     void sweepVault(const YellowbackPosition& p, const QString& to = QString());    // L10: carries the acknowledgement
     QString redeemDestination() const;   // the Redeem page's choice: "" = a fresh own transparent address
 
+    // v3 Settings: the subscriber process, when the wallet launched one (A5-b adds the launcher;
+    // until then it stays null and the status line reads "not running").
+    void setSubscriberProcess(QProcess* p) { subscriber = p; updateSettingsPage(); }
+    static QString subscriberStatus(const QProcess* p);   // "running (pid N)" | "not running" | "starting"
+
 private:
     void setupPages();
     void setupOverview();
@@ -84,6 +90,7 @@ private:
     void setupTransactions();
     void setupRedeem();
     void setupSettings();
+    void setupAttestors();
 
     void updateBanner();
     void updateOverview();
@@ -98,6 +105,8 @@ private:
     void updateRedeemPage();
     void updateBackupNag();
     void updateSettingsPage();
+    void updateAttestors();                 // v3: the arming banner and the table
+    void updateMintAttest();                // v3: the selection line under the estimate
     void setActionsEnabled(bool enabled);
     void refreshDestinations();             // the Redeem page's destination combo (I2)
     bool confirm(const QString& title, const QString& text);
@@ -123,6 +132,8 @@ private:
     Ui::YellowbackTransactions* uiTx         = nullptr;
     Ui::YellowbackRedeem*       uiRedeem     = nullptr;
     Ui::YellowbackSettings*     uiSettings   = nullptr;
+    Ui::YellowbackAttestors*    uiAttestors  = nullptr;
+    QProcess*                   subscriber   = nullptr;
     QWidget*                 pages[PageCount] = {};
 
     bool     actionsEnabled   = false;

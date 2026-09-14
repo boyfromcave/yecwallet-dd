@@ -48,6 +48,10 @@
         <item row="7" column="1"><widget class="QLabel" name="lblVaults"><property name="text"><string>-</string></property></widget></item>
         <item row="8" column="0"><widget class="QLabel" name="s9"><property name="text"><string>Unbacked YED</string></property></widget></item>
         <item row="8" column="1"><widget class="QLabel" name="lblUnbacked"><property name="text"><string>-</string></property><property name="toolTip"><string>YED minted against vaults that were later emptied without their burn (only possible while enforcement is paused or abandoned).</string></property></widget></item>
+        <item row="9" column="0"><widget class="QLabel" name="s10"><property name="text"><string>Pool prices (mint / claim)</string></property></widget></item>
+        <item row="9" column="1"><widget class="QLabel" name="lblPoolPrices"><property name="text"><string>-</string></property><property name="toolTip"><string>The pool cross-section bounds at the index tip: the medians of the quotes pools publish in their blocks. Once the attestation layer is armed, each mint or claim combines them with the attestors' prices and uses the more conservative of the two.</string></property></widget></item>
+        <item row="10" column="0"><widget class="QLabel" name="s11"><property name="text"><string>Attestation</string></property></widget></item>
+        <item row="10" column="1"><widget class="QLabel" name="lblAttestation"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property><property name="toolTip"><string>Whether the attestation layer is armed at the tip: while armed, a mint or claim carries an attested price, one both pools and attestors signed off on.</string></property></widget></item>
        </layout>
       </widget>
      </item>
