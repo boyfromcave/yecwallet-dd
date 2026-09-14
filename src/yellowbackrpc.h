@@ -3,7 +3,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 2), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 3), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -19,8 +19,8 @@
 namespace YellowbackRpc {
 
 // The rpcversion this build of the wallet understands. yed_getinfo.rpcversion must equal it
-// (bumped to 2 in Phase 7b-a's first commit, N27).
-constexpr int RPC_VERSION = 2;
+// (bumped to 2 in Phase 7b-a's first commit, N27; to 3 in v3 Phase A5's first commit).
+constexpr int RPC_VERSION = 3;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -31,6 +31,9 @@ constexpr const char* LISTCLAIMABLE       = "yed_listclaimable";
 constexpr const char* GETTXINFO           = "yed_gettxinfo";
 constexpr const char* ESTIMATECOLLATERAL  = "yed_estimatecollateral";
 constexpr const char* GETFEEPAYEE         = "yed_getfeepayee";
+constexpr const char* GETPRICE            = "yed_getprice";          // v3: xMint/xClaim, armed, attestStatus
+constexpr const char* LISTATTESTORS       = "yed_listattestors";     // v3: the Attestors view
+constexpr const char* GETSELECTION        = "yed_getselection";      // v3: "n of m selected attestors reachable"
 
 // ── Methods (wallet context) ──────────────────────────────────────────────────────────────
 constexpr const char* GETNEWADDRESS       = "yed_getnewaddress";
@@ -66,6 +69,24 @@ namespace Info {   // contract: yed_getinfo
     constexpr const char* ACTIVATION        = "activation";
     constexpr const char* MINER             = "miner";
     constexpr const char* PARAMS            = "params";
+    constexpr const char* ATTEST            = "attest";         // v3: the arming state at the index tip
+}
+
+// v3: yed_getinfo.attest, the arming state (ARM-1/2) the Attestors view's banner shows.
+namespace Attest {   // contract: yed_getinfo.attest
+    constexpr const char* STATUS            = "status";         // UNARMED | TRIGGERED | ARMED
+    constexpr const char* TRIGGER_HEIGHT    = "triggerHeight";  // 0 while UNARMED
+    constexpr const char* ARM_HEIGHT        = "armHeight";      // triggerHeight + ATTEST_ARM_DELAY once TRIGGERED
+    constexpr const char* SEATED_COUNT      = "seatedCount";
+    constexpr const char* POOL_SIZE         = "poolSize";       // attestations in this node's pool
+    constexpr const char* POOL_FRESH        = "poolFresh";      // seated seqs with a fresh attestation in the pool
+    constexpr const char* CARRIER_MODE      = "carrierMode";
+    constexpr const char* REQUIRED          = "required";       // ATTEST_REQUIRED; false: the layer is disabled by parameter set
+    constexpr const char* ARMED             = "armed";          // status == ARMED && required
+
+    constexpr const char* STATUS_UNARMED    = "UNARMED";        // value
+    constexpr const char* STATUS_TRIGGERED  = "TRIGGERED";      // value
+    constexpr const char* STATUS_ARMED      = "ARMED";          // value
 }
 
 namespace Activation {   // contract: yed_getinfo.activation
@@ -114,6 +135,19 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* MIN_FILL            = "minFill";
     constexpr const char* CLASSES             = "classes";
     constexpr const char* POLICY              = "policy";
+    constexpr const char* ATTEST              = "attest";       // v3: the attestation-layer parameters
+}
+
+// v3: yed_getinfo.params.attest, the values the Mint page and the Attestors view derive from.
+namespace ParamsAttest {   // contract: yed_getinfo.params.attest
+    constexpr const char* REQUIRED            = "required";
+    constexpr const char* M_SELECT            = "mSelect";
+    constexpr const char* K_SLACK             = "kSlack";
+    constexpr const char* DIVERGE_BPS_ATTEST  = "divergeBpsAttest";  // mint10-diverged above this
+    constexpr const char* ARM_DELAY           = "armDelay";
+    constexpr const char* ARM_MIN             = "armMin";
+    constexpr const char* EMERGENCY_PERSIST   = "emergencyPersist";
+    constexpr const char* CARRIER_MODE        = "carrierMode";
 }
 
 namespace ParamClass {   // contract: yed_getinfo.params.classes[]
@@ -210,6 +244,10 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* CAN_REDEEM        = "canRedeem";     // listpositions only
     constexpr const char* CAN_CLAIM         = "canClaim";      // listpositions only
     constexpr const char* CAN_SWEEP         = "canSweep";      // listpositions only
+    constexpr const char* NOTICED           = "noticed";       // v3: a Notices record stands (NOT-1)
+    constexpr const char* NOTICE_HEIGHT     = "noticeHeight";  // v3: null unless noticed
+    constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: first refHeight a clause-(b) claim may cite; null unless noticed
+    constexpr const char* CAN_NOTICE        = "canNotice";     // v3, listpositions only
 
     constexpr const char* STATUS_ACTIVE     = "ACTIVE";        // value
     constexpr const char* STATUS_VOID       = "VOID";          // value
@@ -267,8 +305,86 @@ namespace Estimate {   // contract: yed_estimatecollateral
     constexpr const char* MIN_RATIO_BPS     = "minRatioBps";
     constexpr const char* BASE_RATIO_BPS    = "baseRatioBps";
     constexpr const char* SIGMA_MULT_BPS    = "sigmaMultBps";
-    constexpr const char* P_MINT            = "pMint";         // null when undefined
+    constexpr const char* P_MINT            = "pMint";         // null when undefined; v3: min(xMint, aMint) while armed
     constexpr const char* REF_HEIGHT        = "refHeight";
+    constexpr const char* X_MINT            = "xMint";         // v3: the pool cross-section bound
+    constexpr const char* A_MINT            = "aMint";         // v3: the attestation quantile bound; null when not armed
+    constexpr const char* SOURCE            = "source";        // v3: "x" | "a" | "" (not armed, or a price override)
+    constexpr const char* ARMED             = "armed";         // v3
+    constexpr const char* BUNDLE_SEQS       = "bundleSeqs";    // v3: the seqs the estimate used
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";  // v3: AFEE-1, on top of feeZat
+    constexpr const char* DIVERGENCE_BPS    = "divergenceBps"; // v3: |xMint - aMint| / min; null when either is undefined
+
+    constexpr const char* SOURCE_X          = "x";             // value
+    constexpr const char* SOURCE_A          = "a";             // value
+}
+
+// ── v3: yed_getprice result (the snapshot at a height; the Overview's two source prices) ──
+namespace Price {   // contract: yed_getprice
+    constexpr const char* HEIGHT            = "height";
+    constexpr const char* P_MINT            = "pMint";         // = xMint (the v2 key keeps the snapshot value)
+    constexpr const char* P_CLAIM           = "pClaim";        // = xClaim
+    constexpr const char* X_MINT            = "xMint";         // null when undefined
+    constexpr const char* X_CLAIM           = "xClaim";        // null when undefined
+    constexpr const char* ARMED             = "armed";
+    constexpr const char* ATTEST_STATUS     = "attestStatus";  // UNARMED | TRIGGERED | ARMED
+    constexpr const char* SEATED            = "seated";        // seqs
+    constexpr const char* PINNED_SEQS       = "pinnedSeqs";
+    constexpr const char* PINNED_KEYS       = "pinnedKeys";
+}
+
+// ── v3: yed_listattestors element (the Attestors view) ────────────────────────────────────
+namespace Attestor {   // contract: yed_listattestors[]
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* STATUS            = "status";        // PENDING | ELIGIBLE | DORMANT | EJECTED | WITHDRAWN
+    constexpr const char* STATUS_HEIGHT     = "statusHeight";
+    constexpr const char* ATTESTOR_PUBKEY   = "attestorPubKey";
+    constexpr const char* BOND_ADDRESS      = "bondAddress";
+    constexpr const char* BOND_KEY_ADDRESS  = "bondKeyAddress";
+    constexpr const char* BOND_ZAT          = "bondZat";
+    constexpr const char* BOND_LOCKTIME     = "bondLocktime";
+    constexpr const char* BOND_SPENT_HEIGHT = "bondSpentHeight";   // null until spent
+    constexpr const char* REGISTER_HEIGHT   = "registerHeight";
+    constexpr const char* WEIGHT            = "weight";        // decimal string
+    constexpr const char* SEATED            = "seated";
+    constexpr const char* SEATED_SINCE      = "seatedSince";   // null while unseated
+    constexpr const char* PINNED            = "pinned";
+    constexpr const char* FOUNDING          = "founding";
+    constexpr const char* FLAGS             = "flags";
+    constexpr const char* LAST_BUNDLE_HEIGHT= "lastBundleHeight";  // null when none
+    constexpr const char* POOL_FRESH        = "poolFresh";
+
+    constexpr const char* STATUS_PENDING    = "PENDING";       // value
+    constexpr const char* STATUS_ELIGIBLE   = "ELIGIBLE";      // value
+    constexpr const char* STATUS_DORMANT    = "DORMANT";       // value
+    constexpr const char* STATUS_EJECTED    = "EJECTED";       // value
+    constexpr const char* STATUS_WITHDRAWN  = "WITHDRAWN";     // value
+}
+
+namespace AttestorFlags {   // contract: yed_listattestors[].flags
+    constexpr const char* TIER              = "tier";          // 0 exchange APIs | 1 mixed | 2 aggregator
+    constexpr const char* POOL              = "pool";          // operates a mining pool
+}
+
+// ── v3: yed_getselection result ("n of m selected attestors reachable") ───────────────────
+namespace Selection {   // contract: yed_getselection
+    constexpr const char* REF_HEIGHT        = "refHeight";
+    constexpr const char* ARMED             = "armed";
+    constexpr const char* M_SELECT          = "mSelect";
+    constexpr const char* K_SLACK           = "kSlack";
+    constexpr const char* POOL              = "pool";          // seqs
+    constexpr const char* SELECTED          = "selected";      // rows
+    constexpr const char* REACHABLE         = "reachable";     // count of poolFresh among selected
+    constexpr const char* FALLBACK          = "fallback";
+    constexpr const char* SUM_WEIGHT        = "sumWeight";
+}
+
+namespace SelectionRow {   // contract: yed_getselection.selected[]
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* STATUS            = "status";
+    constexpr const char* WEIGHT            = "weight";
+    constexpr const char* BOND_KEY_ADDRESS  = "bondKeyAddress";
+    constexpr const char* POOL_FRESH        = "poolFresh";
 }
 
 // ── yed_getfeepayee result (the mint / redeem confirmation shows the fee and its payee) ────
@@ -366,6 +482,10 @@ namespace Errors {   // contract: errors
     // The contract lists `mempool-check-failed:<verdict>`; the wallet matches the prefix
     constexpr const char* MEMPOOL_CHECK_FAILED  = "mempool-check-failed";   // value
     constexpr const char* FEE_NO_ELIGIBLE_PAYEE = "fee-no-eligible-payee";  // yed_getfeepayee under FEE-0: not an error for the wallet
+    // v3: yed_estimatecollateral / yed_mint while armed. The Mint page shows the first as the
+    // selection line and the second as "pools and attestors disagree by N %; minting paused".
+    constexpr const char* BUNDLE_INSUFFICIENT   = "bundle-insufficient";     // "<count> of <selected> selected attestors have a fresh attestation"
+    constexpr const char* MINT10_DIVERGED       = "mint10-diverged";
 }
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).

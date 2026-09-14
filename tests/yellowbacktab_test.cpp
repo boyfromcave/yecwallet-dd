@@ -33,7 +33,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 2, "enabled": true, "network": "regtest", "height": 331,
+      "rpcversion": 3, "enabled": true, "network": "regtest", "height": 331,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 1, "healthy": true, "unhealthyReason": "",
       "enforcing": true, "valveTripped": false, "sunset": false, "rejectedBlocks": 0,
@@ -41,6 +41,8 @@ static json infoActive() {
       "activation": {"status": "active", "lockInHeight": 129, "activateHeight": 193, "signalCount": 64, "window": 64},
       "miner": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "signal": true, "quoteKind": "quote",
                 "quoteAgeSeconds": 12, "registered": true, "eligible": true},
+      "attest": {"status": "ARMED", "triggerHeight": 300, "armHeight": 308, "seatedCount": 3, "poolSize": 9,
+                 "poolFresh": 3, "carrierMode": "scriptsig", "required": true, "armed": true},
       "params": {"startHeight": 1, "enforceUntilHeight": 0, "sigmaRefBps": 0, "supplyCapBps": 0, "refLag": 2,
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
                  "tokenValueZat": 10000, "feeZat": 1000, "valveBlocks": 6, "abandonBlocks": 128,
@@ -49,7 +51,10 @@ static json infoActive() {
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000},
                              {"class": "B", "minBlocks": 97, "maxBlocks": 144, "baseRatioBps": 40000},
                              {"class": "C", "minBlocks": 145, "maxBlocks": 240, "baseRatioBps": 30000}],
-                 "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000, "preferredPayee": null}}
+                 "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000, "preferredPayee": null, "preferredAttestor": null},
+                 "attest": {"required": true, "mSelect": 2, "kSlack": 1, "nSlots": 5, "divergeBpsAttest": 1500, "armDelay": 8,
+                            "armMin": 3, "emergencyPersist": 4, "emergencyRatioBps": 10500, "emergencyNoticeTtl": 64,
+                            "carrierMode": "scriptsig", "attestFeeBps": 2500, "attestMaxAge": 8}}
     })");
 }
 
@@ -361,9 +366,9 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsTwo() {
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 2);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 2);
+    void contractVersionIsThree() {
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 3);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 3);
     }
 
     // ── Helpers and records ───────────────────────────────────────────────────────────────
@@ -447,11 +452,11 @@ private slots:
     void bannerUnavailableOnVersionMismatch() {
         Harness h;
         json info = infoActive();
-        info["rpcversion"] = 1;
+        info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
+        QVERIFY(h.label("lblBanner").contains("version 3"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
-        QVERIFY(h.label("lblBanner").contains("version 1"));
     }
 
     void bannerUnavailableWhileNotAtTip() {
