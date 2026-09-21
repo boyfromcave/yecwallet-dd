@@ -148,10 +148,12 @@ public:
         Status = 0,
         Minted,
         Collateral,
+        Ratio,           // collateral at the claim price over the debt: what a claim is judged by
         TermClass,
         LockHeight,
         ClaimHeight,
         Claimable,
+        UnderwaterBelow, // the claim price below which the vault can be claimed (yed_getvault.underwaterAt)
         Unbacked,
         SweepBefore,
         Notice,          // v3: "noticed, emergency claim from <h>" | "notice possible" | "-"
@@ -160,6 +162,10 @@ public:
     };
 
     void setNewData(const QList<YellowbackPosition>& positions, int currentHeight);
+    /** The tip's pClaim (µUSD), from yed_getstats: the Ratio column re-renders when it moves. */
+    void setClaimPrice(qint64 pClaimMicroUsd);
+    /** The ratio a claim is judged by, in bps; -1 when undefined (no debt, no price). */
+    static qint64 ratioBps(const YellowbackPosition& p, qint64 pClaimMicroUsd);
     const YellowbackPosition* positionAt(int row) const;
     QList<YellowbackPosition> redeemable() const;
 
@@ -172,6 +178,7 @@ private:
     QList<YellowbackPosition>* modeldata     = nullptr;
     QList<QString>          headers;
     int                     currentHeight = 0;
+    qint64                  pClaim        = 0;      // µUSD; 0 = unknown
     bool                    loading       = true;
 };
 

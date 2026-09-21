@@ -114,7 +114,12 @@ public:
 
     // ── Mint gate: empty string when a mint of `cents` is allowed, else the reason ─────────
     // MINTPOL-1 as yed_getstats reports it: mintingAllowed, and every haltMask name by name.
-    QString mintBlocker(qint64 cents) const;
+    /** Why a mint of `cents` in `termClass` ("" = any) cannot be built now; empty when it can. */
+    QString mintBlocker(qint64 cents, const QString& termClass = QString()) const;
+    /** W16: the classes yed_getstats says can mint now (every class while minting is open). */
+    QStringList mintableClasses() const;
+    /** W16: non-blocking notice when the global-ratio halt limits minting to the recapitalising classes; empty otherwise. */
+    QString mintLimit() const;
 
     // ── RPC calls. `ok` receives the "result"; `err` the node's error message verbatim ─────
     typedef std::function<void(const json&)>    OkFn;

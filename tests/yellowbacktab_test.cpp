@@ -16,6 +16,10 @@
 // runs only the offline cases.
 
 #include <QtTest>
+#include <QStackedWidget>
+#include <QLayout>
+#include <QComboBox>
+#include <QStandardItemModel>
 #include <QTabWidget>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -798,6 +802,124 @@ private slots:
         QVERIFY(a.text.contains("burns $1,000.00"));
     }
 
+    // ── Found by the owner's first walk of Scenario 1 (role-based regtest plan §8.1) ──────────
+
+    // W16: a global-ratio halt limits minting to the recapitalising class instead of stopping it
+    void mintLimitedToRecapClassUnderGlobalRatioHalt() {
+        Harness h;
+        json info = infoActive();
+        info["params"]["globalRatioHaltBps"] = 25000; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["haltMask"] = json::array({"GLOBAL_RATIO"}); stats["mintingAllowed"] = false;
+        stats["globalRatioBps"] = 21460; stats["mintableClasses"] = json::array({"A"});
+        h.feed(info, stats, activationActive());
+        QCOMPARE(h.ctl.mintableClasses(), QStringList({"A"}));
+        QVERIFY2(h.ctl.mintBlocker(10000, "A").isEmpty(), qPrintable(h.ctl.mintBlocker(10000, "A")));
+        QVERIFY(h.ctl.mintBlocker(10000, "C").contains("only class A"));
+        QVERIFY(h.ctl.mintBlocker(10000, "C").contains("Class C cannot mint"));
+        QVERIFY(h.ctl.mintLimit().contains("limited"));
+        QVERIFY(h.ctl.mintLimit().contains("class A"));
+        // the overview and the mint page both say "limited", never "paused"
+        QVERIFY(h.label("lblMintStatus").contains("limited"));
+        QVERIFY(!h.label("lblMintStatus").contains("paused"));
+        QVERIFY(h.visible("lblGate"));
+        QVERIFY(h.label("lblGate").contains("limited"));
+        // the classes that cannot mint are greyed out in the lock-length list
+        auto cmb = h.tab.findChild<QComboBox*>("cmbTier");
+        QVERIFY(cmb != nullptr);
+        auto model = qobject_cast<QStandardItemModel*>(cmb->model());
+        QVERIFY(model != nullptr);
+        for (int i = 0; i < cmb->count(); i++) {
+            const QString cls = h.ctl.classForLock(cmb->itemData(i).toInt()).name;
+            QCOMPARE(model->item(i)->isEnabled(), cls == "A");
+        }
+        QVERIFY(h.copyIsClean());
+    }
+
+    void mintPausedUnderGlobalRatioWhenNoClassQualifies() {
+        Harness h;
+        json stats = statsOpen();
+        stats["haltMask"] = json::array({"GLOBAL_RATIO"}); stats["mintingAllowed"] = false;
+        stats["mintableClasses"] = json::array();
+        h.feed(infoActive(), stats, activationActive());
+        QVERIFY(h.ctl.mintBlocker(10000, "A").contains("Minting is paused"));
+        QVERIFY(h.ctl.mintLimit().isEmpty());
+        QVERIFY(h.label("lblMintStatus").contains("paused"));
+        // a node from before W16 has no mintableClasses: the halt pauses everything, as before
+        json old = statsOpen();
+        old["haltMask"] = json::array({"GLOBAL_RATIO"}); old["mintingAllowed"] = false;
+        h.feed(infoActive(), old, activationActive());
+        QVERIFY(h.ctl.mintableClasses().isEmpty());
+        QVERIFY(h.ctl.mintBlocker(10000, "A").contains("Minting is paused"));
+    }
+
+    // "I don't actually see a collateral ratio for my specific position"
+    void vaultsShowRatioAndUnderwaterPrice() {
+        Harness h;
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({positionActive()}));
+        auto m = h.ctl.positionsModel();
+        const YellowbackPosition pos = YellowbackPosition::fromJson(positionActive());
+        const qint64 bps = YellowbackPositionsModel::ratioBps(pos, 2000000);       // statsOpen()'s pClaim
+        QVERIFY(bps > 0);
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::DisplayRole).toString(), YellowbackFormat::bpsAsPercent(bps));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::UnderwaterBelow), Qt::DisplayRole).toString(), YellowbackFormat::price(437800));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::ToolTipRole).toString().contains("110 %"));
+        // the fixture's vault is under the claim threshold at that price: shown in red
+        if (bps < 11000)
+            QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::ForegroundRole).value<QBrush>().color(), QColor(Qt::red));
+        // no claim price: the column says so rather than inventing a number
+        json stats = statsOpen(); stats["pClaim"] = nullptr;
+        h.feed(infoActive(), stats, activationActive(), json::array({positionActive()}));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::DisplayRole).toString().contains("no claim price"));
+    }
+
+    // "Sent $5.55 ... but it says sent 0.00": a send whose outputs all came back to this wallet
+    void transactionsLabelSelfTransfer() {
+        Harness h;
+        json tx = json::parse(R"({"txid": "cf46df487bfc90719eb03917696c05af0b9b7e76f1588f5f7ba6fc1440e795d4", "height": 333,
+            "confirmations": 1, "type": "send", "verdict": "ok", "path": "", "yedIn": 10000, "yedOut": 10000, "burned": 0,
+            "amountCents": 0, "feeZat": 0, "payee": null, "unbacked": false, "expired": false})");
+        h.ctl.feed(infoActive(), statsOpen(), activationActive(), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
+        auto m = h.ctl.transactionsModel();
+        QCOMPARE(m->rowCount(QModelIndex()), 1);
+        QCOMPARE(m->data(m->index(0, YellowbackTxModel::Type), Qt::DisplayRole).toString(), QString("self-transfer"));
+        QVERIFY(m->data(m->index(0, YellowbackTxModel::Amount), Qt::ToolTipRole).toString().contains("balance is unchanged"));
+        // a real send keeps its label
+        tx["amountCents"] = -555; tx["yedOut"] = 9445;
+        h.ctl.feed(infoActive(), statsOpen(), activationActive(), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
+        QVERIFY(m->data(m->index(0, YellowbackTxModel::Type), Qt::DisplayRole).toString() != QString("self-transfer"));
+    }
+
+    // "the UI only has one line, so you cannot clearly read the information": a wrapped value
+    // beside its label must get the height its text needs, at a modest window width
+    void longValueLabelsAreNotClipped() {
+        Harness h;
+        h.feed(infoActive(), statsOpen(), activationActive());
+        h.tab.resize(720, 560);
+        h.tab.show();
+        QApplication::processEvents();
+        struct Probe { const char* page; YellowbackTab::Page id; const char* label; QString text; };
+        const QList<Probe> probes = {
+            { "Overview", YellowbackTab::Overview, "lblAttestation", "TRIGGERED (disabled)" },   // the longest text the app puts there now
+            { "Mint", YellowbackTab::Mint, "lblSource", "pools $42.4163 per YEC, attestors $45.6786 per YEC — the pools' price bound the mint" },
+            { "Mint", YellowbackTab::Mint, "lblSelection", "3 of 3 selected attestors have a fresh attestation on this node (seq 0, 2, 3); a mint needs 2" },
+        };
+        for (const Probe& pr : probes) {
+            QWidget* page = h.tab.page(pr.id);
+            if (auto* stack = qobject_cast<QStackedWidget*>(page->parentWidget())) stack->setCurrentWidget(page);
+            auto lbl = h.tab.findChild<QLabel*>(pr.label);
+            QVERIFY2(lbl != nullptr, pr.label);
+            lbl->setText(pr.text);
+            QApplication::processEvents();
+            if (page->layout()) page->layout()->activate();
+            QApplication::processEvents();
+            QVERIFY2(lbl->width() > 100, qPrintable(QString("%1 has width %2").arg(pr.label).arg(lbl->width())));
+            const int needed = lbl->heightForWidth(lbl->width());
+            QVERIFY2(lbl->height() >= needed,
+                     qPrintable(QString("%1 on %2 is clipped: height %3, needs %4 at width %5").arg(pr.label).arg(pr.page).arg(lbl->height()).arg(needed).arg(lbl->width())));
+        }
+    }
+
     void vaultsRenderVoidRow() {
         Harness h;
         json v = positionActive();
@@ -1457,7 +1579,7 @@ private slots:
         h.ctl.feedAttest(priceReply(), json(nullptr), json(nullptr));
         QCOMPARE(h.label("lblPoolPrices"), QString("$1.9900 / $2.0000"));
         QVERIFY2(h.label("lblAttestation").startsWith("ARMED"), qPrintable(h.label("lblAttestation")));
-        QVERIFY(h.label("lblAttestation").contains("attested prices"));
+        QVERIFY(h.tab.findChild<QLabel*>("lblAttestation")->toolTip().contains("attested prices"));   // the field is the status alone; the explanation is the tooltip
     }
 
     void overviewSourcePricesUnarmed() {
@@ -1468,11 +1590,12 @@ private slots:
         h.ctl.feedAttest(p, json(nullptr), json(nullptr));
         QCOMPARE(h.label("lblPoolPrices"), QString("undefined / $2.0000"));
         QVERIFY(h.label("lblAttestation").startsWith("UNARMED"));
-        QVERIFY(h.label("lblAttestation").contains("pool quotes alone"));
+        QVERIFY(h.tab.findChild<QLabel*>("lblAttestation")->toolTip().contains("pool quotes alone"));
         // ARMED but not required: the parameter set disabled the layer
         p["attestStatus"] = "ARMED";
         h.ctl.feedAttest(p, json(nullptr), json(nullptr));
-        QVERIFY(h.label("lblAttestation").contains("disabled by parameter set"));
+        QVERIFY(h.label("lblAttestation").contains("(disabled)"));
+        QVERIFY(h.tab.findChild<QLabel*>("lblAttestation")->toolTip().contains("disabled by the parameter set"));
     }
 
     void mintSelectionLine() {

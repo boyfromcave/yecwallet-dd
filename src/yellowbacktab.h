@@ -129,6 +129,8 @@ private:
     void updateOverview();
     void updateBalances();
     void updateMintGate();
+    void applyMintableClasses();          // W16: grey out the classes yed_getstats says cannot mint now
+    int  mintedStatusHeight = -1;         // the height the last "Minted. txid" status was shown at; cleared two blocks on
     void updateMintClasses();
     QString fundingSource() const;          // "" = transparent total, else the chosen ys1... address (I2)
     void refreshFundingSources();           // rebuild cmbFundFrom from the DataModel, keeping the selection

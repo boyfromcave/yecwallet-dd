@@ -83,6 +83,19 @@ void YellowbackTab::setupPages() {
     uiReceive   = new Ui::YellowbackReceive();      uiReceive->setupUi(pages[Receive]);
     uiSend      = new Ui::YellowbackSend();         uiSend->setupUi(pages[Send]);
     uiMint      = new Ui::YellowbackMint();         uiMint->setupUi(pages[Mint]);
+    // Long, word-wrapped values ("pools $x, attestors $y — …", "n of m attestors reachable",
+    // "ARMED — mints and claims use attested prices") were clipped to one line beside their
+    // labels on the owner's first walk-through: let such a field take the full width under its
+    // label, and let the label grow with its text.
+    for (QFormLayout* form : { uiOverview->balanceForm, uiOverview->systemForm, uiMint->mintForm })
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    for (QLabel* grows : { uiOverview->lblAttestation, uiMint->lblSource, uiMint->lblSelection }) {
+        grows->setWordWrap(true);
+        grows->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        // A word-wrapped label's minimum height is near zero, so when a page is short of room it is
+        // the one widget the layout collapses -- to 8 px on the owner's screen. Two lines is the floor.
+        grows->setMinimumHeight(grows->fontMetrics().lineSpacing() * 2 + 4);
+    }
     uiPositions = new Ui::YellowbackPositions();    uiPositions->setupUi(pages[Vaults]);
     uiClaim     = new Ui::YellowbackClaim();        uiClaim->setupUi(pages[Claim]);
     uiTx        = new Ui::YellowbackTransactions(); uiTx->setupUi(pages[Transactions]);
@@ -354,7 +367,7 @@ void YellowbackTab::updateOverview() {
     }
 
     QString blocker = ctl->mintBlocker(0);
-    uiOverview->lblMintStatus->setText(blocker.isEmpty() ? tr("open") : blocker);
+    uiOverview->lblMintStatus->setText(!blocker.isEmpty() ? blocker : !ctl->mintLimit().isEmpty() ? ctl->mintLimit() : tr("open"));
 
     uiOverview->lblSupply->setText(YellowbackFormat::cents(YellowbackJson::toInt(s, Stats::SUPPLY_CENTS)) % " / " %
                                    YellowbackFormat::zec(YellowbackJson::toInt(s, Stats::COLLATERAL_ZAT)));
@@ -373,12 +386,18 @@ void YellowbackTab::updateOverview() {
         uiOverview->lblPoolPrices->setText(YellowbackFormat::priceOrUndefined(pr, Price::X_MINT) % " / " %
                                            YellowbackFormat::priceOrUndefined(pr, Price::X_CLAIM));
         QString st = YellowbackJson::toStr(pr, Price::ATTEST_STATUS, "-");
-        if (YellowbackJson::toBool(pr, Price::ARMED))
-            uiOverview->lblAttestation->setText(tr("%1 — mints and claims use attested prices").arg(st));
-        else if (st == Attest::STATUS_ARMED)
-            uiOverview->lblAttestation->setText(tr("%1 — attestation layer disabled by parameter set").arg(st));
-        else
-            uiOverview->lblAttestation->setText(tr("%1 — prices come from pool quotes alone").arg(st));
+        // The status alone in the (narrow) field; the explanation is the tooltip. The long form
+        // was clipped to "ARMED — mints and" on the owner's first walk-through.
+        if (YellowbackJson::toBool(pr, Price::ARMED)) {
+            uiOverview->lblAttestation->setText(st);
+            uiOverview->lblAttestation->setToolTip(tr("%1: mints and claims use attested prices, one both pools and attestors signed off on.").arg(st));
+        } else if (st == Attest::STATUS_ARMED) {
+            uiOverview->lblAttestation->setText(tr("%1 (disabled)").arg(st));
+            uiOverview->lblAttestation->setToolTip(tr("The attestation layer is armed but disabled by the parameter set: prices come from pool quotes alone."));
+        } else {
+            uiOverview->lblAttestation->setText(st);
+            uiOverview->lblAttestation->setToolTip(tr("%1: the attestation layer is not armed; prices come from pool quotes alone.").arg(st));
+        }
     }
 
     refreshFundingSources();
@@ -624,12 +643,37 @@ void YellowbackTab::updateMintGate() {
     if (ctl == nullptr) return;
     qint64 cents = 0;
     bool haveAmount = parseDollars(uiMint->txtAmount->text(), &cents);
-    QString blocker = ctl->mintBlocker(haveAmount ? cents : 0);
-    uiMint->lblGate->setVisible(!blocker.isEmpty());
-    uiMint->lblGate->setText(blocker);
+    const QString termClass = ctl->classForLock(uiMint->cmbTier->currentData().toInt()).name;
+    QString blocker = ctl->mintBlocker(haveAmount ? cents : 0, termClass);
+    // W16: under a global-ratio halt the page stays usable for the recapitalising class, with the
+    // limit shown in the same banner; the classes that cannot mint are greyed out in the list
+    const QString limit = ctl->mintLimit();
+    uiMint->lblGate->setVisible(!blocker.isEmpty() || !limit.isEmpty());
+    uiMint->lblGate->setText(blocker.isEmpty() ? limit : blocker);
+    applyMintableClasses();
+    // The "Minted. txid: …" line outlives its usefulness two blocks later (the owner saw it sit on
+    // the page through a price shock); the notice and the Transactions list carry the record
+    if (mintedStatusHeight >= 0 && ctl->height() >= mintedStatusHeight + 2) {
+        mintedStatusHeight = -1;
+        if (uiMint->lblMintPageStatus->text().startsWith(tr("Minted. txid: "))) uiMint->lblMintPageStatus->clear();
+    }
     bool estimateCurrent = haveAmount && estimateZat >= 0 && estimateCents == cents &&
                            estimateLockBlocks == uiMint->cmbTier->currentData().toInt();
     uiMint->btnMint->setEnabled(actionsEnabled && blocker.isEmpty() && estimateCurrent);
+}
+
+void YellowbackTab::applyMintableClasses() {
+    if (ctl == nullptr) return;
+    auto* model = qobject_cast<QStandardItemModel*>(uiMint->cmbTier->model());
+    if (model == nullptr) return;
+    const QStringList mintable = ctl->mintableClasses();
+    const bool limited = !ctl->mintLimit().isEmpty();
+    for (int i = 0; i < uiMint->cmbTier->count(); i++) {
+        QStandardItem* item = model->item(i);
+        if (item == nullptr) continue;
+        const QString cls = ctl->classForLock(uiMint->cmbTier->itemData(i).toInt()).name;
+        item->setEnabled(!limited || mintable.contains(cls));
+    }
 }
 
 void YellowbackTab::requestEstimate() {
@@ -794,6 +838,7 @@ void YellowbackTab::doMint() {
                             if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
                             summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
                             uiMint->lblMintPageStatus->setText(tr("Minted. txid: ") % YellowbackJson::toStr(done, MintResult::TXID));
+                            mintedStatusHeight = ctl->height();
                             uiMint->txtAmount->clear();
                             notice(tr("Mint sent"), summary);
                             ctl->refresh(true);

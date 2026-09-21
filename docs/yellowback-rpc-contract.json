@@ -217,37 +217,37 @@
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "mintpol-divergence": {
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "mintpol-global-ratio": {
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "mintpol-no-price": {
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "mintpol-not-active": {
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "mintpol-participation": {
       "raisedBy": [
         "yed_mint"
       ],
-      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio above GLOBAL_RATIO_HALT_BPS; with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
+      "when": "MINTPOL-1, one per halt bit and the cap: mint before activation; with no quote tags in the windows; after fewer than PARTICIPATION_FLOOR signals in a window; with the global ratio below GLOBAL_RATIO_HALT_BPS and the class's minimum ratio below RECAP_RATIO_BPS (W16: class A mints through a global-ratio halt, the message names the classes that can); with P_fast/P_slow diverging by more than DIVERGENCE_BPS; with -yellowbacksupplycapbps low and supply at the cap"
     },
     "no-payout-address": {
       "raisedBy": [
@@ -407,7 +407,7 @@
     "plan": "docs/plans/yellowback-v2-development-plan.md",
     "planV3": "docs/plans/yellowback-v3-development-plan.md",
     "revision": 6,
-    "revisionV3": 1,
+    "revisionV3": 2,
     "rpcdoc": "ycash-dd/doc/yellowback-rpc.md",
     "section": "4.5"
   },
@@ -764,6 +764,7 @@
         "feeBps": 25,
         "feeMinZat": 50000000,
         "feeZat": 1000,
+        "globalRatioHaltBps": 25000,
         "grace": 24,
         "minFill": {
           "fast": 4,
@@ -778,6 +779,7 @@
           "preferredPayee": null,
           "tiltBps": 10000
         },
+        "recapRatioBps": 50000,
         "refLag": 2,
         "refWindow": 40,
         "sigmaRefBps": 0,
@@ -919,6 +921,11 @@
       "haltMask": [],
       "height": 331,
       "issuedZat": 1656250000000,
+      "mintableClasses": [
+        "A",
+        "B",
+        "C"
+      ],
       "mintingAllowed": true,
       "pClaim": 2000000,
       "pFast": 2000000,

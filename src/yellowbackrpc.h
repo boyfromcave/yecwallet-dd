@@ -141,6 +141,8 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* WINDOWS             = "windows";
     constexpr const char* MIN_FILL            = "minFill";
     constexpr const char* CLASSES             = "classes";
+    constexpr const char* GLOBAL_RATIO_HALT_BPS = "globalRatioHaltBps";  // HALT-2's floor
+    constexpr const char* RECAP_RATIO_BPS     = "recapRatioBps";         // v3 W16: the class minimum that mints through a halt
     constexpr const char* POLICY              = "policy";
     constexpr const char* ATTEST              = "attest";       // v3: the attestation-layer parameters
 }
@@ -188,6 +190,7 @@ namespace Stats {   // contract: yed_getstats
     constexpr const char* SUPPLY_CAP_CENTS  = "supplyCapCents"; // null when no cap
     constexpr const char* HALT_MASK         = "haltMask";       // [names]; empty when minting is open
     constexpr const char* MINTING_ALLOWED   = "mintingAllowed";
+    constexpr const char* MINTABLE_CLASSES  = "mintableClasses"; // v3 W16: the classes a mint can use now ([] = none)
 
     // haltMask names (§3.6)
     constexpr const char* HALT_NOT_ACTIVE   = "NOT_ACTIVE";     // value

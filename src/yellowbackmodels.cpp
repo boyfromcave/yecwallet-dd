@@ -228,7 +228,7 @@ QString YellowbackFormat::haltReason(const QString& name) {
     if (name == HALT_PARTICIPATION)
         return QObject::tr("PARTICIPATION: fewer than 60 % of recent blocks signal enforcement; minting pauses until 75 % do.");
     if (name == HALT_GLOBAL_RATIO)
-        return QObject::tr("GLOBAL_RATIO: the system-wide collateral ratio is below its floor.");
+        return QObject::tr("GLOBAL_RATIO: the system-wide collateral ratio is below its floor; only a term class whose minimum ratio reaches the recapitalisation floor can mint until it recovers.");
     if (name == HALT_DIVERGENCE)
         return QObject::tr("DIVERGENCE: the fast and slow price medians disagree by more than the allowed band.");
     if (name == HALT_ENFORCEMENT)
@@ -254,10 +254,24 @@ QString YellowbackFormat::sourceTier(int tier) {
 // ── Positions model ───────────────────────────────────────────────────────────────────────
 
 YellowbackPositionsModel::YellowbackPositionsModel(QObject* parent) : QAbstractTableModel(parent) {
-    headers << tr("Status") << tr("Minted") << tr("Collateral") << tr("Class")
+    headers << tr("Status") << tr("Minted") << tr("Collateral") << tr("Ratio now") << tr("Class")
             << tr("Lock height (est. date)") << tr("Claim height (est. date)")
-            << tr("Claimable") << tr("Unbacked") << tr("Sweep before") << tr("Notice") << tr("Vault");
+            << tr("Claimable") << tr("Underwater below") << tr("Unbacked") << tr("Sweep before") << tr("Notice") << tr("Vault");
     modeldata = new QList<YellowbackPosition>();
+}
+
+qint64 YellowbackPositionsModel::ratioBps(const YellowbackPosition& p, qint64 pClaimMicroUsd) {
+    // collateralZat * pClaim / (COIN * mintedCents), as the node's globalRatioBps (math.h): the
+    // product overflows 64 bits for a large vault, so it is done in floating point for display.
+    if (p.mintedCents <= 0 || pClaimMicroUsd <= 0 || p.collateralZat <= 0) return -1;
+    const long double r = (long double)p.collateralZat * (long double)pClaimMicroUsd / (100000000.0L * (long double)p.mintedCents);
+    return (qint64)r;
+}
+
+void YellowbackPositionsModel::setClaimPrice(qint64 pClaimMicroUsd) {
+    if (pClaim == pClaimMicroUsd) return;
+    pClaim = pClaimMicroUsd;
+    if (!modeldata->isEmpty()) emit dataChanged(index(0, Ratio), index(modeldata->size() - 1, Ratio));
 }
 
 YellowbackPositionsModel::~YellowbackPositionsModel() {
@@ -303,11 +317,17 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
     const auto& p = modeldata->at(index.row());
 
     if (role == Qt::TextAlignmentRole &&
-        (index.column() == Minted || index.column() == Collateral))
+        (index.column() == Minted || index.column() == Collateral || index.column() == Ratio || index.column() == UnderwaterBelow))
         return QVariant(Qt::AlignRight | Qt::AlignVCenter);
 
     if (role == Qt::ForegroundRole) {
         QBrush b;
+        if (index.column() == Ratio && p.status == STATUS_ACTIVE) {
+            // the claim threshold is 110 %; below 150 % a further fall of a quarter reaches it
+            const qint64 r = ratioBps(p, pClaim);
+            if (r >= 0 && r < 11000)      { b.setColor(Qt::red); return b; }
+            if (r >= 0 && r < 15000)      { b.setColor(QColor(200, 100, 0)); return b; }
+        }
         if (p.status == STATUS_VOID)                              b.setColor(Qt::red);
         else if (p.sweepBefore > 0 && p.status == STATUS_ACTIVE)  b.setColor(QColor(200, 100, 0));
         else if (p.status == STATUS_CLOSED || p.status == STATUS_CLAIMED) b.setColor(Qt::gray);
@@ -324,6 +344,12 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             }
             case Minted:       return YellowbackFormat::cents(p.mintedCents);
             case Collateral:   return YellowbackFormat::zec(p.collateralZat);
+            case Ratio: {
+                if (p.status != STATUS_ACTIVE) return QString("-");
+                const qint64 r = ratioBps(p, pClaim);
+                return r < 0 ? tr("(no claim price)") : YellowbackFormat::bpsAsPercent(r);
+            }
+            case UnderwaterBelow: return p.status == STATUS_ACTIVE && p.underwaterAt >= 0 ? YellowbackFormat::price(p.underwaterAt) : QString("-");
             case TermClass:    return p.termClass;
             case LockHeight:   return YellowbackFormat::heightWithEstimate(p.lockHeight, currentHeight);
             case ClaimHeight:  return YellowbackFormat::heightWithEstimate(p.claimHeight, currentHeight);
@@ -342,6 +368,15 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
 
     if (role == Qt::ToolTipRole) {
         switch (index.column()) {
+            case Ratio:
+                return pClaim > 0
+                    ? tr("This vault's collateral at the current claim price (%1 per YEC) over the %2 of YED it backs. "
+                         "Past the claim height, anyone may claim it once this falls below 110 %%: that happens when the claim price drops below %3.")
+                          .arg(YellowbackFormat::price(pClaim)).arg(YellowbackFormat::cents(p.mintedCents))
+                          .arg(p.underwaterAt >= 0 ? YellowbackFormat::price(p.underwaterAt) : tr("(undefined)"))
+                    : tr("No claim price is defined at the tip, so the ratio cannot be judged.");
+            case UnderwaterBelow:
+                return tr("The claim price below which this vault is underwater (collateral worth less than 110 %% of its debt) and, past its claim height, claimable by anyone who burns the debt.");
             case Status:
                 if (p.status == STATUS_VOID)
                     return YellowbackFormat::voidReason(p.voidReason.isEmpty() ? tr("(no reason returned)") : p.voidReason);
@@ -662,6 +697,9 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
         switch (index.column()) {
             case Type: {
                 QString s = YellowbackFormat::typeLabel(t.type);
+                // A send whose every output came back to this wallet: the balance did not move, and
+                // "Sent $0.00" read as a fault on the owner's first walk-through
+                if (t.type == TYPE_SEND && t.amountCents == 0 && t.yedOut > 0) s = tr("self-transfer");
                 if (t.unbacked) s += tr(" (unbacked)");
                 if (t.expired)  s += tr(" (expired)");
                 return s;
@@ -688,6 +726,9 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
                       "destroyed (burned); only its YEC carrier value moved.");
         if (t.unbacked)
             return tr("A vault of yours was closed without burning its debt; the YED minted against it are unbacked from now on.");
+        if (t.type == TYPE_SEND && t.amountCents == 0 && t.yedOut > 0)
+            return tr("YED moved between addresses of this wallet (%1 in, %2 out): the balance is unchanged, which is why the amount is $0.00.")
+                    .arg(YellowbackFormat::cents(t.yedIn)).arg(YellowbackFormat::cents(t.yedOut));
         switch (index.column()) {
             case Amount:
                 return tr("YED in: %1, out: %2, burned: %3; enforcement fee %4%5")
