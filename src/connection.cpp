@@ -422,8 +422,10 @@ void ConnectionLoader::doManualConnect() {
 }
 
 void ConnectionLoader::doRPCSetConnection(Connection* conn) {
-    // Before passing on the ezcashd to the rpc controller, disconnect all connections first. 
-    ezcashd->disconnect();
+    // Before passing on the ezcashd to the rpc controller, disconnect all connections first.
+    // With --no-embedded there is no embedded node and ezcashd is null (a member call on a null
+    // pointer, which Qt caught as "QObject::disconnect: Unexpected nullptr parameter").
+    if (ezcashd != nullptr) ezcashd->disconnect();
 
     rpc->setEZcashd(ezcashd);
     rpc->setConnection(conn);
