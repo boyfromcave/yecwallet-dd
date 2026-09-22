@@ -636,7 +636,7 @@ private slots:
         h.feed(infoActive(), stats, activationActive());
         QVERIFY(h.label("lblBanner").contains("Participation halt"));
         QVERIFY(!h.label("lblBanner").contains("Enforcement suspended"));
-        QVERIFY(h.label("lblMintStatus").contains("Minting is paused"));
+        QVERIFY(h.label("lblMintStatus").contains("paused"));
     }
 
     void bannerValveTripped() {
@@ -786,7 +786,7 @@ private slots:
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Minted), Qt::DisplayRole).toString(), QString("$1,000.00"));
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::TermClass), Qt::DisplayRole).toString(), QString("A"));
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::ClaimHeight), Qt::DisplayRole).toString().startsWith("404"));
-        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Claimable), Qt::DisplayRole).toString(), QString("no"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Claimable), Qt::DisplayRole).toString().startsWith("not before 404"));   // says when, not just no
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Unbacked), Qt::DisplayRole).toString(), QString("no"));
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::SweepBefore), Qt::DisplayRole).toString(), QString("-"));
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Vault), Qt::DisplayRole).toString().right(2), QString(":0"));
@@ -868,9 +868,9 @@ private slots:
         if (bps < 11000)
             QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::ForegroundRole).value<QBrush>().color(), QColor(Qt::red));
         // no claim price: the column says so rather than inventing a number
-        json stats = statsOpen(); stats["pClaim"] = nullptr;
+        json stats = statsOpen(); stats["pClaim"] = nullptr; stats["pFast"] = nullptr;
         h.feed(infoActive(), stats, activationActive(), json::array({positionActive()}));
-        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::DisplayRole).toString().contains("no claim price"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::DisplayRole).toString().contains("no price"));
     }
 
     // "Sent $5.55 ... but it says sent 0.00": a send whose outputs all came back to this wallet
@@ -920,6 +920,82 @@ private slots:
         }
     }
 
+    // ── The owner's second walk of Scenario 1 (regtest plan F-15 to F-19) ──────────────────
+
+    // "difficult to read each row to understand which vault I needed to act on first"
+    void vaultsActByAndHighlight() {
+        Harness h;
+        json p = positionActive();                                   // lock 380, claim 404
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({p}));   // height 331
+        auto m = h.ctl.positionsModel();
+        auto cell = [&](int col, int role = Qt::DisplayRole) { return m->data(m->index(0, col), role); };
+        QVERIFY2(cell(YellowbackPositionsModel::ActBy).toString().startsWith("locked; redeemable in 49 block"), qPrintable(cell(YellowbackPositionsModel::ActBy).toString()));
+        QVERIFY(!cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).isValid());
+        QVERIFY(cell(YellowbackPositionsModel::Claimable).toString().startsWith("not before 404"));
+        // in the grace window: the owner's to redeem now, orange
+        p["canRedeem"] = true;
+        h.feedActive(390, json::array({p}));
+        QVERIFY2(cell(YellowbackPositionsModel::ActBy).toString().startsWith("REDEEMABLE: claim path opens in 14 block"), qPrintable(cell(YellowbackPositionsModel::ActBy).toString()));
+        QCOMPARE(cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).value<QBrush>().color(), QColor(255, 232, 190));
+        // past the claim height and not underwater: open but safe while the claim price holds; red
+        h.feedActive(410, json::array({p}));
+        QVERIFY(cell(YellowbackPositionsModel::ActBy).toString().contains("claim path open; safe while"));
+        QVERIFY(cell(YellowbackPositionsModel::Claimable).toString().startsWith("no (claim price above"));
+        QCOMPARE(cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).value<QBrush>().color(), QColor(255, 210, 210));
+        // under a notice: the Claimable cell says when the emergency claim opens
+        p["noticed"] = true; p["noticeHeight"] = 340; p["emergencyOpenAt"] = 420;
+        h.feedActive(410, json::array({p}));
+        QVERIFY(cell(YellowbackPositionsModel::Claimable).toString().startsWith("notice: opens at 420"));
+        p["claimable"] = true;
+        h.feedActive(425, json::array({p}));
+        QCOMPARE(cell(YellowbackPositionsModel::Claimable).toString(), QString("YES"));
+        QVERIFY(cell(YellowbackPositionsModel::ActBy).toString().startsWith("CLAIM PATH OPEN"));
+    }
+
+    // "we also need to be able to filter by status. right now I see several vaults but most are claimed or closed"
+    void vaultsFilterDefaultsToOpen() {
+        Harness h;
+        json closed = positionActive();  closed["txid"] = QString(64, 'a').toStdString();  closed["status"] = "CLOSED";  closed["closeHeight"] = 300; closed["closingTxid"] = QString(64, 'b').toStdString(); closed["burnedCents"] = 100000;
+        json claimed = positionActive(); claimed["txid"] = QString(64, 'c').toStdString(); claimed["status"] = "CLAIMED"; claimed["closeHeight"] = 310; claimed["closingTxid"] = QString(64, 'd').toStdString(); claimed["burnedCents"] = 100000;
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({closed, positionActive(), claimed}));
+        auto view = h.tab.findChild<QTableView*>("tblPositions");
+        QVERIFY(view != nullptr);
+        QCOMPARE(h.ctl.positionsModel()->rowCount(QModelIndex()), 3);
+        QCOMPARE(view->model()->rowCount(QModelIndex()), 1);            // open vaults only, by default
+        h.selectRow("tblPositions", 0);
+        QVERIFY(h.tab.selectedPosition() != nullptr);
+        QCOMPARE(h.tab.selectedPosition()->status, QString("ACTIVE")); // the view's row 0 is the model's row 1
+        auto cmb = h.tab.findChild<QComboBox*>("cmbPositionsFilter");
+        QVERIFY(cmb != nullptr);
+        cmb->setCurrentIndex(cmb->findData(""));
+        QCOMPARE(view->model()->rowCount(QModelIndex()), 3);
+        cmb->setCurrentIndex(cmb->findData("CLAIMED"));
+        QCOMPARE(view->model()->rowCount(QModelIndex()), 1);
+        h.selectRow("tblPositions", 0);
+        QCOMPARE(h.tab.selectedPosition()->status, QString("CLAIMED"));
+        cmb->setCurrentIndex(cmb->findData("VOID"));
+        QCOMPARE(view->model()->rowCount(QModelIndex()), 0);
+        QVERIFY(h.label("lblVaultAction").contains("No vault matches the filter"));
+    }
+
+    // "the 'minting' info window is still squished"; "we might need to be clearer that minting will be re-enabled"
+    void overviewMintStatusIsShortWithTheDetailInTheTooltip() {
+        Harness h;
+        json stats = statsOpen();
+        stats["haltMask"] = json::array({"DIVERGENCE", "GLOBAL_RATIO"}); stats["mintingAllowed"] = false; stats["mintableClasses"] = json::array();
+        h.feed(infoActive(), stats, activationActive());
+        QCOMPARE(h.label("lblMintStatus"), QString("paused: DIVERGENCE, GLOBAL_RATIO"));
+        const QString tip = h.tab.findChild<QLabel*>("lblMintStatus")->toolTip();
+        QVERIFY2(tip.contains("clears by itself"), qPrintable(tip));
+        QVERIFY2(tip.contains("can mint again"), qPrintable(tip));
+        QVERIFY2(h.ctl.mintBlocker(10000, "A").contains("within 64 block"), qPrintable(h.ctl.mintBlocker(10000, "A")));
+        json limited = statsOpen();
+        limited["haltMask"] = json::array({"GLOBAL_RATIO"}); limited["mintingAllowed"] = false; limited["mintableClasses"] = json::array({"A"});
+        h.feed(infoActive(), limited, activationActive());
+        QCOMPARE(h.label("lblMintStatus"), QString("limited to class A"));
+        QVERIFY(h.tab.findChild<QLabel*>("lblMintStatus")->toolTip().contains("recapitalisation floor"));
+    }
+
     void vaultsRenderVoidRow() {
         Harness h;
         json v = positionActive();
@@ -940,7 +1016,7 @@ private slots:
         // Select the row: the page text follows and Release is offered (L14)
         auto table = h.tab.findChild<QTableView*>("tblPositions");
         QVERIFY(table != nullptr);
-        table->setCurrentIndex(m->index(0, 0));
+        table->setCurrentIndex(table->model()->index(0, 0));   // through the view's status filter, not the source model
         QVERIFY(h.label("lblVaultAction").contains("no YED burned"));
         QVERIFY(h.button("btnRelease") != nullptr && h.button("btnRelease")->isEnabled() && !h.button("btnRelease")->isHidden());
         QVERIFY(h.button("btnRedeem")->isHidden() && h.button("btnSweep")->isHidden());
@@ -962,7 +1038,7 @@ private slots:
         QVERIFY(a.text.contains("before height 404"));
 
         auto table = h.tab.findChild<QTableView*>("tblPositions");
-        table->setCurrentIndex(m->index(0, 0));
+        table->setCurrentIndex(table->model()->index(0, 0));   // through the view's status filter, not the source model
         QVERIFY(h.button("btnSweep") != nullptr && h.button("btnSweep")->isEnabled() && !h.button("btnSweep")->isHidden());
         QVERIFY(h.button("btnRedeem")->isEnabled());
         QVERIFY(h.label("lblVaultAction").contains("Sweep"));

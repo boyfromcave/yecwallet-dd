@@ -81,6 +81,9 @@ void YellowbackTab::setupPages() {
 
     uiOverview  = new Ui::YellowbackOverview();     uiOverview->setupUi(pages[Overview]);
     uiReceive   = new Ui::YellowbackReceive();      uiReceive->setupUi(pages[Receive]);
+    // The address in the platform's fixed-width font: a stylesheet naming "monospace" made Qt
+    // search for a family macOS does not have ("Populating font family aliases took 34 ms")
+    uiReceive->lblAddress->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     uiSend      = new Ui::YellowbackSend();         uiSend->setupUi(pages[Send]);
     uiMint      = new Ui::YellowbackMint();         uiMint->setupUi(pages[Mint]);
     // Long, word-wrapped values ("pools $x, attestors $y — …", "n of m attestors reachable",
@@ -89,7 +92,7 @@ void YellowbackTab::setupPages() {
     // label, and let the label grow with its text.
     for (QFormLayout* form : { uiOverview->balanceForm, uiOverview->systemForm, uiMint->mintForm })
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    for (QLabel* grows : { uiOverview->lblAttestation, uiMint->lblSource, uiMint->lblSelection }) {
+    for (QLabel* grows : { uiOverview->lblAttestation, uiOverview->lblMintStatus, uiMint->lblSource, uiMint->lblSelection }) {
         grows->setWordWrap(true);
         grows->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         // A word-wrapped label's minimum height is near zero, so when a page is short of room it is
@@ -146,7 +149,9 @@ void YellowbackTab::setController(YellowbackController* controller) {
 
     uiOverview->tblRecent->setModel(ctl->transactionsModel());
     uiTx->tblTransactions->setModel(ctl->transactionsModel());
-    uiPositions->tblPositions->setModel(ctl->positionsModel());
+    positionsFilter = new YellowbackPositionsFilter(this);
+    positionsFilter->setSourceModel(ctl->positionsModel());
+    uiPositions->tblPositions->setModel(positionsFilter);
     uiClaim->tblClaimable->setModel(ctl->claimableModel());
     uiAttestors->tblAttestors->setModel(ctl->attestorsModel());
 
@@ -367,7 +372,18 @@ void YellowbackTab::updateOverview() {
     }
 
     QString blocker = ctl->mintBlocker(0);
-    uiOverview->lblMintStatus->setText(!blocker.isEmpty() ? blocker : !ctl->mintLimit().isEmpty() ? ctl->mintLimit() : tr("open"));
+    {
+        // A short status in the (narrow) field, the whole explanation as the tooltip: the long text
+        // was unreadable in that column on the owner's walk-through.
+        const QString limit = ctl->mintLimit();
+        const QStringList halts = YellowbackJson::strings(ctl->stats(), Stats::HALT_MASK);
+        QString shortStatus;
+        if (!blocker.isEmpty())      shortStatus = halts.isEmpty() ? tr("paused (supply cap)") : tr("paused: %1").arg(halts.join(", "));
+        else if (!limit.isEmpty())   shortStatus = tr("limited to class %1").arg(ctl->mintableClasses().join(tr(" or ")));
+        else                         shortStatus = tr("open");
+        uiOverview->lblMintStatus->setText(shortStatus);
+        uiOverview->lblMintStatus->setToolTip(!blocker.isEmpty() ? blocker : !limit.isEmpty() ? limit : tr("Every term class can mint now."));
+    }
 
     uiOverview->lblSupply->setText(YellowbackFormat::cents(YellowbackJson::toInt(s, Stats::SUPPLY_CENTS)) % " / " %
                                    YellowbackFormat::zec(YellowbackJson::toInt(s, Stats::COLLATERAL_ZAT)));
@@ -1013,21 +1029,32 @@ void YellowbackTab::setupPositions() {
     uiPositions->btnNotice->setEnabled(false);
     uiPositions->btnNotice->setToolTip(tr("Post a claim notice against a vault below the emergency ratio under the attested prices (yed_claimnotice). Anyone may; it costs the carrier and a network fee, no YED."));
 
-    auto selected = [=, this]() -> const YellowbackPosition* {
-        if (ctl == nullptr) return nullptr;
-        auto idx = uiPositions->tblPositions->currentIndex();
-        return ctl->positionsModel()->positionAt(idx.isValid() ? idx.row() : -1);
-    };
+    // "Show": open vaults by default -- the owner's list was mostly CLAIMED and CLOSED rows
+    uiPositions->cmbPositionsFilter->addItem(tr("Open (active and void)"), "open");
+    uiPositions->cmbPositionsFilter->addItem(tr("All"), "");
+    for (const char* st : { "ACTIVE", "VOID", "CLOSED", "CLAIMED" }) uiPositions->cmbPositionsFilter->addItem(QString(st), QString(st));
+    QObject::connect(uiPositions->cmbPositionsFilter, &QComboBox::currentIndexChanged, this, [=, this](int) {
+        if (positionsFilter) positionsFilter->setStatusFilter(uiPositions->cmbPositionsFilter->currentData().toString());
+        updateVaultButtons();
+    });
+
+    auto selected = [=, this]() -> const YellowbackPosition* { return selectedPosition(); };
     QObject::connect(uiPositions->btnRelease, &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnRedeem,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnSweep,   &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) sweepVault(*p); });
     QObject::connect(uiPositions->btnNotice,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) noticeVault(*p); });
     QObject::connect(uiPositions->btnWhyVoid, &QPushButton::clicked, [=, this]() {
-        if (ctl == nullptr) return;
-        auto idx = uiPositions->tblPositions->currentIndex();
-        auto p = ctl->positionsModel()->positionAt(idx.row());
+        auto p = selectedPosition();
         if (p != nullptr) explainVoid(*p);
     });
+}
+
+const YellowbackPosition* YellowbackTab::selectedPosition() const {
+    if (ctl == nullptr) return nullptr;
+    QModelIndex idx = uiPositions->tblPositions->currentIndex();
+    if (!idx.isValid()) return nullptr;
+    if (positionsFilter != nullptr) idx = positionsFilter->mapToSource(idx);
+    return ctl->positionsModel()->positionAt(idx.isValid() ? idx.row() : -1);
 }
 
 void YellowbackTab::updatePositions() {
@@ -1047,11 +1074,13 @@ void YellowbackTab::updatePositions() {
 
 void YellowbackTab::updateVaultButtons() {
     if (ctl == nullptr) return;
-    auto idx = uiPositions->tblPositions->currentIndex();
-    auto p = ctl->positionsModel()->positionAt(idx.isValid() ? idx.row() : -1);
+    auto p = selectedPosition();
     if (p == nullptr) {
-        uiPositions->lblVaultAction->setText(ctl->positionsModel()->rowCount(QModelIndex()) == 0
-            ? tr("You own no vaults.") : tr("Select a vault to see what can be done with it."));
+        const int shown = uiPositions->tblPositions->model() ? uiPositions->tblPositions->model()->rowCount(QModelIndex()) : 0;
+        const int owned = ctl->positionsModel()->rowCount(QModelIndex());
+        uiPositions->lblVaultAction->setText(owned == 0 ? tr("You own no vaults.")
+                                           : shown == 0 ? tr("No vault matches the filter; %1 in all (\"Show: All\").").arg(owned)
+                                           : tr("Select a vault to see what can be done with it."));
         uiPositions->btnWhyVoid->setEnabled(false);
         uiPositions->btnNotice->setVisible(false);
         uiPositions->btnNotice->setEnabled(false);

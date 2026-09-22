@@ -6,6 +6,7 @@
 class MainWindow;
 class YellowbackController;
 struct YellowbackPosition;
+class YellowbackPositionsFilter;
 struct YellowbackClaimable;
 struct YellowbackAttestor;
 
@@ -130,7 +131,12 @@ private:
     void updateBalances();
     void updateMintGate();
     void applyMintableClasses();          // W16: grey out the classes yed_getstats says cannot mint now
-    int  mintedStatusHeight = -1;         // the height the last "Minted. txid" status was shown at; cleared two blocks on
+    int  mintedStatusHeight = -1;
+    YellowbackPositionsFilter* positionsFilter = nullptr;   // the Positions table's status filter (default: open vaults)
+public:
+    /** The Positions table's current row, mapped through the filter to the model. */
+    const YellowbackPosition* selectedPosition() const;
+private:         // the height the last "Minted. txid" status was shown at; cleared two blocks on
     void updateMintClasses();
     QString fundingSource() const;          // "" = transparent total, else the chosen ys1... address (I2)
     void refreshFundingSources();           // rebuild cmbFundFrom from the DataModel, keeping the selection

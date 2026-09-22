@@ -131,6 +131,8 @@ namespace YellowbackFormat {
     QString bpsAsMultiplier(qint64 bps);                   // 10000 -> "1.00x"
     QString bpsAsPercent(qint64 bps);                      // 49750 -> "497.50 %"
     QString heightWithEstimate(int height, int currentHeight);
+    QString duration(qint64 seconds);                 // "2 d 3 h", "4 h 5 m", "12 m"
+    QString blocksAndDuration(int blocks);            // "48 block(s), ~1 h 0 m" at 75 s per block
     QDateTime estimateDate(int height, int currentHeight);
     QString typeLabel(const QString& type);
     QString haltReason(const QString& name);               // haltMask name -> sentence
@@ -146,13 +148,14 @@ public:
 
     enum Column {
         Status = 0,
+        ActBy,           // what the owner must do and by when: locked / redeem before the claim height / claim path open
         Minted,
         Collateral,
-        Ratio,           // collateral at the claim price over the debt: what a claim is judged by
+        Ratio,           // collateral at the latest (fast) price over the debt: the market view; the claim-price ratio is the tooltip
         TermClass,
         LockHeight,
         ClaimHeight,
-        Claimable,
+        Claimable,       // yes, or why not and when: before the claim height / notice standing / needs a lower claim price
         UnderwaterBelow, // the claim price below which the vault can be claimed (yed_getvault.underwaterAt)
         Unbacked,
         SweepBefore,
@@ -162,10 +165,13 @@ public:
     };
 
     void setNewData(const QList<YellowbackPosition>& positions, int currentHeight);
-    /** The tip's pClaim (µUSD), from yed_getstats: the Ratio column re-renders when it moves. */
-    void setClaimPrice(qint64 pClaimMicroUsd);
-    /** The ratio a claim is judged by, in bps; -1 when undefined (no debt, no price). */
-    static qint64 ratioBps(const YellowbackPosition& p, qint64 pClaimMicroUsd);
+    /** The tip's prices (µUSD) from yed_getstats: pFast for the market ratio, pClaim for what a
+     *  claim is judged by. The Ratio column re-renders when they move. */
+    void setPrices(qint64 pFastMicroUsd, qint64 pClaimMicroUsd);
+    /** A vault's collateral ratio at `priceMicroUsd`, in bps; -1 when undefined (no debt, no price). */
+    static qint64 ratioBps(const YellowbackPosition& p, qint64 priceMicroUsd);
+    /** The Act-by cell: what the owner must do and by when, from the heights alone. */
+    static QString actBy(const YellowbackPosition& p, int currentHeight);
     const YellowbackPosition* positionAt(int row) const;
     QList<YellowbackPosition> redeemable() const;
 
@@ -178,8 +184,23 @@ private:
     QList<YellowbackPosition>* modeldata     = nullptr;
     QList<QString>          headers;
     int                     currentHeight = 0;
+    qint64                  pFast         = 0;      // µUSD; 0 = unknown
     qint64                  pClaim        = 0;      // µUSD; 0 = unknown
     bool                    loading       = true;
+};
+
+/** The Positions table's status filter: "open" (ACTIVE and VOID, the default -- the rows an owner
+ *  can still act on), or one status, or every row. */
+class YellowbackPositionsFilter : public QSortFilterProxyModel {
+public:
+    explicit YellowbackPositionsFilter(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
+    /** "" = every row; "open" = ACTIVE or VOID; else exactly that status. */
+    void setStatusFilter(const QString& filter) { statusFilter = filter; invalidateFilter(); }
+    QString status() const { return statusFilter; }
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override;
+private:
+    QString statusFilter = "open";
 };
 
 // Claimable vaults table (yed_listclaimable), the source of the Claim page.

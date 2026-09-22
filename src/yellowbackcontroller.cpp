@@ -333,7 +333,8 @@ QString YellowbackController::describeDivergenceError(const QString& errorMessag
 void YellowbackController::applyStats(const json& s) {
     statsJson = s.is_object() ? s : json::object();
     // the Positions page's ratio column is judged at the tip's claim price
-    positions->setClaimPrice(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
+    positions->setPrices(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_FAST) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_FAST),
+                         YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
     emit statsUpdated();
 }
 
@@ -352,7 +353,8 @@ void YellowbackController::applyPositions(const json& arr) {
     QList<YellowbackPosition> list;
     if (arr.is_array())
         for (auto& it : arr) list.append(YellowbackPosition::fromJson(it));
-    positions->setClaimPrice(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
+    positions->setPrices(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_FAST) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_FAST),
+                         YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
     positions->setNewData(list, indexHeight);
     emit positionsUpdated();
 }
@@ -656,6 +658,20 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
     if (!halts.isEmpty() && !limited) {
         QStringList lines;
         for (const QString& h : halts) lines << YellowbackFormat::haltReason(h);
+        // When it ends, not only why (the owner found the wait "awkward" without it): the divergence
+        // halt clears by itself within the slow window; the global-ratio one when the ratio recovers
+        if (halts.contains(Stats::HALT_DIVERGENCE)) {
+            const int slow = YellowbackJson::has(paramsJson, Params::WINDOWS) ? (int)YellowbackJson::toInt(paramsJson[Params::WINDOWS], "slow", 64) : 64;
+            lines << tr("The divergence clears by itself once the price windows agree again, within %1 of the last big move.")
+                         .arg(YellowbackFormat::blocksAndDuration(slow));
+        }
+        if (halts.contains(Stats::HALT_GLOBAL_RATIO)) {
+            const qint64 recap = YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000);
+            QStringList recapClasses;
+            for (const auto& c : termClasses()) if (c.baseRatioBps >= recap) recapClasses << c.name;
+            lines << tr("The global ratio recovers as the price rises or as vaults are redeemed and claimed; once it is the only halt left, class %1 can mint again and each such mint raises it.")
+                         .arg(recapClasses.isEmpty() ? QString("A") : recapClasses.join(tr(" or ")));
+        }
         return tr("Minting is paused. ") % lines.join(" ");
     }
     if (limited && !termClass.isEmpty() && !mintable.contains(termClass)) {
