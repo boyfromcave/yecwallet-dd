@@ -978,6 +978,24 @@ private slots:
         QVERIFY(h.label("lblVaultAction").contains("No vault matches the filter"));
     }
 
+    // "the landing Balance tab of the wallet needs to include the Yellowback Confirmed YED balance
+    // and the total amount of YEC collateral in vaults" (F-22): the two lines the main window shows
+    void balanceTabSummaryLines() {
+        Harness h;
+        QCOMPARE(h.ctl.balanceSummary(), QString("-"));                // nothing known yet
+        json p2 = positionActive(); p2["txid"] = QString(64, 'e').toStdString(); p2["collateralZat"] = 10000000000; // 100 YEC
+        json closed = positionActive(); closed["txid"] = QString(64, 'f').toStdString(); closed["status"] = "CLOSED";
+        h.feedActive(331, json::array({positionActive(), p2, closed}), json(nullptr), 512345);
+        QCOMPARE(h.ctl.balanceSummary(), QString("$5,123.45 YED"));
+        // 251.25628141 + 100 YEC in the two ACTIVE vaults; the CLOSED one does not count; at statsOpen's $1.99 mint price
+        QVERIFY2(h.ctl.collateralSummary().startsWith("351.25628141 YEC in 2 active vault(s)"), qPrintable(h.ctl.collateralSummary()));
+        QVERIFY2(h.ctl.collateralSummary().contains("at the mint price"), qPrintable(h.ctl.collateralSummary()));
+        json bal = balanceReply(512345); bal["unconfirmedCents"] = 100;
+        h.ctl.feed(infoActive(), statsOpen(), activationActive(), bal, json::array(), json(nullptr), json(nullptr));
+        QCOMPARE(h.ctl.balanceSummary(), QString("$5,123.45 YED ($1.00 unconfirmed)"));
+        QCOMPARE(h.ctl.collateralSummary(), QString("none (no active vault)"));
+    }
+
     // "the 'minting' info window is still squished"; "we might need to be clearer that minting will be re-enabled"
     void overviewMintStatusIsShortWithTheDetailInTheTooltip() {
         Harness h;

@@ -69,6 +69,9 @@ public:
     QLabel*             loadingLabel;
     QWidget*            zcashdtab;
     YellowbackTab*         yellowbackTab = nullptr;    // the Yellowback tab, after Transactions
+    QLabel* balYed = nullptr;                // Balance tab: the YED balance (regtest plan F-22)
+    QLabel* balVaultCollateral = nullptr;    // Balance tab: YEC locked in this wallet's active vaults
+    void updateYellowbackBalanceLines();
 
     Logger*      logger;
 

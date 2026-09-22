@@ -23,6 +23,7 @@
 #include "connection.h"
 #include "requestdialog.h"
 #include "yellowbacktab.h"
+#include "yellowbackcontroller.h"
 #include <QRegularExpression>
 
 using json = nlohmann::json;
@@ -147,6 +148,11 @@ MainWindow::MainWindow(QWidget *parent) :
 
     rpc = new Controller(this);
     yellowbackTab->setController(rpc->getYellowback());
+    if (auto* yb = rpc->getYellowback()) {
+        QObject::connect(yb, &YellowbackController::balanceUpdated,   this, &MainWindow::updateYellowbackBalanceLines);
+        QObject::connect(yb, &YellowbackController::positionsUpdated, this, &MainWindow::updateYellowbackBalanceLines);
+        QObject::connect(yb, &YellowbackController::statsUpdated,     this, &MainWindow::updateYellowbackBalanceLines);
+    }
 
     restoreSavedStates();
 }
@@ -1236,6 +1242,36 @@ void MainWindow::setupBalancesTab() {
 void MainWindow::setupYellowbackTab() {
     yellowbackTab = new YellowbackTab(this, this);
     ui->tabWidget->addTab(yellowbackTab, tr("Yellowback"));
+
+    // The Balance tab's summary gains two Yellowback rows under "Total (USD)": the YED balance and
+    // the YEC locked as collateral in this wallet's active vaults (the owner's request, regtest
+    // plan F-22). Built here rather than in the .ui so the upstream form stays as it is.
+    auto addRow = [this](const QString& title, QLabel** value, const QString& tip) {
+        auto* row = new QHBoxLayout();
+        auto* label = new QLabel(title, ui->tab);
+        label->setFont(ui->label_15->font());
+        *value = new QLabel("-", ui->tab);
+        (*value)->setFont(ui->balTotalUsd->font());
+        (*value)->setAlignment(ui->balTotalUsd->alignment());
+        (*value)->setToolTip(tip);
+        (*value)->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        row->addWidget(label);
+        row->addStretch();
+        row->addWidget(*value);
+        const int after = ui->verticalLayout->indexOf(ui->horizontalLayout_18);
+        ui->verticalLayout->insertLayout(after < 0 ? ui->verticalLayout->count() : after + 1 + (balYed != nullptr && value != &balYed ? 1 : 0), row);
+    };
+    addRow(tr("Yellowback (YED)"), &balYed, tr("Your confirmed YED balance, from the Yellowback tab's own ledger. One YED is one US dollar."));
+    addRow(tr("YEC in vaults"), &balVaultCollateral, tr("YEC locked as collateral in your active vaults. It returns to you when you redeem; it is not part of the spendable balance above."));
+    updateYellowbackBalanceLines();
+}
+
+void MainWindow::updateYellowbackBalanceLines() {
+    if (balYed == nullptr || balVaultCollateral == nullptr || rpc == nullptr) return;
+    auto* yb = rpc->getYellowback();
+    if (yb == nullptr) return;
+    balYed->setText(yb->balanceSummary());
+    balVaultCollateral->setText(yb->collateralSummary());
 }
 
 void MainWindow::setupZcashdTab() {    

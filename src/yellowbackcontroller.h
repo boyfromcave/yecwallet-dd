@@ -120,6 +120,10 @@ public:
     QStringList mintableClasses() const;
     /** W16: non-blocking notice when the global-ratio halt limits minting to the recapitalising classes; empty otherwise. */
     QString mintLimit() const;
+    /** The Balance tab's two Yellowback lines (owner's request, regtest plan F-22): the YED
+     *  balance, and the YEC locked as collateral in this wallet's active vaults. "-" until known. */
+    QString balanceSummary() const;
+    QString collateralSummary() const;
 
     // ── RPC calls. `ok` receives the "result"; `err` the node's error message verbatim ─────
     typedef std::function<void(const json&)>    OkFn;

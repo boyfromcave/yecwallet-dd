@@ -615,6 +615,32 @@ QList<YellowbackController::TermClass> YellowbackController::termClasses() const
 
 // ── Mint gate ─────────────────────────────────────────────────────────────────────────────
 
+QString YellowbackController::balanceSummary() const {
+    if (!available) return QString("-");
+    QString line = YellowbackFormat::cents(confirmed) % tr(" YED");
+    if (unconfirmed != 0) line += tr(" (%1 unconfirmed)").arg(YellowbackFormat::cents(unconfirmed));
+    return line;
+}
+
+QString YellowbackController::collateralSummary() const {
+    using namespace YellowbackRpc;
+    if (!available) return QString("-");
+    qint64 zat = 0; int vaults = 0;
+    for (int i = 0; ; i++) {
+        const YellowbackPosition* p = positions->positionAt(i);
+        if (p == nullptr) break;
+        if (p->status == Position::STATUS_ACTIVE) { zat += p->collateralZat; vaults++; }
+    }
+    if (vaults == 0) return tr("none (no active vault)");
+    QString line = tr("%1 in %2 active vault(s)").arg(YellowbackFormat::zec(zat)).arg(vaults);   // zec() carries the unit
+    // its dollar value at the mint price, when the node has one
+    if (!statsJson.empty() && !YellowbackJson::isNull(statsJson, Stats::P_MINT)) {
+        const long double usd = (long double)zat / 100000000.0L * (long double)YellowbackJson::toInt(statsJson, Stats::P_MINT) / 1000000.0L;
+        line += tr(" (about %1 at the mint price)").arg(YellowbackFormat::cents((qint64)(usd * 100)));
+    }
+    return line;
+}
+
 QStringList YellowbackController::mintableClasses() const {
     using namespace YellowbackRpc;
     if (statsJson.empty()) return QStringList();
