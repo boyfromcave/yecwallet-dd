@@ -483,6 +483,9 @@ bool YellowbackTab::parseDollars(const QString& text, qint64* cents) {
 }
 
 void YellowbackTab::setupSend() {
+    // The recipient field was a size-hint-wide box on macOS (the form's default keeps fields at their
+    // hint): let the fields grow with the window, and start wide enough for a whole address.
+    uiSend->txtRecipient->setMinimumWidth(uiSend->txtRecipient->fontMetrics().averageCharWidth() * 44);
     QObject::connect(uiSend->btnClear, &QPushButton::clicked, [=, this]() {
         uiSend->txtRecipient->clear();
         uiSend->txtAmount->clear();
