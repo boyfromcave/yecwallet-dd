@@ -496,7 +496,7 @@ void Controller::refreshBalances() {
         ui->balTransparent->setToolTip(Settings::getZECDisplayFormat(balT));
         ui->balTotal      ->setToolTip(Settings::getZECDisplayFormat(balTotal));
         if (Settings::getInstance()->getZECPrice() > 0)
-            ui->balTotalUsd   ->setToolTip(Settings::getUSDFromZecAmount(balTotal));
+            ui->balTotalUsd   ->setToolTip(Settings::getUSDFromZecAmount(balTotal) % " (" % Settings::getInstance()->getZECPriceSource() % ")");
     });
 
     // 2. Get the UTXOs
@@ -799,7 +799,7 @@ void Controller::refreshZECPrice() {
             }
 
             const json& ycash_usd_price = parsed["ycash"]["usd"];
-            Settings::getInstance()->setZECPrice(ycash_usd_price.get<json::number_float_t>());
+            Settings::getInstance()->setCoinGeckoPrice(ycash_usd_price.get<json::number_float_t>());   // a fallback: the Yellowback price wins while fresh
             return;
         } catch (...) {
             // If anything at all goes wrong, just set the price to 0 and move on.

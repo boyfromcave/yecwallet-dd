@@ -330,8 +330,22 @@ QString YellowbackController::describeDivergenceError(const QString& errorMessag
         : tr("pools and attestors disagree; minting paused");
 }
 
+std::optional<qint64> YellowbackController::protocolPriceMicroUsd() const {
+    using namespace YellowbackRpc;
+    if (!available || statsJson.empty() || activationJson.empty()) return std::nullopt;
+    if (YellowbackJson::toStr(activationJson, Activation::STATUS) != Activation::STATUS_ACTIVE) return std::nullopt;
+    if (YellowbackJson::isNull(statsJson, Stats::P_FAST)) return std::nullopt;
+    const qint64 p = YellowbackJson::toInt(statsJson, Stats::P_FAST);
+    return p > 0 ? std::optional<qint64>(p) : std::nullopt;
+}
+
+void YellowbackController::pushProtocolPrice() {
+    if (auto p = protocolPriceMicroUsd()) Settings::getInstance()->setYellowbackPrice((double)p.value() / 1000000.0);
+}
+
 void YellowbackController::applyStats(const json& s) {
     statsJson = s.is_object() ? s : json::object();
+    pushProtocolPrice();
     // the Positions page's ratio column is judged at the tip's claim price
     positions->setPrices(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_FAST) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_FAST),
                          YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
@@ -340,6 +354,7 @@ void YellowbackController::applyStats(const json& s) {
 
 void YellowbackController::applyActivation(const json& a) {
     activationJson = a.is_object() ? a : json::object();
+    pushProtocolPrice();
     emit statsUpdated();
 }
 

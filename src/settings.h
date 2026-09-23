@@ -99,6 +99,12 @@ public:
 
     void    setZECPrice(double p) { zecPrice = p; }
     double  getZECPrice();
+    // The YEC/USD rate's provenance: the Yellowback fast median while fresh, else CoinGecko
+    void    setYellowbackPrice(double p);
+    void    setCoinGeckoPrice(double p);          // applied only when no fresh Yellowback price exists
+    bool    yellowbackPriceFresh() const;
+    QString getZECPriceSource() const { return zecPriceSource; }
+    static constexpr qint64 YELLOWBACK_PRICE_FRESH_MS = 15 * 60 * 1000;
 
     void    setPeers(int peers);
     int     getPeers();
@@ -161,6 +167,8 @@ private:
     int     _peerConnections  = 0;
     
     double  zecPrice          = 0.0;
+    QString zecPriceSource    = "CoinGecko";
+    qint64  yellowbackPriceAtMs = 0;
 };
 
 #endif // SETTINGS_H

@@ -996,6 +996,46 @@ private slots:
         QCOMPARE(h.ctl.collateralSummary(), QString("none (no active vault)"));
     }
 
+    // "sending to a regtest ys shielded address triggers 'Recipient Address ... is Invalid'" (F-24)
+    void regtestSaplingAddressesAreValid() {
+        auto* st = Settings::getInstance();
+        const QString regtest = "yregtestsapling19jqqa7jhvt6vqfpthhhftvk9rvvw66n5mrkfskhhdkvyy5get58qdu7uttltnarrm7ajuvhxq5p";   // z_getnewaddress sapling on the devnet
+        const QString mainnet = "ys1" + QString(75, 'q');
+        QVERIFY(Settings::isValidAddress(regtest));
+        QVERIFY(st->isSaplingAddress(regtest));              // whatever the testnet flag says
+        QVERIFY(st->isZAddress(regtest));
+        QVERIFY(!st->isTAddress(regtest));
+        QVERIFY(Settings::isValidAddress(mainnet));
+        QVERIFY(!Settings::isValidAddress("yregtestsapling1tooshort"));
+        QVERIFY(!Settings::isValidAddress(regtest + "x"));
+    }
+
+    // "make the fast median price be authoritative in the yecwallet" (F-23): the pools' fast
+    // median is the wallet's YEC/USD rate while the node is active and has one; CoinGecko is the
+    // fallback and never overwrites a fresh protocol price
+    void protocolPriceIsAuthoritative() {
+        auto* st = Settings::getInstance();
+        Harness h;
+        st->setZECPrice(0);
+        QVERIFY(!h.ctl.protocolPriceMicroUsd().has_value());     // nothing fed yet
+        h.feed(infoActive(), statsOpen(), activationActive());  // statsOpen: pFast 2,000,000 = $2.00
+        QCOMPARE(h.ctl.protocolPriceMicroUsd().value_or(0), (qint64)2000000);
+        QCOMPARE(st->getZECPrice(), 2.0);
+        QVERIFY(st->getZECPriceSource().contains("Yellowback"));
+        QVERIFY(st->yellowbackPriceFresh());
+        st->setCoinGeckoPrice(0.74);                             // the poll lands while the protocol price is fresh
+        QCOMPARE(st->getZECPrice(), 2.0);
+        // undefined fast price: nothing pushed, the last rate stands
+        json noPrice = statsOpen(); noPrice["pFast"] = nullptr;
+        h.feed(infoActive(), noPrice, activationActive());
+        QVERIFY(!h.ctl.protocolPriceMicroUsd().has_value());
+        QCOMPARE(st->getZECPrice(), 2.0);
+        // not activated: CoinGecko is the source (nothing was pushed since the fresh mark; simulate staleness by a new Settings state)
+        json inactive = activationActive(); inactive["status"] = "signalling";
+        h.feed(infoActive(), statsOpen(), inactive);
+        QVERIFY(!h.ctl.protocolPriceMicroUsd().has_value());
+    }
+
     // "the 'minting' info window is still squished"; "we might need to be clearer that minting will be re-enabled"
     void overviewMintStatusIsShortWithTheDetailInTheTooltip() {
         Harness h;

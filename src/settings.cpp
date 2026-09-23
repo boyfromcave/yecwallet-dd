@@ -58,6 +58,10 @@ bool Settings::isSaplingAddress(QString addr) {
     if (!isValidAddress(addr))
         return false;
 
+    // regtest addresses carry their own prefix and cannot be mistaken for another network's, so
+    // they are accepted whatever the testnet flag says (the flag is never set on regtest, where
+    // the devnet runs: a "yregtestsapling1..." recipient was refused as invalid)
+    if (addr.startsWith("yregtestsapling")) return true;
     return (isTestnet() && addr.startsWith("ytestsapling")) ||
            (!isTestnet() && addr.startsWith("ys"));
 }
@@ -114,6 +118,26 @@ bool Settings::isSaplingActive() {
 
 double Settings::getZECPrice() { 
     return zecPrice; 
+}
+
+// The Yellowback price: the pools' fast median from yed_getstats, pushed by the Yellowback
+// controller whenever the node is enabled, activated and has one. While it is fresh it is the
+// wallet's authoritative YEC/USD rate and the CoinGecko poll does not overwrite it; before
+// activation, without a defined price, or once it goes stale, CoinGecko is the fallback.
+void Settings::setYellowbackPrice(double p) {
+    zecPrice = p;
+    zecPriceSource = QObject::tr("Yellowback: the pools' fast median");
+    yellowbackPriceAtMs = QDateTime::currentMSecsSinceEpoch();
+}
+
+bool Settings::yellowbackPriceFresh() const {
+    return yellowbackPriceAtMs > 0 && QDateTime::currentMSecsSinceEpoch() - yellowbackPriceAtMs < YELLOWBACK_PRICE_FRESH_MS;
+}
+
+void Settings::setCoinGeckoPrice(double p) {
+    if (yellowbackPriceFresh()) return;          // the protocol price is authoritative while it is current
+    zecPrice = p;
+    zecPriceSource = QObject::tr("CoinGecko");
 }
 
 bool Settings::getYellowbackUnitCents() {
@@ -412,10 +436,11 @@ bool Settings::isValidAddress(QString addr) {
     QRegularExpression zcexp("^y[a-z0-9]{94}$",  QRegularExpression::CaseInsensitiveOption);
     QRegularExpression zsexp("^y[a-z0-9]{77}$",  QRegularExpression::CaseInsensitiveOption);
     QRegularExpression ztsexp("^ytestsapling[a-z0-9]{76}", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpression zrsexp("^yregtestsapling[a-z0-9]{76}$", QRegularExpression::CaseInsensitiveOption);   // regtest Sapling
     QRegularExpression texp("^s[a-z0-9]{34}$", QRegularExpression::CaseInsensitiveOption);
 
     return  zcexp.match(addr).hasMatch()  || texp.match(addr).hasMatch() ||
-            ztsexp.match(addr).hasMatch() || zsexp.match(addr).hasMatch();
+            ztsexp.match(addr).hasMatch() || zsexp.match(addr).hasMatch() || zrsexp.match(addr).hasMatch();
 }
 
 // Get a pretty string representation of this Payment URI

@@ -124,6 +124,12 @@ public:
      *  balance, and the YEC locked as collateral in this wallet's active vaults. "-" until known. */
     QString balanceSummary() const;
     QString collateralSummary() const;
+    /** The pools' fast median (µUSD) when the node is enabled, activated and has one; else nullopt.
+     *  Pushed into Settings as the wallet's YEC/USD rate (F-23). */
+    std::optional<qint64> protocolPriceMicroUsd() const;
+private:
+    void pushProtocolPrice();
+public:
 
     // ── RPC calls. `ok` receives the "result"; `err` the node's error message verbatim ─────
     typedef std::function<void(const json&)>    OkFn;
