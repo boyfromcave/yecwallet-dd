@@ -1,0 +1,47 @@
+# YecWallet fork CI: the Yellowback tab's offline QTest suite and the RPC-contract check.
+#
+# The wallet's release build uses a static Qt without testlib (build.sh --package); this job
+# builds the app and the `yellowback_test` target against Ubuntu's Qt 6 packages instead, the
+# way a developer runs them (docs/yellowback.md), and runs the suite offscreen. The devnet cases
+# QSKIP without YELLOWBACK_DEVNET_DIR. The contract check asserts that every RPC name the wallet
+# uses exists in the generated copy of the node's contract (the workspace's `make spec`).
+name: yecwallet-tests
+
+on:
+  push:
+    branches: [ feature/yellowback-price-attest, feature/yellowback-sf, yecwallet-legacy ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wallet:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6 and the build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config libgl1-mesa-dev \
+            qt6-base-dev qt6-base-dev-tools qt6-websockets-dev qt6-l10n-tools libqt6websockets6 \
+            libqt6svg6-dev libssl-dev python3
+      - name: RPC contract check (yellowbackrpc.h against docs/yellowback-rpc-contract.json)
+        run: python3 tests/check-rpc-contract.py
+      - name: Copy check (plan 8.1: never "trustless", never a federation)
+        run: |
+          ! grep -rn -i "trustless" src/ --include=*.cpp --include=*.h --include=*.ui
+      - name: Configure (system Qt 6, with testlib)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build the app and the QTest target
+        run: ninja -C build yecwallet yellowback_test
+      - name: Run the Yellowback QTest suite offscreen
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build/bin/yellowback_test || ./build/yellowback_test
+      - name: Upload the test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yellowback-test-output
+          path: build/Testing
+          if-no-files-found: ignore
