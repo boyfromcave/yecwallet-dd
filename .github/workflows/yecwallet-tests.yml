@@ -1,7 +1,7 @@
 # YecWallet fork CI: the Yellowback tab's offline QTest suite and the RPC-contract check.
 #
 # The wallet's release build uses a static Qt without testlib (build.sh --package); this job
-# builds the app and the `yellowback_test` target against Ubuntu's Qt 6 packages instead, the
+# builds the app and the `yellowback_test` target against a Qt 6.5 with testlib instead, the
 # way a developer runs them (docs/yellowback.md), and runs the suite offscreen. The devnet cases
 # QSKIP without YELLOWBACK_DEVNET_DIR. The contract check asserts that every RPC name the wallet
 # uses exists in the generated copy of the node's contract (the workspace's `make spec`).
@@ -19,12 +19,18 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install Qt 6 and the build tools
+      - name: Install the build tools and the libraries Qt links against
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config libgl1-mesa-dev \
-            qt6-base-dev qt6-base-dev-tools qt6-websockets-dev qt6-l10n-tools libqt6websockets6 \
-            libqt6svg6-dev libssl-dev python3
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev python3 \
+            libgl1-mesa-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+      - name: Install Qt 6.5 (the version the wallet builds with; Ubuntu's own Qt 6 is 6.2)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.5.3'
+          modules: 'qtwebsockets'
+          cache: true
       - name: "RPC contract check: yellowbackrpc.h against docs/yellowback-rpc-contract.json"
         run: python3 tests/check-rpc-contract.py
       - name: "Copy check (plan 8.1): never 'trustless', never a federation"
