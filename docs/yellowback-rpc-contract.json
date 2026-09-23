@@ -407,7 +407,7 @@
     "plan": "docs/plans/yellowback-v2-development-plan.md",
     "planV3": "docs/plans/yellowback-v3-development-plan.md",
     "revision": 6,
-    "revisionV3": 2,
+    "revisionV3": 3,
     "rpcdoc": "ycash-dd/doc/yellowback-rpc.md",
     "section": "4.5"
   },

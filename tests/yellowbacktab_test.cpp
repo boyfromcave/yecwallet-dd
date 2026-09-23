@@ -1780,7 +1780,7 @@ private slots:
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
         h.estimateFor("1000");
         QVERIFY(h.visible("lblDivergence"));
-        QCOMPARE(h.label("lblDivergence"), QString("pools and attestors disagree by 18.00 %; minting paused"));
+        QCOMPARE(h.label("lblDivergence"), QString("the pools' fast median and the attestors disagree by 18.00 %; minting paused until they agree (they usually do within a fast window)"));
         // The node itself refusing the estimate with mint10-diverged
         h.rpc.results.remove(YellowbackRpc::ESTIMATECOLLATERAL);
         h.rpc.errors[YellowbackRpc::ESTIMATECOLLATERAL] = "mint10-diverged: xMint 1990000 aMint 2400000";
@@ -1937,7 +1937,7 @@ private slots:
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.visible("lblDivergence"));
-        QCOMPARE(h.label("lblDivergence"), QString("pools and attestors disagree by more than 15.00 %; minting paused"));
+        QCOMPARE(h.label("lblDivergence"), QString("the pools' fast median and the attestors disagree by more than 15.00 %; minting paused until they agree"));
         QCOMPARE(h.errorNotices.size(), 1);
         QVERIFY(h.errorNotices[0].startsWith("yed_mint failed: mint10-diverged"));
         QVERIFY(h.errorNotices[0].contains("minting is paused"));

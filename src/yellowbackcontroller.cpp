@@ -319,15 +319,15 @@ QString YellowbackController::describeDivergence(const json& estimate, qint64 di
     if (YellowbackJson::isNull(estimate, DIVERGENCE_BPS) || divergeBpsAttest <= 0) return QString();
     qint64 bps = YellowbackJson::toInt(estimate, DIVERGENCE_BPS);
     if (bps <= divergeBpsAttest) return QString();
-    return tr("pools and attestors disagree by %1 %; minting paused").arg(QString::number(bps / 100.0, 'f', 2));
+    return tr("the pools' fast median and the attestors disagree by %1 %; minting paused until they agree (they usually do within a fast window)").arg(QString::number(bps / 100.0, 'f', 2));
 }
 
 QString YellowbackController::describeDivergenceError(const QString& errorMessage, qint64 divergeBpsAttest) {
     if (!errorMessage.startsWith(YellowbackRpc::Errors::MINT10_DIVERGED)) return QString();
     // The message carries no number the contract fixes; the threshold is what the user can act on.
     return divergeBpsAttest > 0
-        ? tr("pools and attestors disagree by more than %1 %; minting paused").arg(QString::number(divergeBpsAttest / 100.0, 'f', 2))
-        : tr("pools and attestors disagree; minting paused");
+        ? tr("the pools' fast median and the attestors disagree by more than %1 %; minting paused until they agree").arg(QString::number(divergeBpsAttest / 100.0, 'f', 2))
+        : tr("the pools' fast median and the attestors disagree; minting paused until they agree");
 }
 
 std::optional<qint64> YellowbackController::protocolPriceMicroUsd() const {
