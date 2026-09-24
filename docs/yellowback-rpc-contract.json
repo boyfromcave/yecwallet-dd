@@ -170,6 +170,12 @@
       ],
       "when": "wallet YED below the burn or amount"
     },
+    "invalid-address": {
+      "raisedBy": [
+        "yed_listtokens"
+      ],
+      "when": "a string that is neither a YED nor a transparent P2PKH address of this network"
+    },
     "keypool-empty": {
       "raisedBy": [
         "yed_mint",
@@ -304,6 +310,12 @@
         "yed_sweep"
       ],
       "when": "the abandonment predicate is false: enforcement on, or suspended for less than ABANDON_BLOCKS (L10, L12 — a passed sunset alone is not abandonment)"
+    },
+    "too-many-addresses": {
+      "raisedBy": [
+        "yed_listtokens"
+      ],
+      "when": "an empty array, or more than 100 addresses"
     },
     "too-many-inputs": {
       "raisedBy": [
@@ -1138,6 +1150,20 @@
         "underwaterAt": 437800,
         "voidReason": "",
         "vout": 0
+      }
+    ]
+  },
+  "yed_listtokens": {
+    "args": "<addresses> [minHeight]",
+    "returns": [
+      {
+        "address": "yrExampleOwnerAddress111111111111111",
+        "cents": 100000,
+        "height": 332,
+        "transparentAddress": "smQvTmAz2ExamplePayoutAddress1111111",
+        "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
+        "valueZat": 10000,
+        "vout": 1
       }
     ]
   },
