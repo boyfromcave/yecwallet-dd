@@ -95,6 +95,16 @@ public:
     std::shared_ptr<ConnectionConfig>   config;
     MainWindow*                         main;
 
+    // getinfo.version, read once at connect (ConnectionLoader::refreshZcashdState). 0 means
+    // "not read": the node answered getrescaninfo, so it is a v4.5.0-line ycashd, and every call
+    // goes out exactly as before. See nodecompat.h.
+    int                                 nodeVersion = 0;
+
+    // Ycash 6.20.0 only: an import RPC is running its rescan synchronously inside the node.
+    // While it is set, doRPCSafe drops every other call, the way the v4.5.0 path drops calls
+    // while getrescaninfo reports a rescan (each would block behind the node's wallet lock).
+    bool                                syncRescanInFlight = false;
+
     void shutdown();
 
     void doRPCSafe(const json& payload, const std::function<void(json)>& cb, 

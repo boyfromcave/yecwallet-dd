@@ -6,6 +6,7 @@
 #include "turnstile.h"
 #include "version.h"
 #include "rescanprogress.h"
+#include "nodecompat.h"
 #include "yellowbackcontroller.h"
 
 using json = nlohmann::json;
@@ -243,6 +244,26 @@ void Controller::closeRefreshStatusIfAlive() {
     
 }
 
+void Controller::beginSyncRescan(const QString& what) {
+    auto conn = getConnection();
+    if (conn == nullptr)
+        return;
+    conn->syncRescanInFlight = true;
+    if (!rescanProgress) {
+        rescanProgress = new RescanProgress(main);
+        rescanProgress->setBusy(what);
+    }
+    ui->statusBar->showMessage(QObject::tr("Importing and rescanning. Please wait..."));
+}
+
+void Controller::endSyncRescan() {
+    auto conn = getConnection();
+    if (conn != nullptr)
+        conn->syncRescanInFlight = false;
+    closeRefreshStatusIfAlive();
+    refresh(true);
+}
+
 /// This will refresh all the balance data from zcashd
 void Controller::refresh(bool force) {
     if (!zrpc->haveConnection()) 
@@ -332,7 +353,9 @@ void Controller::getInfoThenRefresh(bool force) {
                     if (getConnection() != nullptr && getConnection()->config->fastsync) {
                         getConnection()->config->fastsync = false;
                         Settings::removeFromZcashConf(Settings::getInstance()->getZcashdConfLocation(), 
-                                                        "fastsync");
+                                                        NodeCompat::FASTSYNC_LEGACY_CONF_KEY);
+                        Settings::removeFromZcashConf(Settings::getInstance()->getZcashdConfLocation(),
+                                                        NodeCompat::FASTSYNC_CONF_KEY);
                     }
 
                     ui->blockheight->setText(QString::number(blockNumber));

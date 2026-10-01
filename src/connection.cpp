@@ -1,5 +1,6 @@
 #include <QRandomGenerator>
 #include "connection.h"
+#include "nodecompat.h"
 #include "mainwindow.h"
 #include "settings.h"
 #include "ui_connection.h"
@@ -196,9 +197,10 @@ void ConnectionLoader::createZcashConf() {
     out << "experimentalfeatures=1\n";
     out << "yellowback=1\n";
 
-    // Fast sync override
+    // Fast sync override. Written as ibdskiptxverification, which both node lines read
+    // (6.20.0 dropped the fastsync alias; nodecompat.h).
     if (ui.chkFastSync->isChecked()) {
-        out << "fastsync=1\n";
+        out << NodeCompat::FASTSYNC_CONF_KEY << "=1\n";
     }
 
     // Datadir override 
@@ -484,8 +486,13 @@ void ConnectionLoader::refreshZcashdState(Connection* connection, std::function<
                 {"method", "getinfo"}
             };
             connection->doRPCSafe(payload,
-                [=, this](auto) {
-                    // Success
+                [=, this](auto reply) {
+                    // Success. A node without getrescaninfo may be a Ycash 6.20.0 node: keep
+                    // its version, which selects the 6.20.0 call shapes (nodecompat.h).
+                    connection->nodeVersion = NodeCompat::versionFromGetinfo(reply);
+                    if (NodeCompat::isYcash6(connection->nodeVersion))
+                        main->logger->write("ycashd " + QString::number(connection->nodeVersion) +
+                                            ": using the Ycash 6.20.0 RPC shapes");
                     fnSuccess();
                 },
                 [=, this](auto reply, auto res) {            
@@ -670,7 +677,7 @@ std::shared_ptr<ConnectionConfig> ConnectionLoader::autoDetectZcashConf() {
             zcashconf->port.isEmpty()) {
                 zcashconf->port = "18832";
         }
-        if (name == "fastsync" && value == "1") {
+        if (NodeCompat::isFastSyncConfKey(name) && value == "1") {
             zcashconf->fastsync = true;
         }
     }
@@ -771,6 +778,16 @@ void Connection::doRPCSafe(const json& payload, const std::function<void(json)>&
         return;
     }
 
+    // Ycash 6.20.0 has no getrescaninfo: a rescan runs only inside an import RPC (or at
+    // startup), so there is nothing to ask. Calls go straight through, except while the
+    // wallet's own import is rescanning, when they are dropped as below.
+    if (NodeCompat::isYcash6(nodeVersion)) {
+        if (syncRescanInFlight)
+            return;
+        doRPCDirect(payload, cb, ne);
+        return;
+    }
+
     // Check rescaninfo first
     json rescanPayload = {
         {"jsonrpc", "1.0"},
@@ -779,11 +796,12 @@ void Connection::doRPCSafe(const json& payload, const std::function<void(json)>&
     };
     doRPCDirect(rescanPayload, 
         [=, this](const json& reply) {
+            // (main is null only in the offline QTest's Connection, nodecompat_test)
             if (reply["rescanning"].get<json::boolean_t>()) {
-                this->main->getRPC()->refreshRescanStatus();
+                if (this->main != nullptr) this->main->getRPC()->refreshRescanStatus();
                 return;
             } else {
-                this->main->getRPC()->closeRefreshStatusIfAlive();
+                if (this->main != nullptr) this->main->getRPC()->closeRefreshStatusIfAlive();
                 this->doRPCDirect(payload, cb, ne);
             }
         },

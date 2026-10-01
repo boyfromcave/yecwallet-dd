@@ -58,6 +58,7 @@ vault's debt. The Overview and every confirmation dialog are checked for this by
 cd yecwallet-dd
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt) && cmake --build build
 QT_QPA_PLATFORM=offscreen build/bin/yellowback_test        # offline cases; the devnet cases QSKIP
+QT_QPA_PLATFORM=offscreen build/bin/nodecompat_test        # v4.5.0 / 6.20.0 call shapes (loopback mock ycashd)
 python3 tests/check-rpc-contract.py                        # yellowbackrpc.h vs docs/yellowback-rpc-contract.json
 grep -rn 'trustless' src/ | { ! grep .; }
 ```
@@ -184,6 +185,31 @@ build/bin/yecwallet --conf <tmpdir>/node0/ycash.conf --no-embedded
 from starting its own `ycashd` (`src/main.cpp`, `noembeddedOption`). The playground's per-node
 conf (`test_framework/util.py`) writes exactly those keys. The QTest target attaches the same way.
 
+## Two node lines: v4.5.0 and 6.20.0 (ycash6 plan Phase 7)
+
+One wallet serves both ycashd lines. The node version is read once at connect and kept on the
+`Connection` (`nodeVersion`): `ConnectionLoader::refreshZcashdState` first asks `getrescaninfo`;
+a node that answers it is a v4.5.0-line node and the version stays 0, so **every call goes out
+exactly as before**. A node that does not know it (6.20.0: "Method not found") is asked
+`getinfo`, and `getinfo.version` (6200050 for 6.20.0; v4.5.0 reports 4050050) selects the
+6.20.0 shapes when it is at least 6200000. `src/nodecompat.h` holds every difference:
+
+| Call | v4.5.0 (unchanged) | 6.20.0 |
+|---|---|---|
+| `z_importivk` | `ivk, "yes"/"no", height, zaddr` | `ivk, zaddr, "yes"/"no", height` (`ref/ycash6/src/wallet/rpcdump.cpp:1180`) |
+| `importprivkey` | `key, "", rescan, height` (Ycash-only 4th argument) | `key, "", rescan`. The server enforces 1-3 (`rpc/common.h:126`); a rescan always starts at genesis, so **the start-height optimisation is lost for WIF imports** (the shielded imports keep it) |
+| `getrescaninfo` before every call (`Connection::doRPCSafe`) | yes; calls are held back while it reports a rescan | not sent (removed RPC); calls are held back while the wallet's own import is rescanning |
+| Rescan progress after an import | polls `getrescaninfo` | the last import of a batch carries `rescan=true` and the node rescans before it answers: a busy dialog with the elapsed time is shown, the wallet's other calls are held back, and the reply (or its error) closes it (`MainWindow::doImportWithSyncRescan`, `Controller::beginSyncRescan`) |
+| File → Rescan | `rescanblockchain <height>` | `rescanblockchain` is gone; with the embedded ycashd the menu offers to add `rescan=1` to `ycash.conf` and close (the stock `-rescan`, from genesis); `Controller::setConnection` removes the line at the next connect, as it already did. With an external ycashd it says to restart ycashd with `-rescan` |
+| Fast sync (new `ycash.conf`) | written as `ibdskiptxverification=1` (was `fastsync=1`; v4.5.0 treats the two identically, `ref/ycash/src/init.cpp:1078-1079`). The conf is written before any node runs, so this is the one change that is not version-gated | `ibdskiptxverification=1` (the only name 6.20.0 knows). Either name is read back, and both are removed once synced |
+| New Sprout address | allowed, but the UI never asks for one (`addNewZaddr` is only called for Sapling) | refused after Canopy; nothing to hide. `NodeCompat::canCreateSprout` is the guard should an option be added |
+
+`build/bin/nodecompat_test` checks all of it offline: the v4.5.0 shapes against the literal JSON
+the wallet sent before, the 6.20.0 shapes, and what actually goes over the wire on each line through
+a real `Connection`/`ZcashdRPC` and a loopback mock ycashd. Its `devnetImports` case imports a WIF
+and a Sapling ivk made on node 1 into node 0 of a running devnet (either line) when
+`YELLOWBACK_DEVNET_DIR` is set.
+
 ## Network detection (plan H3)
 
 `Controller::getInfoThenRefresh` sets testnet mode from `getinfo.testnet`, which a regtest node
@@ -224,4 +250,5 @@ against the contract's example values until the node ships `yed_claim` / `yed_sw
 | `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
+| `src/nodecompat.h`, `tests/nodecompat_test.cpp` | the v4.5.0 / 6.20.0 call shapes (see "Two node lines") and their QTest |
 | `CMakeLists.txt`, `tests/yellowbacktab_test.cpp`, `tests/check-rpc-contract.py` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`); the contract checker |

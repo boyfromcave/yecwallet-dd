@@ -55,8 +55,10 @@ public:
     
     void refreshRescanStatus(const std::function<void(json)>& cb);
     void rescanBlockchain(int startHeight, const std::function<void(json)>& cb);
-    void importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb);
-    void importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb);
+    void importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr);
+    void importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr);
     void importZIVK(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb);
     
     void fetchZPrivKey(QString addr, const std::function<void(json)>& cb);
@@ -64,8 +66,10 @@ public:
     void fetchZViewingKey(QString addr, const std::function<void(json)>& cb);
     void fetchZIVK(QString addr, const std::function<void(json)>& cb);
 
-    void importZPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb);
-    void importTPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb);
+    void importZPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr);
+    void importTPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr);
     
     void validateAddress(QString address, const std::function<void(json)>& cb);
 
@@ -76,6 +80,11 @@ public:
     void sendZTransaction(json params, const std::function<void(json)>& cb, const std::function<void(QString)>& err);
 
 private:
+    // An import: with no err the node's error is shown in the standard dialog, as always; with
+    // err, the caller handles it (the Ycash 6.20.0 import-rescan, which must end its busy state).
+    void doImportRPC(const json& payload, const std::function<void(json)>& cb,
+                     const std::function<void(QString)>& err);
+
     Connection*  conn                        = nullptr;
 };
 

@@ -87,13 +87,22 @@ public:
     void fetchAllViewingKeys(const std::function<void(QList<QPair<QString, QString>>)> cb) { zrpc->fetchAllViewingKeys(cb); }
     void fetchAllIVK(const std::function<void(QList<QPair<QString, QString>>)> cb) { zrpc->fetchAllIVK(cb); }
 
-    void importZPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb) { zrpc->importZPrivKey(addr, rescan, rescanHeight, cb); }
-    void importTPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb) { zrpc->importTPrivKey(addr, rescan, rescanHeight, cb); }
-    void importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb) { zrpc->importZViewingKey(key, rescan, rescanHeight, addr, cb); }
-    void importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb) { zrpc->importZFVK(key, rescan, rescanHeight, cb); }
+    void importZPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr) { zrpc->importZPrivKey(addr, rescan, rescanHeight, cb, err); }
+    void importTPrivKey(QString addr, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                        const std::function<void(QString)>& err = nullptr) { zrpc->importTPrivKey(addr, rescan, rescanHeight, cb, err); }
+    void importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb,
+                           const std::function<void(QString)>& err = nullptr) { zrpc->importZViewingKey(key, rescan, rescanHeight, addr, cb, err); }
+    void importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                    const std::function<void(QString)>& err = nullptr) { zrpc->importZFVK(key, rescan, rescanHeight, cb, err); }
 
     void refreshRescanStatus();
     void closeRefreshStatusIfAlive();
+
+    // Ycash 6.20.0: an import RPC with rescan is running (synchronously, inside the node).
+    // begin pauses the wallet's calls and shows a busy dialog; end resumes and refreshes.
+    void beginSyncRescan(const QString& what);
+    void endSyncRescan();
     void rescanBlockchain(int startHeight, const std::function<void(json)>& cb) { zrpc->rescanBlockchain(startHeight, cb); }
 
     QString getDefaultSaplingAddress();

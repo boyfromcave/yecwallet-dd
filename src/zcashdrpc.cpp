@@ -1,5 +1,6 @@
 #include "zcashdrpc.h"
 #include "settings.h"
+#include "nodecompat.h"
 
 
 ZcashdRPC::ZcashdRPC() {
@@ -16,6 +17,21 @@ void ZcashdRPC::setConnection(Connection* c) {
     }
     
     conn = c;
+}
+
+void ZcashdRPC::doImportRPC(const json& payload, const std::function<void(json)>& cb,
+                            const std::function<void(QString)>& err) {
+    if (!err) {
+        conn->doRPCWithDefaultErrorHandling(payload, cb);
+        return;
+    }
+    conn->doRPCSafe(payload, cb, [=](QNetworkReply* reply, const json& parsed) {
+        if (!parsed.is_discarded() && parsed.is_object() && parsed.find("error") != parsed.end() &&
+                parsed["error"].is_object() && parsed["error"]["message"].is_string())
+            err(QString::fromStdString(parsed["error"]["message"].get<std::string>()));
+        else
+            err(reply != nullptr ? reply->errorString() : QString("no reply from ycashd"));
+    });
 }
 
 bool ZcashdRPC::haveConnection() {
@@ -92,7 +108,8 @@ void ZcashdRPC::fetchZViewingKey(QString addr, const std::function<void(json)>& 
 }
 
 
-void ZcashdRPC::importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb) {
+void ZcashdRPC::importZViewingKey(QString key, bool rescan, int rescanHeight, QString addr, const std::function<void(json)>& cb,
+                          const std::function<void(QString)>& err) {
     if (conn == nullptr)
         return;
 
@@ -100,13 +117,14 @@ void ZcashdRPC::importZViewingKey(QString key, bool rescan, int rescanHeight, QS
         {"jsonrpc", "1.0"},
         {"id", "someid"},
         {"method", "z_importivk"},
-        {"params", { key.toStdString(), (rescan? "yes" : "no"), rescanHeight, addr.toStdString() }},
+        {"params", NodeCompat::importIvkParams(conn->nodeVersion, key, rescan, rescanHeight, addr)},
     };
     
-    conn->doRPCWithDefaultErrorHandling(payload, cb);
+    doImportRPC(payload, cb, err);
 }
 
-void ZcashdRPC::importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb) {
+void ZcashdRPC::importZFVK(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                          const std::function<void(QString)>& err) {
     if (conn == nullptr)
         return;
 
@@ -117,7 +135,7 @@ void ZcashdRPC::importZFVK(QString key, bool rescan, int rescanHeight, const std
         {"params", { key.toStdString(), (rescan? "yes" : "no"), rescanHeight }},
     };
 
-    conn->doRPCWithDefaultErrorHandling(payload, cb);
+    doImportRPC(payload, cb, err);
 }
 
 void ZcashdRPC::fetchZIVK(QString addr, const std::function<void(json)>& cb) {
@@ -143,7 +161,7 @@ void ZcashdRPC::importZIVK(QString key, bool rescan, int rescanHeight, QString a
         {"jsonrpc", "1.0"},
         {"id", "someid"},
         {"method", "z_importivk"},
-        {"params", { key.toStdString(), (rescan? "yes" : "no"), rescanHeight, addr.toStdString() }},
+        {"params", NodeCompat::importIvkParams(conn->nodeVersion, key, rescan, rescanHeight, addr)},
     };
 
     conn->doRPCWithDefaultErrorHandling(payload, cb);
@@ -151,6 +169,10 @@ void ZcashdRPC::importZIVK(QString key, bool rescan, int rescanHeight, QString a
 
 void ZcashdRPC::refreshRescanStatus(const std::function<void(json)>& cb) {
     if (conn == nullptr)
+        return;
+
+    // Ycash 6.20.0 has no getrescaninfo, and no background rescan to report
+    if (!NodeCompat::hasRescanRpcs(conn->nodeVersion))
         return;
 
     json payload = {
@@ -231,7 +253,8 @@ void ZcashdRPC::fetchTPrivKey(QString addr, const std::function<void(json)>& cb)
     conn->doRPCWithDefaultErrorHandling(payload, cb);
 }
 
-void ZcashdRPC::importZPrivKey(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb) {
+void ZcashdRPC::importZPrivKey(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                          const std::function<void(QString)>& err) {
     json payload = {
         {"jsonrpc", "1.0"},
         {"id", "someid"},
@@ -239,20 +262,21 @@ void ZcashdRPC::importZPrivKey(QString key, bool rescan, int rescanHeight, const
         {"params", { key.toStdString(), (rescan? "yes" : "no"), rescanHeight }},
     };
     
-    conn->doRPCWithDefaultErrorHandling(payload, cb);
+    doImportRPC(payload, cb, err);
 }
 
 
 
-void ZcashdRPC::importTPrivKey(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb) {
+void ZcashdRPC::importTPrivKey(QString key, bool rescan, int rescanHeight, const std::function<void(json)>& cb,
+                          const std::function<void(QString)>& err) {
     json payload = {
         {"jsonrpc", "1.0"},
         {"id", "someid"},
         {"method", "importprivkey"},
-        {"params", { key.toStdString(), "", rescan, rescanHeight}},
+        {"params", NodeCompat::importPrivKeyParams(conn->nodeVersion, key, rescan, rescanHeight)},
     };
     
-    conn->doRPCWithDefaultErrorHandling(payload, cb);
+    doImportRPC(payload, cb, err);
 }
 
 void ZcashdRPC::validateAddress(QString address, const std::function<void(json)>& cb) {

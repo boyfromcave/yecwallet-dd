@@ -6,6 +6,7 @@
 #include "ui_addressbook.h"
 #include "ui_nullifiermigration.h"
 #include "ui_rescandialog.h"
+#include "nodecompat.h"
 #include "ui_zboard.h"
 #include "ui_privkey.h"
 #include "ui_about.h"
@@ -454,6 +455,14 @@ void MainWindow::rescanBlockchain() {
     if (!getRPC() || !getRPC()->getConnection())
         return;
 
+    // Ycash 6.20.0 has no rescanblockchain. Its stock rescans are the import RPCs (rescan=true)
+    // and -rescan at startup, so the menu item becomes "restart with -rescan" (from genesis: the
+    // start height is not available on 6.20.0).
+    if (!NodeCompat::hasRescanRpcs(getRPC()->getConnection()->nodeVersion)) {
+        rescanByRestart();
+        return;
+    }
+
     QDialog d(this);
     Ui_rescanDialog r;
     r.setupUi(&d);
@@ -476,6 +485,36 @@ void MainWindow::rescanBlockchain() {
     }
 } 
 
+
+/**
+ * Ycash 6.20.0: rescan by restarting ycashd with -rescan. For the embedded ycashd the wallet adds
+ * rescan=1 to ycash.conf and closes; Controller::setConnection removes the line again at the next
+ * connect, so the rescan runs once. An external ycashd is the user's to restart.
+ */
+void MainWindow::rescanByRestart() {
+    auto confLocation = Settings::getInstance()->getZcashdConfLocation();
+    if (!rpc->isEmbedded() || confLocation.isEmpty() || !QFile(confLocation).exists()) {
+        QMessageBox::information(this, tr("Rescan"),
+            tr("This ycashd (6.20 or later) cannot rescan while it runs, and has no start height for a "
+               "rescan. Restart ycashd with -rescan to rescan the whole block chain."), QMessageBox::Ok);
+        return;
+    }
+
+    auto answer = QMessageBox::question(this, tr("Rescan"),
+        tr("This ycashd (6.20 or later) rescans only at startup, and always from the start of the "
+           "block chain (a start height is not supported).") + "\n\n" +
+        tr("YecWallet will add rescan=1 to %1 and close. Start YecWallet again to run the rescan; "
+           "its progress is shown while ycashd starts. Continue?").arg(confLocation),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+
+    if (!Settings::addToZcashConf(confLocation, "rescan=1")) {
+        QMessageBox::critical(this, tr("Rescan"), tr("Could not write to %1").arg(confLocation), QMessageBox::Ok);
+        return;
+    }
+    QTimer::singleShot(1, [=, this]() { this->close(); });
+}
 
 /** Migrate sapling nullifiers */
 void MainWindow::nullifierMigration() {
@@ -635,6 +674,14 @@ void MainWindow::doImport(QList<QString>* keys, int rescanHeight) {
     keys->pop_front();
     bool rescan = keys->isEmpty();
 
+    // Ycash 6.20.0 rescans inside the last import RPC, synchronously: no getrescaninfo to poll,
+    // so that call gets its own error path and a busy dialog (NodeCompat; Controller::beginSyncRescan).
+    if (rescan && !NodeCompat::hasRescanRpcs(rpc->getConnection()->nodeVersion)) {
+        doImportWithSyncRescan(key, rescanHeight);
+        delete keys;
+        return;
+    }
+
     if (key.startsWith("SK") ||     // Sprout Secret key
         key.startsWith("secret")) { // Sapling Secret key
         rpc->importZPrivKey(key, rescan, rescanHeight, [=, this](auto) { this->doImport(keys, rescanHeight); });
@@ -667,6 +714,49 @@ void MainWindow::doImport(QList<QString>* keys, int rescanHeight) {
     }
 }
 
+/**
+ * Ycash 6.20.0: import the last key of a batch with rescan=true. The node rescans before it
+ * answers, so the wallet pauses its other calls and shows a busy dialog until the reply (or the
+ * error) arrives. importprivkey rescans from genesis whatever height was entered (6.20.0 has no
+ * start-height argument); the shielded imports honour the height.
+ */
+void MainWindow::doImportWithSyncRescan(QString key, int rescanHeight, bool fvk) {
+    auto done = [=, this](auto) {
+        rpc->endSyncRescan();
+        ui->statusBar->showMessage(tr("Import and rescan finished"), 10 * 1000);
+    };
+    auto failed = [=, this](QString error) {
+        rpc->endSyncRescan();
+        QMessageBox::critical(this, tr("Import failed"), tr("ycashd refused the import:") + "\n\n" + error,
+                              QMessageBox::Ok);
+    };
+
+    QString what = tr("Importing the key and rescanning.");
+    if (fvk) {
+        rpc->importZFVK(key, true, rescanHeight, done, failed);
+    } else if (key.startsWith("SK") || key.startsWith("secret")) {
+        rpc->importZPrivKey(key, true, rescanHeight, done, failed);
+    } else if (key.startsWith("zivk")) {
+        auto parts = key.trimmed().split(QRegularExpression("[ #]+"));
+        if (parts.length() != 2) {
+            QMessageBox::critical(this, tr("Error importing viewing key"),
+                tr("Couldn't find the address for the viewing key. Please type in the viewing key and address on the same line. eg:") +
+                "\n" + "zivks1k...sjjx9 # ys1fzse2...8vxr9t\n",
+                QMessageBox::Ok);
+            return;
+        }
+        rpc->importZViewingKey(parts[0], true, rescanHeight, parts[1], done, failed);
+    } else {
+        if (rescanHeight > 0)
+            what = tr("Importing the key and rescanning from the start of the block chain "
+                      "(ycashd 6.20 ignores the start height for transparent keys).");
+        rpc->importTPrivKey(key, true, rescanHeight, done, failed);
+    }
+
+    // After the call is on its way: from here the wallet's other calls are held back
+    rpc->beginSyncRescan(what);
+}
+
 void MainWindow::doImportFVK(QList<QString>* keys, int rescanHeight) {
     if (rpc->getConnection() == nullptr) {
         // No connection, just return
@@ -683,6 +773,12 @@ void MainWindow::doImportFVK(QList<QString>* keys, int rescanHeight) {
     QString key = keys->first();
     keys->pop_front();
     bool rescan = keys->isEmpty();
+
+    if (rescan && !NodeCompat::hasRescanRpcs(rpc->getConnection()->nodeVersion)) {
+        doImportWithSyncRescan(key, rescanHeight, true);
+        delete keys;
+        return;
+    }
 
     // Sapling extended FVK
     rpc->importZFVK(key, rescan, rescanHeight, [=, this](auto) { this->doImportFVK(keys, rescanHeight); });

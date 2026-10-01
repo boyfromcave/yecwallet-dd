@@ -122,6 +122,7 @@ set(APP_HEADERS
     src/datamodel.h
     src/controller.h
     src/zcashdrpc.h
+    src/nodecompat.h
     src/yellowbackrpc.h
     src/yellowbackcontroller.h
     src/yellowbackmodels.h
@@ -325,18 +326,27 @@ if(TARGET Qt6::Test AND NOT QT_STATIC)
     enable_testing()
     set(YELLOWBACK_TEST_SOURCES ${APP_SOURCES})
     list(REMOVE_ITEM YELLOWBACK_TEST_SOURCES src/main.cpp)
-    qt_add_executable(yellowback_test
-        tests/yellowbacktab_test.cpp
-        ${YELLOWBACK_TEST_SOURCES} ${APP_HEADERS} ${APP_FORMS} application.qrc
-    )
-    target_include_directories(yellowback_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/src/3rdparty"
-        "${CMAKE_CURRENT_SOURCE_DIR}/singleapplication")
-    target_compile_definitions(yellowback_test PRIVATE QT_DEPRECATED_WARNINGS QAPPLICATION_CLASS=QApplication)
-    target_precompile_headers(yellowback_test PRIVATE src/precompiled.h)
-    target_link_libraries(yellowback_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::WebSockets Qt6::Test)
-    add_test(NAME yellowback_test COMMAND yellowback_test)
-    set_tests_properties(yellowback_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # yellowback_test: the Yellowback tab. nodecompat_test: the version-aware calls for the two
+    # ycashd lines (v4.5.0 and 6.20.0, ycash6 plan Phase 7), against a loopback mock ycashd.
+    foreach(test_name yellowback_test nodecompat_test)
+        if(test_name STREQUAL "yellowback_test")
+            set(test_source tests/yellowbacktab_test.cpp)
+        else()
+            set(test_source tests/${test_name}.cpp)
+        endif()
+        qt_add_executable(${test_name}
+            ${test_source}
+            ${YELLOWBACK_TEST_SOURCES} ${APP_HEADERS} ${APP_FORMS} application.qrc
+        )
+        target_include_directories(${test_name} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/src/3rdparty"
+            "${CMAKE_CURRENT_SOURCE_DIR}/singleapplication")
+        target_compile_definitions(${test_name} PRIVATE QT_DEPRECATED_WARNINGS QAPPLICATION_CLASS=QApplication)
+        target_precompile_headers(${test_name} PRIVATE src/precompiled.h)
+        target_link_libraries(${test_name} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::WebSockets Qt6::Test)
+        add_test(NAME ${test_name} COMMAND ${test_name})
+        set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endforeach()
 endif()
 
 # ── Install rules ─────────────────────────────────────────────────────────────

@@ -86,7 +86,8 @@ HEADERS += \
     src/rescanprogress.h \
     src/datamodel.h \
     src/controller.h \
-    src/zcashdrpc.h 
+    src/zcashdrpc.h \
+    src/nodecompat.h
 
 FORMS += \
     src/mainwindow.ui \

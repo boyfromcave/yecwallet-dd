@@ -39,11 +39,15 @@ jobs:
       - name: "Configure (system Qt 6, with testlib)"
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build the app and the QTest target
-        run: ninja -C build yecwallet yellowback_test
+        run: ninja -C build yecwallet yellowback_test nodecompat_test
       - name: Run the Yellowback QTest suite offscreen
         env:
           QT_QPA_PLATFORM: offscreen
         run: ./build/bin/yellowback_test || ./build/yellowback_test
+      - name: Run the node-compatibility QTest (v4.5.0 and 6.20.0 call shapes, loopback mock node)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build/bin/nodecompat_test || ./build/nodecompat_test
       - name: Upload the test log on failure
         if: failure()
         uses: actions/upload-artifact@v4

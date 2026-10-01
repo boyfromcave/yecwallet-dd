@@ -131,6 +131,8 @@ private:
 
     void doImport(QList<QString>* keys, int rescanHeight);
     void doImportFVK(QList<QString>* keys, int rescanHeight);
+    void doImportWithSyncRescan(QString key, int rescanHeight, bool fvk = false);
+    void rescanByRestart();
 
     void restoreSavedStates();
     bool eventFilter(QObject *object, QEvent *event);

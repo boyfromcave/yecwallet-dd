@@ -14,7 +14,24 @@ RescanProgress::RescanProgress(MainWindow* _main)
 }
 
 RescanProgress::~RescanProgress() {
+    delete ticker;
     delete progress;
+}
+
+void RescanProgress::setBusy(const QString& what) {
+    progress->setRange(0, 0);       // an indeterminate ("busy") bar
+    elapsed.start();
+    auto show = [=, this]() {
+        qint64 s = elapsed.elapsed() / 1000;
+        progress->setLabelText(what % "\n\n" %
+            QObject::tr("ycashd is rescanning the block chain for the imported key. It reports no progress "
+                        "while it does; on mainnet this can take a long time. YecWallet resumes when it finishes.") %
+            "\n\n" % QObject::tr("Elapsed: %1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0')));
+    };
+    show();
+    ticker = new QTimer();
+    QObject::connect(ticker, &QTimer::timeout, show);
+    ticker->start(1000);
 }
 
 void RescanProgress::updateProgress(int tick) {
@@ -23,5 +40,7 @@ void RescanProgress::updateProgress(int tick) {
 }
 
 void RescanProgress::closeProgress() {
+    if (ticker != nullptr) ticker->stop();
+    if (progress->maximum() == 0) progress->setRange(0, 100);
     progress->setValue(100);
 }
