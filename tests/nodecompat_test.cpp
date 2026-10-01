@@ -391,6 +391,7 @@ private slots:
             [&](json r) { got = r; done = true; }, [&](QString x) { err = x; done = true; });
         QTRY_VERIFY_WITH_TIMEOUT(done, 120000);
         QVERIFY2(err.isEmpty(), qPrintable("importprivkey: " + err));
+        QVERIFY(got.is_string());
         QCOMPARE(got.get<std::string>(), taddr.get<std::string>());
         json va = n0.call("validateaddress", json::array({taddr}));
         QVERIFY(va.value("ismine", false));
@@ -402,7 +403,11 @@ private slots:
             [&](json r) { got = r; done = true; }, [&](QString x) { err = x; done = true; });
         QTRY_VERIFY_WITH_TIMEOUT(done, 120000);
         QVERIFY2(err.isEmpty(), qPrintable("z_importivk: " + err));
-        QCOMPARE(got.value("address", std::string()), zaddr.get<std::string>());
+        // 6.20.0 answers {"address": zaddr}; v4.5.0 answers null (the wallet reads neither)
+        if (NodeCompat::isYcash6(version)) {
+            QVERIFY(got.is_object());
+            QCOMPARE(got.value("address", std::string()), zaddr.get<std::string>());
+        }
         json zs = n0.call("z_listaddresses", json::array({true}));
         QVERIFY(zs.is_array());
         bool listed = false;
