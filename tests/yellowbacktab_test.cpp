@@ -2264,7 +2264,7 @@ private slots:
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QVERIFY(h.notices.size() == 1 && h.notices[0].startsWith("Mint sent|"));
+        QVERIFY2(h.notices.size() == 1 && h.notices[0].startsWith("Mint sent|"), qPrintable(h.notices.join("\n")));
         QString mintTxid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
         QCOMPARE(mintTxid.size(), 64);
         QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
@@ -2546,7 +2546,8 @@ private slots:
         h.mintAmount("100");
         h.tab.findChild<QComboBox*>("cmbTier")->setCurrentIndex(0);
         h.tab.doMint();
-        QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.confirms.size() == 1, qPrintable("no confirmation; hint: " % h.label("lblMintHint") % "; status: " %
+                                                    h.label("lblMintPageStatus") % "; " % h.errorNotices.join("\n")));
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY2(h.label("lblMintPageStatus").startsWith("Preparing price proof"), qPrintable(h.label("lblMintPageStatus")));
         QVERIFY2(waitTwoStep(0), qPrintable(h.errorNotices.join("\n")));
