@@ -2530,12 +2530,22 @@ private slots:
             for (int i = 0; i < 20 && h.notices.size() == noticesBefore && h.errorNotices.isEmpty(); i++) { minePools(1); QTest::qWait(1000); }
             return h.notices.size() > noticesBefore;
         };
-        auto writeMock = [&](const QString& usd) {
-            QFile f(dir % "/mock-price.tmp");
+        // Move the market the way `yellowback-devnet price USD` does (its apply_price): the pools'
+        // shared mock-price file, each automated attestor's own attest-price-<n> file, and
+        // yed_setquote on the pools when they run without quote agents (the default devnet)
+        auto writeFile = [&](const QString& path, const QString& usd) {
+            QFile f(path % ".tmp");
             QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
             f.write((usd % "\n").toUtf8()); f.close();
-            QFile::remove(dir % "/mock-price");
-            QVERIFY(QFile::rename(dir % "/mock-price.tmp", dir % "/mock-price"));
+            QFile::remove(path);
+            QVERIFY(QFile::rename(path % ".tmp", path));
+        };
+        auto writeMock = [&](const QString& usd) {
+            writeFile(dir % "/mock-price", usd);
+            for (const QString& name : QDir(dir).entryList({"attest-price-*"}, QDir::Files))
+                if (!name.endsWith(".tmp")) writeFile(dir % "/" % name, usd);
+            for (int p : pools)
+                dev.rpcOn(p, "yed_setquote", json::array({(qint64)llround(usd.toDouble() * 1000000.0), 1}));
         };
 
         // 1. Mint $100 while ARMED: the two-step path, the price proof from the attestors
@@ -2553,8 +2563,11 @@ private slots:
         QVERIFY2(waitTwoStep(0), qPrintable(h.errorNotices.join("\n")));
         QVERIFY(h.notices[0].startsWith("Mint sent|"));
         QVERIFY2(h.notices[0].contains("price proof from attestor seq"), qPrintable(h.notices[0]));
-        const QString mintTxid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
-        QCOMPARE(mintTxid.size(), 64);
+        // From the notice ("Minted ... of YED.\ntxid <txid>"): the page's "Minted. txid:" line is
+        // cleared two blocks after the mint, and the two-step wait may already have mined them
+        // (blocks settle more slowly on 6.20.0)
+        const QString mintTxid = h.notices[0].section("\ntxid ", 1).section('\n', 0, 0).trimmed();
+        QVERIFY2(mintTxid.size() == 64, qPrintable(h.notices[0]));
         minePools(1);
         QVERIFY(dev.settle(mintTxid));
         h.ctl.refresh(true);
