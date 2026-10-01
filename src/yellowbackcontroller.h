@@ -166,7 +166,10 @@ public:
     // appears that was not there when the action started, then answers `done` with its
     // yed_gettxinfo. `err` fires when the carrier's window lapses (tip past refHeight +
     // refWindow: yed_sweepcarriers reclaims it) or the poll itself fails.
-    void awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err);
+    // A claim also accepts a "claimed" row (a claim of an own vault is listed so); a notice,
+    // which has no row, is followed through yed_getnotice `vaultTxid` (pass it for a notice).
+    void awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err,
+                      const QString& vaultTxid = QString());
     void setPendingPollMs(int ms) { pendingPollMs = ms; }   // the QTest shortens it
     // The flags byte yed_registerattestor takes (proposal §5.2): bits 0-1 the source tier, bit 2 pool operator.
     static int attestorFlags(int tier, bool pool) { return (tier & 3) | (pool ? 4 : 0); }

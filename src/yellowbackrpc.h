@@ -34,6 +34,7 @@ constexpr const char* GETFEEPAYEE         = "yed_getfeepayee";
 constexpr const char* GETPRICE            = "yed_getprice";          // v3: xMint/xClaim, armed, attestStatus
 constexpr const char* LISTATTESTORS       = "yed_listattestors";     // v3: the Attestors view
 constexpr const char* GETSELECTION        = "yed_getselection";      // v3: "n of m selected attestors reachable"
+constexpr const char* GETNOTICE           = "yed_getnotice";         // v3: the standing notice of a vault (follows a pending notice)
 
 // ── Methods (wallet context) ──────────────────────────────────────────────────────────────
 constexpr const char* GETNEWADDRESS       = "yed_getnewaddress";
@@ -501,6 +502,15 @@ namespace NoticeResult {   // contract: yed_claimnotice
     constexpr const char* A_CLAIM           = "aClaim";
     constexpr const char* P_EMERG           = "pEmerg";
     constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
+}
+
+// v3: yed_getnotice, the standing notice record of a vault. A pending yed_claimnotice is
+// followed through it: yed_listtransactions has no "notice" row on either node line.
+namespace NoticeRecord {   // contract: yed_getnotice
+    constexpr const char* FOUND             = "found";
+    constexpr const char* TXID              = "txid";
+    constexpr const char* HEIGHT            = "height";
+    constexpr const char* REF_HEIGHT        = "refHeight";
 }
 
 // v3: yed_gettxinfo, the fields the two-step actions read once the main transaction exists

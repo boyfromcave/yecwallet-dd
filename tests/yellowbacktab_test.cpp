@@ -1954,7 +1954,9 @@ private slots:
         h.feedActive(410, json(nullptr), json::array({row}));
         h.ctl.setPendingPollMs(10);
         h.rpc.results[YellowbackRpc::CLAIM]            = claimPendingReply();
-        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({txRow("claim", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d")});
+        // The claim of an own vault: the node lists it as "claimed", mined above the reply's refHeight 405
+        json claimRow = txRow("claimed", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d"); claimRow["height"] = 407;
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({claimRow});
         h.rpc.results[YellowbackRpc::GETTXINFO]        = txInfoClaim();
         YellowbackClaimable c = YellowbackClaimable::fromJson(row);
         QCOMPARE(c.claimPath, QString("b"));
@@ -1991,7 +1993,10 @@ private slots:
         h.feedActive(340, json::array({p}));
         h.ctl.setPendingPollMs(10);
         h.rpc.results[YellowbackRpc::CLAIMNOTICE]      = noticePendingReply();
-        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({txRow("notice", "8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5")});
+        // A notice has no yed_listtransactions row on either node line: it is followed through
+        // yed_getnotice <vault>, whose record names the reply's refHeight 338 once it confirms
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array();
+        h.rpc.results[YellowbackRpc::GETNOTICE] = json::parse(R"({"found": false})");
         json info = txInfoMint(); info["txid"] = "8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5"; info["type"] = "notice"; info["notice"] = true;
         h.rpc.results[YellowbackRpc::GETTXINFO]        = info;
         // The button follows the row's canNotice
@@ -2011,6 +2016,12 @@ private slots:
         QVERIFY(h.confirms[0].contains("no YED is burned"));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIMNOTICE), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", false}));
         QVERIFY2(h.label("lblVaultAction").startsWith("Preparing price proof (1 block)"), qPrintable(h.label("lblVaultAction")));
+        QTest::qWait(50);
+        QVERIFY(h.notices.isEmpty());                       // no record yet: still waiting
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETNOTICE), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}));
+        h.rpc.results[YellowbackRpc::GETNOTICE] = json::parse(R"({"found": true, "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0",
+          "txid": "8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5", "height": 340, "refHeight": 338, "pEmerg": 1800000,
+          "emergencyOpenAt": 342, "expiresAt": 402})");
         QTRY_COMPARE_WITH_TIMEOUT(h.notices.size(), 1, 2000);
         QVERIFY(h.notices[0].startsWith("Claim notice sent|"));
         QVERIFY2(h.notices[0].contains("from reference height 342 on"), qPrintable(h.notices[0]));   // emergencyOpenAt
@@ -2183,7 +2194,8 @@ private slots:
         int noticesBefore = h.notices.size();
         h.tab.reportEquivocation(hexA, hexB);
         // The node builds the main transaction on the next ChainTip: from now on the list has the row
-        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({txRow("equivocation", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d")});
+        json eqRow = txRow("equivocation", "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d"); eqRow["height"] = h.ctl.height() + 1;
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({eqRow});
         QVERIFY(h.confirms.last().startsWith("Report an equivocation."));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::REPORTEQUIVOCATION), json::array({hexA.toStdString(), hexB.toStdString(), false}));
         QVERIFY2(h.label("lblAttestorAction").startsWith("Preparing price proof (1 block)"), qPrintable(h.label("lblAttestorAction")));

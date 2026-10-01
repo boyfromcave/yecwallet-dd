@@ -263,7 +263,8 @@ void YellowbackTab::failed(const QString& what, const QString& e) {
 // (1 block)") and the controller follows the main transaction; `done` gets its yed_gettxinfo.
 // A reply that is not pending (an older node, or a node that ignored wait) is handed to `done`
 // as it is, so both shapes end in the same summary.
-void YellowbackTab::followPending(const QString& type, const json& r, QLabel* status, std::function<void(const json&)> done) {
+void YellowbackTab::followPending(const QString& type, const json& r, QLabel* status, std::function<void(const json&)> done,
+                                  const QString& vaultTxid) {
     using namespace YellowbackRpc;
     if (!YellowbackJson::toBool(r, MintResult::PENDING)) { done(r); return; }
     const QString carrier = YellowbackJson::toStr(r, MintResult::CARRIER_TXID);
@@ -275,7 +276,7 @@ void YellowbackTab::followPending(const QString& type, const json& r, QLabel* st
         [=, this](const QString& e) {
             if (status != nullptr) status->setText(tr("%1 did not complete: %2").arg(type).arg(e));
             notice(tr("%1 not completed").arg(type), e, true);
-        });
+        }, vaultTxid);
 }
 
 // bundle-insufficient: name the missing seqs and offer to re-query yed_getselection (which
@@ -1244,7 +1245,7 @@ void YellowbackTab::noticeVault(const YellowbackPosition& p) {
                         .arg(at > 0 ? tr("emergency claim possible from reference height %1 on, while the vault stays below the emergency ratio").arg(at)
                                     : tr("the emergency clause opens once the notice has persisted")));
                 ctl->refresh(true);
-            });
+            }, p.txid);
         },
         [=, this](const QString& e) {
             updateVaultButtons();

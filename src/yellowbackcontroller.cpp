@@ -809,53 +809,98 @@ void YellowbackController::reportEquivocation(const QString& hexA, const QString
 }
 
 // ── v3 two-step follow-up (W7) ────────────────────────────────────────────────────────────
-// The rows of `type` present now are the baseline; the first row of that type not in it is
+// The rows of `type` present now are the baseline; the first row of that type not in it, and
+// mined above the reference height (the main transaction spends a carrier that confirmed after
+// R, so an older row is never it, even when the Transactions model was stale at the start), is
 // the main transaction. The poll is a plain yed_listtransactions on a timer: the block that
 // confirms the carrier is also the ChainTip on which the node builds the main transaction, so
-// one or two polls after the next block usually settle it. The timer is a child of this
-// controller and dies with it.
-void YellowbackController::awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err) {
+// one or two polls after the main transaction is mined usually settle it. The timer is a child
+// of this controller and dies with it.
+//
+// Two shapes the node's yed_listtransactions does not give as `type` (both node lines,
+// ycash-dd and ycash6 src/rpc/yellowbackwallet.cpp yed_listtransactions):
+//  - a claim of a vault this wallet owns is listed as "claimed" (the row closed an own vault),
+//    so a claim accepts "claim" or "claimed";
+//  - a CLAIM_NOTICE moves no YED and closes no vault, so it has no row at all (the contract's
+//    "notice" type is not emitted). A notice is followed through yed_getnotice <vault> instead:
+//    the record whose refHeight is the pending reply's is the one this action posted.
+void YellowbackController::awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err,
+                                        const QString& vaultTxid) {
+    using namespace YellowbackRpc;
     auto known = std::make_shared<QSet<QString>>();
+    auto accepts = [type](const QString& t) {
+        return t == type || (type == Transaction::TYPE_CLAIM && t == Transaction::TYPE_CLAIMED);
+    };
     for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
         const YellowbackTx* t = transactions->txAt(i);
-        if (t != nullptr && t->type == type) known->insert(t->txid);
+        if (t != nullptr && accepts(t->type)) known->insert(t->txid);
     }
+    const bool byNotice = type == Transaction::TYPE_NOTICE && !vaultTxid.isEmpty();
+    auto finished = std::make_shared<bool>(false);
     QTimer* timer = new QTimer(this);
     timer->setInterval(pendingPollMs);
+    auto stop = [=]() {
+        *finished = true;
+        timer->stop();
+        timer->deleteLater();
+    };
+    auto finish = [=, this](const QString& txid) {
+        stop();
+        call(GETTXINFO, json::array({txid.toStdString()}),
+            [=](const json& info) { if (done) done(info); },
+            [=, this](const QString& e) {
+                // The transaction exists; the summary just has fewer fields
+                json fallback = {{TxInfo::TXID, txid.toStdString()}, {TxInfo::TYPE, type.toStdString()}};
+                log("yed_gettxinfo after " + type + ": " + e);
+                if (done) done(fallback);
+            });
+    };
+    auto lapsed = [=, this]() {
+        if (*finished || refWindow() <= 0 || indexHeight <= refHeight + refWindow()) return false;
+        stop();
+        if (err) err(tr("the carrier %1 lapsed: the chain passed reference height %2 plus the %3-block window and no %4 transaction appeared. "
+                        "Its funds come back with \"Reclaim lapsed carriers\" on the Settings page.")
+                         .arg(carrierTxid).arg(refHeight).arg(refWindow()).arg(type));
+        return true;
+    };
+    auto failedPoll = [=, this](const QString& what, const QString& e) {
+        if (*finished) return;
+        stop();
+        if (err) err(tr("%1 failed while waiting for the %2 transaction: %3").arg(what).arg(type).arg(e));
+    };
     auto poll = [=, this]() {
-        call(YellowbackRpc::LISTTRANSACTIONS, json::array({50, 0}),
+        if (*finished) return;
+        if (byNotice) {
+            call(GETNOTICE, json::array({vaultTxid.toStdString()}),
+                [=, this](const json& r) {
+                    if (*finished) return;
+                    const QString txid = YellowbackJson::toStr(r, NoticeRecord::TXID);
+                    if (YellowbackJson::toBool(r, NoticeRecord::FOUND) && !txid.isEmpty() &&
+                        YellowbackJson::toInt(r, NoticeRecord::REF_HEIGHT, -1) == refHeight) {
+                        finish(txid);
+                        return;
+                    }
+                    lapsed();
+                },
+                [=](const QString& e) { failedPoll(GETNOTICE, e); });
+            return;
+        }
+        call(LISTTRANSACTIONS, json::array({50, 0}),
             [=, this](const json& arr) {
+                if (*finished) return;
                 if (arr.is_array()) {
                     for (auto& it : arr) {
                         YellowbackTx t = YellowbackTx::fromJson(it);
-                        if (t.type != type || t.expired || known->contains(t.txid)) continue;
-                        timer->stop();
-                        timer->deleteLater();
+                        if (!accepts(t.type) || t.expired || known->contains(t.txid)) continue;
+                        if (t.height > 0 && t.height <= refHeight) continue;
                         applyTransactions(arr);
-                        call(YellowbackRpc::GETTXINFO, json::array({t.txid.toStdString()}),
-                            [=](const json& info) { if (done) done(info); },
-                            [=](const QString& e) {
-                                // The row exists; the summary just has fewer fields
-                                json fallback = {{YellowbackRpc::TxInfo::TXID, t.txid.toStdString()}, {YellowbackRpc::TxInfo::TYPE, type.toStdString()}};
-                                log("yed_gettxinfo after " + type + ": " + e);
-                                if (done) done(fallback);
-                            });
+                        finish(t.txid);
                         return;
                     }
                 }
-                if (refWindow() > 0 && indexHeight > refHeight + refWindow()) {
-                    timer->stop();
-                    timer->deleteLater();
-                    if (err) err(tr("the carrier %1 lapsed: the chain passed reference height %2 plus the %3-block window and no %4 transaction appeared. "
-                                    "Its funds come back with \"Reclaim lapsed carriers\" on the Settings page.")
-                                     .arg(carrierTxid).arg(refHeight).arg(refWindow()).arg(type));
-                }
+                lapsed();
             },
-            [=, this](const QString& e) {
-                timer->stop();
-                timer->deleteLater();
-                if (err) err(tr("yed_listtransactions failed while waiting for the %1 transaction: %2").arg(type).arg(e));
-            });
+            [=](const QString& e) { failedPoll(LISTTRANSACTIONS, e); });
     };
     QObject::connect(timer, &QTimer::timeout, this, poll);
     timer->start();

@@ -151,7 +151,7 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     void updateMintAttest();                // v3: the selection line under the estimate
     // v3 two-step: the "preparing price proof" status, then the follow-up (W7)
     void followPending(const QString& type, const nlohmann::json& pendingReply, QLabel* status,
-                       std::function<void(const nlohmann::json& txinfo)> done);
+                       std::function<void(const nlohmann::json& txinfo)> done, const QString& vaultTxid = QString());
     QString mintSummary(qint64 cents, const nlohmann::json& r) const;
     QString claimSummary(const nlohmann::json& r) const;
     bool    bundleInsufficientRetry(const QString& what, const QString& e);   // true when it was that error
