@@ -2264,7 +2264,8 @@ private slots:
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QVERIFY2(h.notices.size() == 1 && h.notices[0].startsWith("Mint sent|"), qPrintable(h.notices.join("\n")));
+        QVERIFY2(h.notices.size() == 1 && h.notices[0].startsWith("Mint sent|"),
+                 qPrintable(h.notices.join("\n") % " / status: " % h.label("lblMintPageStatus")));
         QString mintTxid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
         QCOMPARE(mintTxid.size(), 64);
         QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
