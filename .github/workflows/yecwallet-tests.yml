@@ -9,7 +9,7 @@ name: yecwallet-tests
 
 on:
   push:
-    branches: [ feature/yellowback-price-attest, feature/yellowback-sf, yecwallet-legacy ]
+    branches: [ feature/yellowback-price-attest, yecwallet-legacy ]
   pull_request:
   workflow_dispatch:
 
