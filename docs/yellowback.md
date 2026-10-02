@@ -11,8 +11,9 @@ RPC contract this wallet is checked against is `docs/yellowback-rpc-contract.jso
 workspace's `make spec`, never edited here); `tests/check-rpc-contract.py` asserts that every field
 `src/yellowbackrpc.h` reads is in it.
 
-This file records the wallet-side baseline and the conventions the `feature/yellowback-sf` fork
-follows (`feature/digidollar` is the retired prototype, kept as a record). The node-side contract
+This file records the wallet-side baseline and the conventions the `feature/yellowback-price-attest` (v3) fork
+follows (`feature/yellowback-sf`, the superseded v2, and `feature/digidollar`, the retired prototype,
+are kept as records only, never as comparison bases). The node-side contract
 lives in `ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends
 on is listed once in `src/yellowbackrpc.h`.
 
