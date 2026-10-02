@@ -48,6 +48,7 @@ SOURCES += \
     src/turnstile.cpp \
     src/qrcodelabel.cpp \
     src/connection.cpp \
+    src/nodedatacheck.cpp \
     src/fillediconlabel.cpp \
     src/addressbook.cpp \
     src/logger.cpp \
@@ -75,6 +76,7 @@ HEADERS += \
     src/turnstile.h \
     src/qrcodelabel.h \
     src/connection.h \
+    src/nodedatacheck.h \
     src/fillediconlabel.h \
     src/addressbook.h \
     src/logger.h \

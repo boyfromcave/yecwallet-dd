@@ -60,6 +60,7 @@ cd yecwallet-dd
 cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt) && cmake --build build
 QT_QPA_PLATFORM=offscreen build/bin/yellowback_test        # offline cases; the devnet cases QSKIP
 QT_QPA_PLATFORM=offscreen build/bin/nodecompat_test        # v4.5.0 / 6.20.0 call shapes (loopback mock ycashd)
+QT_QPA_PLATFORM=offscreen build/bin/nodedatacheck_test     # the data directory upgrade check
 python3 tests/check-rpc-contract.py                        # yellowbackrpc.h vs docs/yellowback-rpc-contract.json
 grep -rn 'trustless' src/ | { ! grep .; }
 ```
@@ -249,12 +250,12 @@ two lines) and against a v4.5.0 devnet node ("ycashd is online", v4.5.0 shapes).
 Risks of an embedded 6.20.0 node:
 
 - **An existing v4.5.0 datadir is upgraded one way.** 6.20.0 cannot read the v4.5.0 block index
-  (`LoadBlockIndex() : failed to read value`, "Please restart with -reindex to recover"). The
-  wallet already reacts to that stderr line by showing it and adding `reindex=1` to `ycash.conf`;
-  the next start reindexes (the wallet.dat keys survive, Yellowback index healthy), after which
-  v4.5.0 refuses the datadir (`block index inconsistency detected (post-Heartwood; hashLightClientRoot
-  ... != hashChainHistoryRoot ...)`) until it reindexes in turn. On mainnet that is a full
-  reindex each way. Verified on regtest with both binaries.
+  (`LoadBlockIndex() : failed to read value`, "Please restart with -reindex to recover"). After a
+  6.20.0 reindex, v4.5.0 refuses the datadir ("Error loading block database", or `block index
+  inconsistency detected (post-Heartwood; hashLightClientRoot ... != hashChainHistoryRoot ...)`)
+  until it reindexes in turn; the wallet.dat keys survive both ways. On mainnet that is a full
+  reindex each way. Verified on regtest with both binaries. The wallet now warns first (below).
+
 - **`ycash.conf` differences.** `fastsync` is `ibdskiptxverification` on 6.20.0 (handled, see the
   table above); the Yellowback keys (`experimentalfeatures`, `yellowback`, and on regtest
   `yellowbackstartheight`) are the same on both lines. 6.20.0 keeps every zcashd-deprecated RPC the
@@ -263,6 +264,73 @@ Risks of an embedded 6.20.0 node:
 - **The startup version check** (`Controller::checkForUpdate`) compares `APP_VERSION` with the
   release tags of `YcashFoundation/yecwallet` on GitHub; it is not a node check. With
   `APP_VERSION` at 6.20.0, no upstream 4.x/5.x release is ever offered as an update.
+
+### The upgrade warning (owner decision 2026-10-01)
+
+**What a failed 6.20.0 start writes** (regtest, v4.5.0 datadir from `wt/backport` with 30 blocks,
+then `ycash6/src/ycashd` on it; sha256 + mtime of every file before and after): `wallet.dat`,
+`peers.dat`, `banlist.dat`, `fee_estimates.dat` and `yellowback/` are untouched (6.20.0 stops
+before it loads the wallet); `blocks/index` and `chainstate` are rewritten only by LevelDB's
+open-time recovery (the `.log` folded into an `.ldb` table, new `MANIFEST`, `LOG` → `LOG.old`),
+`database/log.0000000001` appears and `debug.log` grows. v4.5.0 then starts on that directory
+without a reindex, same tip, same addresses. So the failed start is reversible; the reindex is
+the point of no return. The wallet still asks before it starts the node at all, so that Quit
+leaves the directory byte-identical.
+
+**When.** `ConnectionLoader::doAutoConnect`, after the connection to the conf's node was
+refused and before the first `startEmbeddedZcashd`: never with `--no-embedded`, never when a
+node already answers, never when the bundled `ycashd --version` (which reads no conf and no
+datadir) reports a version below 6.20.0.
+
+**Detection** (`src/nodedatacheck.{h,cpp}`, no UI, `tests/nodedatacheck_test.cpp`). The network
+data directory comes from the conf (`datadir=`, `testnet=1` → `testnet3/`, `regtest=1` →
+`regtest/`, `wallet=`). Then, in order:
+
+| State | Condition | Warn |
+|---|---|---|
+| `Fresh` | no `blocks/index` (or an empty one) | no |
+| `Marked` | `<netdir>/yecwallet-node-version` names 6.20.0 or later | no |
+| `Current` | `debug.log`: the last run that loaded the block index was 6.20.0 or later | no |
+| `Older` | `debug.log`: the last run that loaded the block index was older (4.4.x, 4.5.0) | yes |
+| `Unknown` | `blocks/index` present, no marker, `debug.log` says nothing | yes, once |
+
+"Loaded" means a `Ycash version vX` line followed, in the same run, by the ` block index NNNms`
+line both lines print only after `LoadBlockIndex` succeeded (`ref/ycash/src/init.cpp:916,1760`,
+`ref/ycash6/src/init.cpp:1018,2013`), so a failed 6.20.0 start does not count; the last 16 MiB of
+`debug.log` are read. A definitive check would read a `CDiskBlockIndex` record's leading client
+version out of LevelDB, which the wallet cannot do without a LevelDB dependency. Limits: a
+directory whose `debug.log` was deleted warns once even if it is already 6.20.0; a directory the
+user took back to v4.5.0 after accepting keeps its marker and is not warned about again (delete
+the marker to be asked again); the embedded node is started without arguments, so with
+`--conf` the check reads the named conf while the node reads the default one (as before).
+
+**The dialog** says the node data is upgraded, older YecWallet/ycashd versions need a full
+reindex to use it afterwards, the reindex takes hours on mainnet, and `wallet.dat` keys are kept;
+for `Unknown` it adds that nothing changes if the directory is already 6.20.0. The informative
+text names the directory, its size and the free space on that disk and says a full copy is the
+only way back without a reindex, which the wallet does not make. Buttons: **Back up wallet.dat
+and continue** (copies it to `wallet.dat.yecwallet-backup-<yyyyMMdd-HHmmss>` next to it; a failed
+copy starts nothing), **Continue without backup**, **Quit** (default Escape; starts nothing,
+writes nothing). On continue the wallet writes the marker, and for `Older` also appends
+`reindex=1` to `ycash.conf`, so the first start reindexes instead of failing
+(`Controller::setConnection` removes it once the node answers). The old reaction to the
+"-reindex" stderr line stays as the fallback (the `Unknown` case, or a marker write that failed).
+
+**Test hooks.** `YECWALLET_UPGRADE_ANSWER=backup|continue|quit` answers the dialog without
+showing it. `YECWALLET_TEST_ISOLATE=1` keeps QSettings in an INI file under
+`$HOME/.yecwallet-test-settings` and the log, labels, sent-tx store and Yellowback subscriber
+conf under `$HOME/.yecwallet-test-appdata` (`Settings::appDataLocation`); without it, on macOS
+both go to the real `~/Library` whatever `HOME` says.
+
+**Verified** 2026-10-01, development build (Homebrew Qt 6.11), `QT_QPA_PLATFORM=offscreen
+--headless`, scratch `HOME` holding a copy of the v4.5.0 regtest datadir, `ycash6/src/ycashd`
+beside the binary: `quit` → the wallet exits 0, no ycashd started, the datadir byte-identical
+(sha256, mtime, size, listing); `backup` → backup byte-identical to the pre-upgrade wallet.dat,
+marker written, 6.20.0 reindexes on its first start ("Reindexing finished"), "ycashd is online",
+height 30, the same t- and z-addresses, `reindex` gone from the conf, and a second start reads
+the marker and does not warn; `continue` → the same without the backup; `--no-embedded` and an
+already running v4.5.0 node → no check. v4.5.0 on the upgraded directory: "Error loading block
+database", then with `-reindex` the same addresses.
 
 ## Network detection (plan H3)
 
@@ -304,5 +372,6 @@ against the contract's example values until the node ships `yed_claim` / `yed_sw
 | `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
+| `src/nodedatacheck.{cpp,h}`, `tests/nodedatacheck_test.cpp` | the one-way data directory upgrade check and its QTest (see "The upgrade warning"); the dialog is `ConnectionLoader::confirmNodeDataUpgrade` in `src/connection.cpp` |
 | `src/nodecompat.h`, `tests/nodecompat_test.cpp` | the v4.5.0 / 6.20.0 call shapes (see "Two node lines") and their QTest |
 | `CMakeLists.txt`, `tests/yellowbacktab_test.cpp`, `tests/check-rpc-contract.py` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`); the contract checker |

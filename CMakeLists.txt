@@ -75,6 +75,7 @@ set(APP_SOURCES
     src/turnstile.cpp
     src/qrcodelabel.cpp
     src/connection.cpp
+    src/nodedatacheck.cpp
     src/fillediconlabel.cpp
     src/addressbook.cpp
     src/logger.cpp
@@ -123,6 +124,7 @@ set(APP_HEADERS
     src/controller.h
     src/zcashdrpc.h
     src/nodecompat.h
+    src/nodedatacheck.h
     src/yellowbackrpc.h
     src/yellowbackcontroller.h
     src/yellowbackmodels.h
@@ -328,7 +330,8 @@ if(TARGET Qt6::Test AND NOT QT_STATIC)
     list(REMOVE_ITEM YELLOWBACK_TEST_SOURCES src/main.cpp)
     # yellowback_test: the Yellowback tab. nodecompat_test: the version-aware calls for the two
     # ycashd lines (v4.5.0 and 6.20.0, ycash6 plan Phase 7), against a loopback mock ycashd.
-    foreach(test_name yellowback_test nodecompat_test)
+    # nodedatacheck_test: the one-way data directory upgrade check (NodeDataCheck).
+    foreach(test_name yellowback_test nodecompat_test nodedatacheck_test)
         if(test_name STREQUAL "yellowback_test")
             set(test_source tests/yellowbacktab_test.cpp)
         else()

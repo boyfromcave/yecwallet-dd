@@ -57,6 +57,8 @@ private:
     void downloadParams(std::function<void(void)> cb);
     void doNextDownload(std::function<void(void)> cb);
     bool startEmbeddedZcashd();
+    bool confirmNodeDataUpgrade();
+    static QString embeddedZcashdProgram();
 
     void refreshZcashdState(Connection* connection, std::function<void(void)> refused);
 

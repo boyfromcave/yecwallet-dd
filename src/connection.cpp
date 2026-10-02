@@ -1,6 +1,8 @@
 #include <QRandomGenerator>
+#include <QStorageInfo>
 #include "connection.h"
 #include "nodecompat.h"
+#include "nodedatacheck.h"
 #include "mainwindow.h"
 #include "settings.h"
 #include "ui_connection.h"
@@ -51,6 +53,13 @@ void ConnectionLoader::doAutoConnect(bool tryEzcashdStart) {
             // Refused connection. So try and start embedded ycashd
             if (Settings::getInstance()->useEmbedded()) {
                 if (tryEzcashdStart) {
+                    // Before the first start: warn if the bundled node would upgrade an older
+                    // data directory one way (NodeDataCheck). Quit starts and changes nothing.
+                    if (ezcashd == nullptr && !this->confirmNodeDataUpgrade()) {
+                        main->logger->write("Quit at the data directory upgrade warning; ycashd was not started");
+                        QApplication::quit();
+                        return;
+                    }
                     this->showInformation(QObject::tr("Starting embedded ycashd"));
                     if (this->startEmbeddedZcashd()) {
                         // Embedded ycashd started up. Wait a second and then refresh the connection
@@ -326,6 +335,138 @@ void ConnectionLoader::doNextDownload(std::function<void(void)> cb) {
     });    
 }
 
+QString ConnectionLoader::embeddedZcashdProgram() {
+    QDir appPath(QCoreApplication::applicationDirPath());
+#ifdef Q_OS_LINUX
+    auto zcashdProgram = appPath.absoluteFilePath("zqw-ycashd");
+    if (!QFile(zcashdProgram).exists()) {
+        zcashdProgram = appPath.absoluteFilePath("ycashd");
+    }
+#elif defined(Q_OS_DARWIN)
+    auto zcashdProgram = appPath.absoluteFilePath("ycashd");
+#else
+    auto zcashdProgram = appPath.absoluteFilePath("ycashd.exe");
+#endif
+    return zcashdProgram;
+}
+
+/**
+ * The one-way upgrade warning (owner decision 2026-10-01). Runs before the embedded ycashd is
+ * first started, never with --no-embedded or when a node already answers (doAutoConnect only
+ * gets here after the connection was refused). Returns false when the user chose Quit, or the
+ * wallet.dat backup they asked for failed; nothing has been written then.
+ *
+ * Test hook: YECWALLET_UPGRADE_ANSWER=backup|continue|quit answers without showing the dialog.
+ */
+bool ConnectionLoader::confirmNodeDataUpgrade() {
+    auto program = embeddedZcashdProgram();
+    if (!QFile(program).exists())
+        return true;    // startEmbeddedZcashd reports the missing binary
+
+    // Which line is bundled: `ycashd --version` prints and exits before it reads any conf or
+    // data directory. A package that bundles a v4.5.0 node never warns.
+    int bundled = 0;
+    {
+        QProcess p;
+        p.start(program, QStringList() << "--version");
+        if (p.waitForFinished(5000))
+            bundled = NodeDataCheck::versionFromText(QString::fromUtf8(p.readAllStandardOutput()));
+        else
+            p.kill();
+    }
+    if (bundled != 0 && bundled < NodeDataCheck::UPGRADING_MIN_VERSION)
+        return true;
+    if (bundled == 0)
+        bundled = NodeDataCheck::UPGRADING_MIN_VERSION + 50;   // assume the 6.20.0 line
+    QString bundledText = QString("%1.%2.%3").arg(bundled / 1000000)
+                              .arg((bundled / 10000) % 100).arg((bundled / 100) % 100);
+
+    auto confLocation = Settings::getInstance()->getZcashdConfLocation();
+    auto dirs   = NodeDataCheck::resolve(confLocation);
+    auto result = NodeDataCheck::inspect(dirs.netDir);
+    main->logger->write("Data directory check (" + dirs.netDir + "): " + result.reason);
+    if (!NodeDataCheck::needsWarning(result.state))
+        return true;
+
+    enum class Answer { Backup, Continue, Quit };
+    Answer answer = Answer::Quit;
+    const bool hasWallet = QFile::exists(dirs.walletPath);
+    const QString hook = qEnvironmentVariable("YECWALLET_UPGRADE_ANSWER").toLower();
+    const bool hooked = !hook.isEmpty();
+
+    if (hooked) {
+        answer = hook == "backup" ? Answer::Backup : hook == "continue" ? Answer::Continue : Answer::Quit;
+        main->logger->write("YECWALLET_UPGRADE_ANSWER=" + hook);
+    } else {
+        QLocale locale;
+        QStorageInfo storage(dirs.netDir);
+        QString text = QObject::tr(
+            "This version of YecWallet runs ycashd %1, which upgrades the node data in\n%2\n\n"
+            "Older versions of YecWallet and ycashd (4.5.0 and earlier) will not be able to use this "
+            "data directory afterwards without a full reindex (re-sync). The upgrade itself is also a "
+            "reindex. On mainnet each reindex takes a long time, typically several hours.\n\n"
+            "Your wallet.dat and the keys in it are kept.")
+            .arg(bundledText, QDir::toNativeSeparators(dirs.netDir));
+        if (result.state == NodeDataCheck::State::Unknown)
+            text += "\n\n" + QObject::tr("YecWallet could not tell which ycashd version last used this "
+                "data directory. If it was %1 or later, nothing is upgraded.").arg(bundledText);
+        QString detail = QObject::tr(
+            "To keep a copy that an older version can open without a reindex, quit now and copy the "
+            "whole data directory (%1, about %2; %3 free on that disk). YecWallet does not make that copy.")
+            .arg(QDir::toNativeSeparators(dirs.netDir),
+                 locale.formattedDataSize(NodeDataCheck::directorySize(dirs.netDir)),
+                 locale.formattedDataSize(storage.bytesAvailable()));
+
+        QMessageBox box(QMessageBox::Warning, QObject::tr("Upgrade the node data?"), text,
+                        QMessageBox::NoButton, main);
+        box.setInformativeText(detail);
+        QPushButton* backupBtn = hasWallet
+            ? box.addButton(QObject::tr("Back up wallet.dat and continue"), QMessageBox::AcceptRole)
+            : nullptr;
+        QPushButton* continueBtn = box.addButton(QObject::tr("Continue without backup"), QMessageBox::DestructiveRole);
+        QPushButton* quitBtn = box.addButton(QObject::tr("Quit"), QMessageBox::RejectRole);
+        box.setDefaultButton(backupBtn ? backupBtn : quitBtn);
+        box.setEscapeButton(quitBtn);
+        box.exec();
+        auto clicked = box.clickedButton();
+        answer = (backupBtn && clicked == backupBtn) ? Answer::Backup
+               : clicked == continueBtn              ? Answer::Continue
+               :                                       Answer::Quit;
+    }
+
+    if (answer == Answer::Quit)
+        return false;
+
+    if (answer == Answer::Backup && hasWallet) {
+        QString error;
+        auto backup = NodeDataCheck::backupWallet(dirs.walletPath, QDateTime::currentDateTime(), &error);
+        if (backup.isEmpty()) {
+            main->logger->write("wallet.dat backup failed: " + error);
+            if (!hooked)
+                QMessageBox::critical(main, QObject::tr("Backup failed"),
+                    QObject::tr("Could not back up %1:\n%2\n\nycashd was not started.")
+                        .arg(QDir::toNativeSeparators(dirs.walletPath), error));
+            return false;
+        }
+        main->logger->write("wallet.dat backed up to " + backup);
+        if (!hooked)
+            QMessageBox::information(main, QObject::tr("wallet.dat backed up"),
+                QObject::tr("wallet.dat was copied to\n%1").arg(QDir::toNativeSeparators(backup)));
+    }
+
+    QString error;
+    if (!NodeDataCheck::writeMarker(dirs.netDir, bundledText, &error))
+        main->logger->write("Could not write the data directory marker: " + error);
+
+    // A block index the log shows an older node wrote cannot be read by this node: start the
+    // reindex now instead of letting the first start fail ("restart with -reindex", the fallback
+    // in startEmbeddedZcashd, which still covers the Unknown case). Controller::setConnection
+    // removes reindex=1 again once the node answers.
+    if (result.state == NodeDataCheck::State::Older)
+        Settings::addToZcashConf(confLocation, "reindex=1");
+    return true;
+}
+
 bool ConnectionLoader::startEmbeddedZcashd() {
     if (!Settings::getInstance()->useEmbedded()) 
         return false;
@@ -352,16 +493,7 @@ bool ConnectionLoader::startEmbeddedZcashd() {
 
     // Finally, start ycashd    
     QDir appPath(QCoreApplication::applicationDirPath());
-#ifdef Q_OS_LINUX
-    auto zcashdProgram = appPath.absoluteFilePath("zqw-ycashd");
-    if (!QFile(zcashdProgram).exists()) {
-        zcashdProgram = appPath.absoluteFilePath("ycashd");
-    }
-#elif defined(Q_OS_DARWIN)
-    auto zcashdProgram = appPath.absoluteFilePath("ycashd");
-#else
-    auto zcashdProgram = appPath.absoluteFilePath("ycashd.exe");
-#endif
+    auto zcashdProgram = embeddedZcashdProgram();
     
     if (!QFile(zcashdProgram).exists()) {
         qDebug() << "Can't find ycashd at " << zcashdProgram;
