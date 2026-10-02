@@ -156,7 +156,14 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     // v3 two-step: the "preparing price proof" status, then the follow-up (W7)
     void followPending(const QString& type, const nlohmann::json& pendingReply, QLabel* status,
                        std::function<void(const nlohmann::json& txinfo)> done, const QString& vaultTxid = QString());
-    QString mintSummary(qint64 cents, const nlohmann::json& r) const;
+    // confirmedZat: the collateral the confirmation dialog showed (-1 = none); the summary
+    // opens with a prominent note when the vault locked a different amount (audit F-1).
+    QString mintSummary(qint64 cents, const nlohmann::json& r, qint64 confirmedZat = -1) const;
+    // The slack the dialog's caps allow over/under the shown figure, in basis points (1 %):
+    // yed_mint maxCollateralZat and yed_claim minOutZat (audit F-1).
+    static constexpr qint64 CAP_SLACK_BPS = 100;
+    static qint64 capAbove(qint64 zat) { return zat + zat * CAP_SLACK_BPS / 10000; }
+    static qint64 capBelow(qint64 zat) { return zat - zat * CAP_SLACK_BPS / 10000; }
     QString claimSummary(const nlohmann::json& r) const;
     bool    bundleInsufficientRetry(const QString& what, const QString& e);   // true when it was that error
     void setActionsEnabled(bool enabled);

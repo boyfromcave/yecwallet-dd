@@ -829,9 +829,14 @@ void YellowbackTab::doMint() {
                 .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(e, Estimate::BASE_RATIO_BPS)))
                 .arg(YellowbackFormat::bpsAsMultiplier(YellowbackJson::toInt(e, Estimate::SIGMA_MULT_BPS, 10000)));
             const QString price = YellowbackFormat::priceOrUndefined(e, Estimate::P_MINT);
+            // The cap the node is held to (audit F-1): 1 % above the estimate, so a block that
+            // moves the reference price by more than that refuses the mint instead of locking
+            // more YEC than the dialog showed.
+            const qint64 maxCollateral = capAbove(required);
+            const int    heightAtDialog = ctl->height();
 
             auto ask = [=, this](const QString& feeLine) {
-                QString text = tr("Mint %1 of YED against %2 of YEC locked in a new vault.\n\n"
+                QString text = tr("Mint %1 of YED against %2 of YEC locked in a new vault (at most %14; the node refuses the mint if the price moves further).\n\n"
                                   "Lock: %3 blocks (class %4, about %5 days). Collateral can leave the vault from height %6 on (%7); "
                                   "its claim height is %8.\n"
                                   "Collateral ratio: %9 at a mint price of %10 per YEC (reference height %11).\n"
@@ -844,20 +849,28 @@ void YellowbackTab::doMint() {
                     .arg(lockBlocks).arg(termClass).arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
                     .arg(lockHeight).arg(YellowbackFormat::estimateDate(lockHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"))
                     .arg(claimHeight).arg(ratio).arg(price).arg(refHeight).arg(feeLine)
-                    .arg(from.isEmpty() ? tr("your transparent YEC") : tr("shielded address %1").arg(from));
+                    .arg(from.isEmpty() ? tr("your transparent YEC") : tr("shielded address %1").arg(from))
+                    .arg(YellowbackFormat::zec(maxCollateral));
                 if (!confirm(tr("Confirm mint"), text)) {
                     updateMintGate();
                     uiMint->lblMintPageStatus->clear();
                     return;
                 }
+                // A block arrived while the dialog was open: the estimate it showed is stale, so
+                // estimate again and show the dialog again rather than send the old figure.
+                if (ctl->height() != heightAtDialog) {
+                    uiMint->lblMintPageStatus->setText(tr("The chain advanced while you were confirming; estimating again."));
+                    doMint();
+                    return;
+                }
                 uiMint->lblMintPageStatus->setText(tr("Minting..."));
-                ctl->mint(cents, lockBlocks, from,
+                ctl->mint(cents, lockBlocks, from, maxCollateral,
                     [=, this](const json& r) {
                         // The vault key exists from the carrier step on: nag for the backup at once
                         Settings::getInstance()->setYellowbackBackupPending(true);
                         updateBackupNag();
                         followPending(Transaction::TYPE_MINT, r, uiMint->lblMintPageStatus, [=, this](const json& done) {
-                            QString summary = mintSummary(cents, done);
+                            QString summary = mintSummary(cents, done, required);
                             QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
                             if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
                             summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
@@ -910,10 +923,17 @@ void YellowbackTab::doMint() {
 // keys the two share (txid, feeZat, payee, pMint, xMint, aMint, bundleSeqs, attestFeeZat,
 // attestPayee) are read the same way; what only yed_mint carries (vault, class, heights) is
 // shown when present.
-QString YellowbackTab::mintSummary(qint64 cents, const json& r) const {
+QString YellowbackTab::mintSummary(qint64 cents, const json& r, qint64 confirmedZat) const {
     using namespace YellowbackRpc;
     const QString txid = YellowbackJson::toStr(r, MintResult::TXID);
     QString out = tr("Minted %1 of YED.\ntxid %2").arg(YellowbackFormat::cents(cents)).arg(txid);
+    // The collateral the vault really locked against the figure the dialog showed (audit F-1)
+    if (confirmedZat > 0 && YellowbackJson::has(r, MintResult::COLLATERAL_ZAT)) {
+        const qint64 locked = YellowbackJson::toInt(r, MintResult::COLLATERAL_ZAT);
+        if (locked > 0 && locked != confirmedZat)
+            out = tr("NOTE: the vault locked %1 of YEC, not the %2 shown when you confirmed (the reference price moved between the dialog and the mint).")
+                      .arg(YellowbackFormat::zec(locked)).arg(YellowbackFormat::zec(confirmedZat)) % "\n\n" % out;
+    }
     if (YellowbackJson::has(r, MintResult::VAULT))
         out += "\n" % tr("vault %1 (class %2)\ncollateral %3, lock height %4, claim height %5")
             .arg(YellowbackJson::toStr(r, MintResult::VAULT)).arg(YellowbackJson::toStr(r, MintResult::TERM_CLASS))
@@ -1342,10 +1362,13 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
     }
     QString txid = c.txid();
     const qint64 youGet = c.collateralZat - c.feeZat - c.attestFeeZat - c.residualZat;
+    // The floor the node is held to (audit F-1): 1 % under the row's figure; a claim that
+    // would pay out less is refused (claim-out-below-min) rather than sent.
+    const qint64 minOut = capBelow(youGet);
     QString text = tr("Claim vault %1 (owner %2).\n\n"
                       "Burn: %3 of YED from this wallet (%4 confirmed).\n"
                       "Enforcement fee: %5 of YEC from the collateral to a pool that published a price quote.\n"
-                      "You receive: about %6 of YEC (collateral %7 minus the fees and the residual) to %8.\n"
+                      "You receive: about %6 of YEC (collateral %7 minus the fees and the residual) to %8, at least %13 (the node refuses the claim if the price moves further).\n"
                       "%12\n\n"
                       "The vault is past its claim height (%9) and underwater at the claim price of %10 per YEC (underwater below %11). "
                       "Your own node builds the claim in two steps — the carrier with the price proof now, the claim when it confirms — "
@@ -1353,10 +1376,10 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
         .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
         .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(youGet)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
         .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt))
-        .arg(describeClaimPath(c));
+        .arg(describeClaimPath(c)).arg(YellowbackFormat::zec(minOut));
     if (!confirm(tr("Confirm claim"), text)) return;
     uiClaim->lblClaimHint->setText(tr("Claiming..."));
-    ctl->claim(txid, to,
+    ctl->claim(txid, to, minOut,
         [=, this](const json& r) {
             followPending(Transaction::TYPE_CLAIM, r, uiClaim->lblClaimHint, [=, this](const json& done) {
                 notice(tr("Claim sent"), claimSummary(done));

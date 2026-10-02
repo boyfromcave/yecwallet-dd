@@ -633,6 +633,11 @@ namespace Errors {   // contract: errors
     constexpr const char* MINTPOL_CAP           = "mintpol-cap";
     constexpr const char* MINT_UNSATISFIABLE    = "mint-unsatisfiable";
     constexpr const char* MINT_BAD_LOCK         = "mint-bad-lock";
+    // The caps the wallet sends from its confirmation dialog (audit F-1): yed_mint's 6th argument
+    // maxCollateralZat and yed_claim's 5th argument minOutZat. The node refuses instead of
+    // building a vault (or a claim) the user did not agree to when the reference price moved.
+    constexpr const char* COLLATERAL_ABOVE_MAX  = "collateral-above-max";
+    constexpr const char* CLAIM_OUT_BELOW_MIN   = "claim-out-below-min";
     constexpr const char* CLAIM_NOT_YET         = "claim-not-yet";
     constexpr const char* CLAIM_NOT_UNDERWATER  = "claim-not-underwater";
     // The contract lists `mempool-check-failed:<verdict>`; the wallet matches the prefix

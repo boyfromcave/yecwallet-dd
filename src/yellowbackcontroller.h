@@ -153,10 +153,12 @@ public:
     // v3: the two-step commands are issued with wait = false (W7), so the reply comes back
     // right after the carrier broadcast with pending = true; awaitPending() follows the main
     // transaction from there.
-    void mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
+    // maxCollateralZat: the most collateral the user agreed to (yed_mint refuses with
+    // collateral-above-max beyond it, audit F-1); minOutZat likewise for yed_claim (claim-out-below-min).
+    void mint(qint64 cents, int lockBlocks, const QString& from, qint64 maxCollateralZat, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);     // to: "" | s1... | ys1... (I2)
-    void claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);
+    void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, OkFn ok, ErrFn err);
     void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)
     void sweepCarriers(OkFn ok, ErrFn err);                                           // v3: yed_sweepcarriers (W7)
     void registerAttestor(double bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3

@@ -130,6 +130,18 @@
       ],
       "when": "tip below claimHeight"
     },
+    "claim-out-below-min": {
+      "raisedBy": [
+        "yed_claim"
+      ],
+      "when": "the collateral the claim would pay out at the reference height is below the optional minOutZat (5th argument): the price moved since the yed_listclaimable row the caller agreed to; nothing is built or sent"
+    },
+    "collateral-above-max": {
+      "raisedBy": [
+        "yed_mint"
+      ],
+      "when": "the collateral the mint would lock at the reference height exceeds the optional maxCollateralZat (6th argument): the price moved since the estimate the caller agreed to; nothing is built or sent"
+    },
     "equivocation-guard": {
       "raisedBy": [
         "yed_signattestation",
@@ -459,7 +471,7 @@
     }
   },
   "yed_claim": {
-    "args": "<vaultTxid> [to] [bundleHex] [wait]",
+    "args": "<vaultTxid> [to] [bundleHex] [wait] [minOutZat]",
     "returns": {
       "aClaim": 395000,
       "attestFeeZat": 15703517,
@@ -1247,7 +1259,7 @@
     ]
   },
   "yed_mint": {
-    "args": "<cents> <lockBlocks> [from] [bundleHex] [wait]",
+    "args": "<cents> <lockBlocks> [from] [bundleHex] [wait] [maxCollateralZat]",
     "returns": {
       "aMint": 1985000,
       "attestFeeZat": 15703517,

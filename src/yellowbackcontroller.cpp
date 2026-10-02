@@ -768,8 +768,9 @@ void YellowbackController::estimateCollateral(qint64 cents, int lockBlocks, OkFn
 
 // yed_mint <cents> <lockBlocks> [from] [bundleHex] [wait]: the bundle is always built from the
 // pool ("" = the default) and wait is false, so the reply follows the carrier broadcast (W7).
-void YellowbackController::mint(qint64 cents, int lockBlocks, const QString& from, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::MINT, json::array({cents, lockBlocks, from.toStdString(), "", false}), ok, err);
+void YellowbackController::mint(qint64 cents, int lockBlocks, const QString& from, qint64 maxCollateralZat, OkFn ok, ErrFn err) {
+    // yed_mint cents lockBlocks ( "from" "bundleHex" wait maxCollateralZat )
+    call(YellowbackRpc::MINT, json::array({cents, lockBlocks, from.toStdString(), "", false, maxCollateralZat}), ok, err);
 }
 
 void YellowbackController::send(const QString& addr, qint64 cents, OkFn ok, ErrFn err) {
@@ -783,8 +784,9 @@ void YellowbackController::redeem(const QString& vaultTxid, const QString& to, O
 
 // yed_claim <vaultTxid> [to] [bundleHex] [wait]: "" for the default destination, the bundle
 // from the pool, wait false (as yed_mint).
-void YellowbackController::claim(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString(), "", false}), ok, err);
+void YellowbackController::claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, OkFn ok, ErrFn err) {
+    // yed_claim "vaultTxid" ( "to" "bundleHex" wait minOutZat )
+    call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString(), "", false, minOutZat}), ok, err);
 }
 
 void YellowbackController::claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err) {
@@ -981,6 +983,10 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
     if (is(Errors::MINT_BAD_LOCK))
         return tr("The lock length falls in no term class.");
+    if (is(Errors::COLLATERAL_ABOVE_MAX))
+        return tr("The price moved: at the node's reference height the mint would lock more YEC than the amount you confirmed, so nothing was sent. Re-estimate and confirm again.");
+    if (is(Errors::CLAIM_OUT_BELOW_MIN))
+        return tr("The price moved: at the node's reference height the claim would pay out less YEC than the amount you confirmed, so nothing was sent. Re-check the claimable list and confirm again.");
     if (is(Errors::MEMPOOL_CHECK_FAILED))
         return tr("The node's own pre-check of the enforcement rules refused the transaction, so nothing was signed or sent.");
     // v3
