@@ -436,8 +436,10 @@ struct DevnetTransport {
     // (bundle-insufficient), and right after a tick the newest attestations cite heights above
     // R. yed_getinfo.attest.poolFresh does not tell the two apart (it counts citations above
     // tip - refLag - attestMaxAge with no upper bound), so the probe is yed_buildbundle at R
-    // itself. While every seated attestor is fresh but the bundle still fails, a block from
-    // mineOne carries R up to the new citations. An unarmed devnet needs nothing.
+    // itself. While the bundle fails for bundle-insufficient a block from mineOne every 2 s
+    // either carries R up to the new citations (every seat fresh) or brings the agents' next
+    // due tick closer (pool stale: gating on poolFresh alone would wait forever, since the
+    // agents attest only on new blocks). An unarmed devnet needs nothing.
     bool waitFresh(int refLag, std::function<void()> mineOne = nullptr, int seconds = 120) {
         for (int w = 0; w < seconds * 4; w++) {
             json info = rpc("yed_getinfo");
@@ -447,7 +449,8 @@ struct DevnetTransport {
             post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_buildbundle"},
                   {"params", json::array({info.value("height", 0) - refLag, ""})}}, &e);
             if (e.isEmpty()) return true;
-            if (mineOne && w % 8 == 7 && a.value("poolFresh", 0) >= a.value("seatedCount", 1)) mineOne();
+            if (mineOne && w % 8 == 7 &&
+                (e.contains("bundle-insufficient") || a.value("poolFresh", 0) >= a.value("seatedCount", 1))) mineOne();
             QTest::qWait(250);
         }
         return false;
