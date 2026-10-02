@@ -79,6 +79,22 @@ JSON-RPC to node 0 directly, because the test has no `MainWindow` for `Connectio
 `devnetClaimAndSweep` also QSKIPs while the node lacks `yed_claim`/`yed_sweep`. Note that the
 devnet's per-node conf uses the test framework's regtest credentials; nothing leaves 127.0.0.1.
 
+A third case, `devnetAttestedMintNoticeAndEmergencyClaim` (v3 A5-b), mints while ARMED, crashes
+the price, posts a claim notice and claims by the emergency clause (b). All three expect the
+default `yellowback-devnet up` (ARMED, three attestors), so every mint, notice and claim is the
+v3 two-step: the reply names only the carrier, and the test mines a block at a time
+(`DevnetTransport::awaitTwoStep`) until the wallet's follow-up posts the result, then reads the
+txid from that notice. Before each of them `DevnetTransport::waitFresh` probes
+`yed_buildbundle` at the action's reference height (tip − refLag; the tip for a notice) and
+mines a block when the pool only holds attestations newer than it: `yed_getinfo.attest.poolFresh`
+counts those too, so it can read "3 of 3" while the action is refused `bundle-insufficient`.
+Under v3 a claim is priced from the attestors' bundle, so the crash moves the attestors'
+`attest-price-<n>` files and `mock-price` as well as the pools' quotes
+(`DevnetTransport::setMarketPrice`, as `yellowback-devnet price` does), and the emergency claim
+waits for the vault's `claimHeight` (the vault script's CLTV gates either clause). Run them in
+order on a fresh devnet: green on both node lines (6.20.0 `ycash6` and v4.5.0 `ycash-dd`,
+2026-10-01), as is `nodecompat_test devnetImports`.
+
 ## Build status
 
 | Item | Phase 0 (first session) | Now |

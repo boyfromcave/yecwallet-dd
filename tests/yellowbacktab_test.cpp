@@ -337,6 +337,11 @@ struct Harness {
     void estimateFor(const QString& amount) { mintAmount(amount); QTest::qWait(600); }
 };
 
+// The txid a result notice names ("title|...txid <txid>\n..."): every action summary carries one
+static QString noticeTxid(const QString& notice) {
+    return notice.section("txid ", 1).section('\n', 0, 0).trimmed();
+}
+
 // The devnet transport: synchronous JSON-RPC over HTTP to node 0 (the QTest has no MainWindow,
 // so it cannot use Connection::doRPCSafe, which dereferences it).
 struct DevnetTransport {
@@ -419,6 +424,65 @@ struct DevnetTransport {
             QTest::qWait(25);
         }
         return false;
+    }
+    // ARMED, a mint, notice or claim needs a price proof: for each selected attestor an
+    // attestation in node 0's pool citing a height in (R - attestMaxAge, R], R = tip - refLag
+    // (tip for a notice). The agents sign only at a due tick (every attestInterval blocks) and
+    // the subscriber relays with a delay, so a burst of fast blocks leaves the pool stale
+    // (bundle-insufficient), and right after a tick the newest attestations cite heights above
+    // R. yed_getinfo.attest.poolFresh does not tell the two apart (it counts citations above
+    // tip - refLag - attestMaxAge with no upper bound), so the probe is yed_buildbundle at R
+    // itself. While every seated attestor is fresh but the bundle still fails, a block from
+    // mineOne carries R up to the new citations. An unarmed devnet needs nothing.
+    bool waitFresh(int refLag, std::function<void()> mineOne = nullptr, int seconds = 120) {
+        for (int w = 0; w < seconds * 4; w++) {
+            json info = rpc("yed_getinfo");
+            const json a = info.is_object() && info.find("attest") != info.end() ? info["attest"] : json(nullptr);
+            if (!a.is_object() || !a.value("armed", false)) return true;
+            QString e;
+            post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_buildbundle"},
+                  {"params", json::array({info.value("height", 0) - refLag, ""})}}, &e);
+            if (e.isEmpty()) return true;
+            if (mineOne && w % 8 == 7 && a.value("poolFresh", 0) >= a.value("seatedCount", 1)) mineOne();
+            QTest::qWait(250);
+        }
+        return false;
+    }
+    // Move the market the way `yellowback-devnet price USD` does (its apply_price): the pools'
+    // shared mock-price file, each automated attestor's own attest-price-<n> file, and
+    // yed_setquote on the pools (2-4) when they run without quote agents (the default devnet).
+    // Under v3 a claim is priced from the attestors' bundle, so the pools' quotes alone no
+    // longer make a vault claimable.
+    bool setMarketPrice(const QString& usd) {
+        auto writeFile = [&](const QString& path) {
+            QFile f(path % ".tmp");
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+            f.write((usd % "\n").toUtf8()); f.close();
+            QFile::remove(path);
+            return QFile::rename(path % ".tmp", path);
+        };
+        bool ok = writeFile(devnetDir % "/mock-price");
+        for (const QString& name : QDir(devnetDir).entryList({"attest-price-*"}, QDir::Files))
+            if (!name.endsWith(".tmp")) ok = writeFile(devnetDir % "/" % name) && ok;
+        for (int p : {2, 3, 4})
+            rpcOn(p, "yed_setquote", json::array({(qint64)llround(usd.toDouble() * 1000000.0), 1}));
+        return ok;
+    }
+    // Node 0's wallet has the transaction in a block already
+    bool confirmed(const QString& txid) {
+        json t = rpc("gettransaction", json::array({txid.toStdString()}));
+        return t.is_object() && t.value("confirmations", 0) >= 1;
+    }
+    // A v3 two-step action (W7): the reply names the carrier only, the node builds the main
+    // transaction on the ChainTip that confirms the carrier, and the wallet's follow-up poll then
+    // posts the result. Mine one block (mineOne) per second until `arrived` holds.
+    bool awaitTwoStep(std::function<bool()> arrived, std::function<void()> mineOne, int blocks = 20) {
+        for (int i = 0; i < blocks && !arrived(); i++) {
+            mineOne();
+            for (int w = 0; w < 40 && !arrived(); w++) QTest::qWait(25);
+        }
+        for (int w = 0; w < 200 && !arrived(); w++) QTest::qWait(25);
+        return arrived();
     }
     // The same, on another devnet node (2-4 are the pools: they tag, signal and quote)
     json rpcOn(int node, const char* method, const json& params = json::array()) {
@@ -2273,14 +2337,23 @@ private slots:
         auto tier = h.tab.findChild<QComboBox*>("cmbTier");
         QVERIFY(tier != nullptr && tier->count() == 3);
         tier->setCurrentIndex(0);
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { dev.rpc("generate", json::array({1})); }), "node 0's attestation pool did not become fresh");
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        // v3 two-step (W7): the reply names the carrier only; the mint follows when the carrier
+        // confirms. Mine a block at a time until the wallet's follow-up posts the result.
+        QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
+        QVERIFY2(dev.awaitTwoStep([&]() { return !h.notices.isEmpty() || !h.errorNotices.isEmpty(); },
+                                  [&]() { dev.rpc("generate", json::array({1})); }),
+                 qPrintable("no mint result; status: " % h.label("lblMintPageStatus")));
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY2(h.notices.size() == 1 && h.notices[0].startsWith("Mint sent|"),
                  qPrintable(h.notices.join("\n") % " / status: " % h.label("lblMintPageStatus")));
-        QString mintTxid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
-        QCOMPARE(mintTxid.size(), 64);
-        QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
+        // From the notice ("...\ntxid <txid>"): the page's "Minted. txid:" line is cleared two
+        // blocks after the mint, which the two-step wait may already have mined
+        QString mintTxid = noticeTxid(h.notices[0]);
+        QVERIFY2(mintTxid.size() == 64, qPrintable(h.notices[0]));
 
         dev.rpc("generate", json::array({1}));
         QVERIFY(dev.settle(mintTxid));
@@ -2412,12 +2485,21 @@ private slots:
             h.errorNotices.clear();
             h.mintAmount("100");
             tier->setCurrentIndex(0);                   // the shortest class-A lock (48 blocks on regtest)
+            const int noticesBefore = h.notices.size();
+            QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
             h.tab.doMint();
             QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-            QString txid = h.label("lblMintPageStatus").section("txid: ", 1).trimmed();
-            QCOMPARE(txid.size(), 64);
+            // v3 two-step (W7): the carrier now, the mint once a pool block confirms it
+            QVERIFY2(dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); },
+                                      [&]() { minePools(1); }),
+                     qPrintable("no mint result; status: " % h.label("lblMintPageStatus")));
+            QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+            QVERIFY2(h.notices.last().startsWith("Mint sent|"), qPrintable(h.notices.last()));
+            QString txid = noticeTxid(h.notices.last());
+            QVERIFY2(txid.size() == 64, qPrintable(h.notices.last()));
             minted << txid;
-            QVERIFY2(waitForTx(txid), "the mint did not reach the pool's mempool");
+            QVERIFY2(waitForTx(txid) || dev.confirmed(txid),
+                     "the mint did not reach the pool's mempool");
             minePools(1);
             QVERIFY2(dev.settle(txid), "node 0 did not digest the mint's block");
             h.ctl.refresh(true);
@@ -2442,7 +2524,7 @@ private slots:
         // max(pMid, pSlow) and each window needs two-thirds of its 64 blocks to carry a quote.
         auto pClaimNow = [&]() { return YellowbackJson::toInt(h.ctl.stats(), YellowbackRpc::Stats::P_CLAIM, 0); };
         const qint64 before = pClaimNow();
-        for (int p : pools) dev.rpcOn(p, "yed_setquote", json::array({10000, 1}));   // $0.01 in micro-USD
+        QVERIFY(dev.setMarketPrice("0.01"));
         minePools(64);
         h.ctl.refresh(true);
         QVERIFY2(pClaimNow() < before, qPrintable(QString("pClaim did not fall: %1 -> %2").arg(before).arg(pClaimNow())));
@@ -2459,13 +2541,19 @@ private slots:
         QCOMPARE(row->mintedCents, (qint64)10000);
         h.errorNotices.clear();
         int noticesBefore = h.notices.size();
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
         h.tab.claimVault(*row);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        // Two-step, as the mint
+        QVERIFY2(dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); },
+                                  [&]() { minePools(1); }),
+                 qPrintable("no claim result; hint: " % h.label("lblClaimHint") % "; last dialog: " % (h.confirms.isEmpty() ? QString() : h.confirms.last())));
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QCOMPARE(h.notices.size(), noticesBefore + 1);
-        QVERIFY(h.notices.last().startsWith("Claim sent|"));
+        QVERIFY2(h.notices.last().startsWith("Claim sent|"), qPrintable(h.notices.last()));
         QVERIFY2(h.notices.last().contains("YED burned: $100.00"), qPrintable(h.notices.last()));
-        const QString claimTx = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
-        QVERIFY(waitForTx(claimTx));
+        const QString claimTx = noticeTxid(h.notices.last());
+        QVERIFY(waitForTx(claimTx) || dev.confirmed(claimTx));
         minePools(1);
         QVERIFY(dev.settle(claimTx));
         h.ctl.refresh(true);
@@ -2503,6 +2591,7 @@ private slots:
         QVERIFY(swept.unbacked);
         QCOMPARE(swept.burnedCents, (qint64)0);
         QVERIFY(h.copyIsClean());
+        QVERIFY(dev.setMarketPrice("50"));          // the devnet's price, for the next case
     }
 
     // ── Devnet v3 (A5-b): an attested mint, a claim notice and the emergency claim ────────
@@ -2546,20 +2635,7 @@ private slots:
         // Move the market the way `yellowback-devnet price USD` does (its apply_price): the pools'
         // shared mock-price file, each automated attestor's own attest-price-<n> file, and
         // yed_setquote on the pools when they run without quote agents (the default devnet)
-        auto writeFile = [&](const QString& path, const QString& usd) {
-            QFile f(path % ".tmp");
-            QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
-            f.write((usd % "\n").toUtf8()); f.close();
-            QFile::remove(path);
-            QVERIFY(QFile::rename(path % ".tmp", path));
-        };
-        auto writeMock = [&](const QString& usd) {
-            writeFile(dir % "/mock-price", usd);
-            for (const QString& name : QDir(dir).entryList({"attest-price-*"}, QDir::Files))
-                if (!name.endsWith(".tmp")) writeFile(dir % "/" % name, usd);
-            for (int p : pools)
-                dev.rpcOn(p, "yed_setquote", json::array({(qint64)llround(usd.toDouble() * 1000000.0), 1}));
-        };
+        auto writeMock = [&](const QString& usd) { QVERIFY(dev.setMarketPrice(usd)); };
 
         // 1. Mint $100 while ARMED: the two-step path, the price proof from the attestors
         for (int i = 0; i < 96 && !h.ctl.mintBlocker(10000).isEmpty(); i++) { minePools(1); h.ctl.refresh(true); }
@@ -2568,6 +2644,7 @@ private slots:
         QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
         h.mintAmount("100");
         h.tab.findChild<QComboBox*>("cmbTier")->setCurrentIndex(0);
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
         h.tab.doMint();
         QVERIFY2(h.confirms.size() == 1, qPrintable("no confirmation; hint: " % h.label("lblMintHint") % "; status: " %
                                                     h.label("lblMintPageStatus") % "; " % h.errorNotices.join("\n")));
@@ -2589,6 +2666,14 @@ private slots:
             if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
         QCOMPARE(vault.status, QString("ACTIVE"));
 
+        // Either claim clause spends the vault through its claim branch, which the vault script
+        // opens only at claimHeight (CLTV; yed_listclaimable lists nothing before it), while a
+        // notice stands for EMERGENCY_NOTICE_TTL blocks from its reference height. So the market
+        // crashes a little before claimHeight: the notice is then still standing at claimHeight,
+        // and the claim price (max(pMid, pSlow) of the pools' quotes) has not yet followed the
+        // crash, so the claim opens by the emergency clause (b), not by clause (a).
+        if (height() < vault.claimHeight - 12) minePools(vault.claimHeight - 12 - height());
+
         // 2. Crash the price so the vault falls under the emergency ratio: the attestors (and
         // the pools' quote agents) follow the shared mock price. Wait for canNotice.
         const QString priceBefore = QString::fromStdString(json(dev.rpc("yed_getprice")).value("xMint", 0) > 0 ? std::to_string(json(dev.rpc("yed_getprice")).value("xMint", 0) / 1000000.0) : "50");
@@ -2602,6 +2687,7 @@ private slots:
 
         // 3. Post the notice through the Vaults page (two-step), then see emergencyOpenAt on the row
         int n = h.notices.size();
+        QVERIFY2(dev.waitFresh(0, [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
         h.tab.noticeVault(vault);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY2(waitTwoStep(n), qPrintable(h.errorNotices.join("\n")));
@@ -2615,17 +2701,25 @@ private slots:
         QVERIFY(vault.noticed);
         QVERIFY(vault.emergencyOpenAt > 0);
 
-        // 4. Past emergencyOpenAt + refLag the vault is claimable by clause (b): claim it
-        while (height() < vault.emergencyOpenAt + h.ctl.refLag() + 1) minePools(1);
+        // 4. Past emergencyOpenAt + refLag and claimHeight the vault is claimable by clause (b): claim it
+        while (height() < std::max(vault.emergencyOpenAt + h.ctl.refLag() + 1, vault.claimHeight)) minePools(1);
         QVERIFY(dev.settle());
-        h.ctl.refresh(true);
-        QTest::qWait(500);
+        // yed_listclaimable computes clause (b) with the bundle the node would build: with a stale
+        // pool it falls back to the cross-section alone, where only clause (a) can list a vault.
+        // Poll it (a block every few seconds) until the row appears.
         const YellowbackClaimable* row = nullptr;
-        for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.claimableModel()->rowAt(i)->txid() == mintTxid) row = h.ctl.claimableModel()->rowAt(i);
-        QVERIFY2(row != nullptr, "the noticed vault is not in yed_listclaimable after the notice persisted");
+        for (int i = 0; i < 40 && row == nullptr; i++) {
+            if (i > 0) { QTest::qWait(500); if (i % 4 == 0) { minePools(1); QVERIFY(dev.settle()); } }
+            QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
+            h.ctl.refresh(true);
+            for (int r = 0; r < h.ctl.claimableModel()->rowCount(QModelIndex()); r++)
+                if (h.ctl.claimableModel()->rowAt(r)->txid() == mintTxid) row = h.ctl.claimableModel()->rowAt(r);
+        }
+        QVERIFY2(row != nullptr, qPrintable("the noticed vault is not in yed_listclaimable after the notice persisted: " %
+                                            QString::fromStdString(dev.rpc("yed_listclaimable").dump()) % " at height " % QString::number(height())));
         QCOMPARE(row->claimPath, QString("b"));
         n = h.notices.size();
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
         h.tab.claimVault(*row);
         QVERIFY2(h.confirms.last().contains("emergency clause (b)"), qPrintable(h.confirms.last()));
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
