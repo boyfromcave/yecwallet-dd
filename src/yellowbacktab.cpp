@@ -11,6 +11,7 @@
 #include "addressbook.h"
 #include "settings.h"
 #include "connection.h"
+#include "nodedatacheck.h"
 
 #include "ui_yellowbacktab.h"
 #include "ui_yellowbackoverview.h"
@@ -1565,12 +1566,20 @@ void YellowbackTab::setupAttestors() {
         if (!inputFn(tr("Register as attestor"), tr("Bond lock in blocks (minimum %1):").arg(lock), &lock)) return;
         if (!inputFn(tr("Register as attestor"), tr("Price source tier: 0 = exchange APIs, 1 = mixed, 2 = aggregator:"), &tier)) return;
         if (!inputFn(tr("Register as attestor"), tr("Does this attestor operate a mining pool? (yes/no):"), &pool)) return;
-        bool okBond = false, okLock = false;
-        double b = bond.trimmed().toDouble(&okBond);
+        // The bond is sent as the decimal string typed (at most 8 decimals), never through a
+        // double; every parse checks its ok flag (audit F-8).
+        static const QRegularExpression bondRe("^\\d{1,9}(?:\\.\\d{1,8})?$");
+        bool okLock = false, okTier = false;
+        const QString b = bond.trimmed();
         int l = lock.trimmed().toInt(&okLock);
-        int t = tier.trimmed().toInt();
-        if (!okBond || !okLock || b <= 0 || l <= 0 || t < 0 || t > 2) { notice(tr("Register as attestor"), tr("Enter a bond in YEC, a lock in blocks and a tier of 0, 1 or 2."), true); return; }
-        registerAttestor(b, l, t, pool.trimmed().startsWith('y', Qt::CaseInsensitive));
+        int t = tier.trimmed().toInt(&okTier);
+        const QString p = pool.trimmed().toLower();
+        if (!bondRe.match(b).hasMatch() || b.toDouble() <= 0 || !okLock || l <= 0 || !okTier || t < 0 || t > 2 ||
+            !(p == "yes" || p == "y" || p == "no" || p == "n")) {
+            notice(tr("Register as attestor"), tr("Enter a bond in YEC (up to 8 decimals), a lock in blocks, a tier of 0, 1 or 2, and yes or no."), true);
+            return;
+        }
+        registerAttestor(b, l, t, p.startsWith('y'));
     });
     QObject::connect(uiAttestors->btnWithdraw, &QPushButton::clicked, [=, this]() { auto a = selected(); if (a) withdrawBond(*a); });
     QObject::connect(uiAttestors->btnRevive, &QPushButton::clicked, [=, this]() {
@@ -1639,7 +1648,7 @@ void YellowbackTab::updateAttestorButtons() {
     uiAttestors->lblAttestorAction->setText(text);
 }
 
-void YellowbackTab::registerAttestor(double bondYec, int lockBlocks, int tier, bool pool) {
+void YellowbackTab::registerAttestor(const QString& bondYec, int lockBlocks, int tier, bool pool) {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
     const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
@@ -1653,7 +1662,7 @@ void YellowbackTab::registerAttestor(double bondYec, int lockBlocks, int tier, b
                       "Two fresh keys are drawn: the hot key the agent signs with and the bond key. Back up wallet.dat after this; both exist only there.\n\n"
                       "Run the yellowback-attest agent on this node only. One hot key on two nodes defeats the node's equivocation guard: "
                       "the two would sooner or later sign different prices for one height, and anyone can report that, eject the attestor and take part of the bond.")
-        .arg(QString::number(bondYec, 'f', 8)).arg(locktime).arg(lockBlocks)
+        .arg(QString::number(bondYec.toDouble(), 'f', 8)).arg(locktime).arg(lockBlocks)
         .arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
         .arg(YellowbackFormat::estimateDate(locktime, ctl->height()).toString("yyyy-MM-dd"))
         .arg(YellowbackFormat::sourceTier(tier)).arg(pool ? tr("yes") : tr("no")).arg(maturity);
@@ -1803,8 +1812,23 @@ QString YellowbackTab::cookiePathFor(const QString& zcashDir, const QString& net
 // is quoted as a TOML basic string.
 QString YellowbackTab::subscriberConfigToml(const QString& kind, const QString& path, const QString& relays, const QString& peers,
                                             const QString& rpcUrl, const QString& cookieFile, const QString& rpcUser, const QString& rpcPassword) {
-    // Explicit return types: a deduced one would return a QStringBuilder over a dead local
-    auto q = [](const QString& v) -> QString { QString e = v; e.replace("\\", "\\\\").replace("\"", "\\\""); return "\"" % e % "\""; };
+    // Explicit return types: a deduced one would return a QStringBuilder over a dead local.
+    // A TOML basic string: backslash, quote and every control character escaped (audit F-4),
+    // so a newline pasted into a field cannot end the string or add a key.
+    auto q = [](const QString& v) -> QString {
+        QString e;
+        for (const QChar ch : v) {
+            const ushort u = ch.unicode();
+            if      (ch == '\\') e += "\\\\";
+            else if (ch == '"')  e += "\\\"";
+            else if (ch == '\n') e += "\\n";
+            else if (ch == '\r') e += "\\r";
+            else if (ch == '\t') e += "\\t";
+            else if (u < 0x20 || u == 0x7f) e += QString("\\u%1").arg(u, 4, 16, QChar('0'));
+            else e += ch;
+        }
+        return "\"" % e % "\"";
+    };
     auto list = [&](const QString& csv) -> QString {
         QStringList items;
         for (const QString& it : csv.split(',', Qt::SkipEmptyParts)) if (!it.trimmed().isEmpty()) items << q(it.trimmed());
@@ -1832,6 +1856,26 @@ QString YellowbackTab::subscriberConfigToml(const QString& kind, const QString& 
     return out;
 }
 
+// A file only its owner can read: created empty and made 0600 before a byte is written, so
+// the RPC password in it is never world-readable for an instant (audit F-4).
+bool YellowbackTab::writePrivateFile(const QString& path, const QByteArray& bytes, QString* error) {
+    QFile::remove(path);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::NewOnly)) { if (error) *error = f.errorString(); return false; }
+    if (!f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        if (error) *error = tr("could not restrict the file's permissions: %1").arg(f.errorString());
+        f.close(); QFile::remove(path);
+        return false;
+    }
+    if (f.write(bytes) != bytes.size() || !f.flush() || f.error() != QFileDevice::NoError) {
+        if (error) *error = f.errorString();
+        f.close(); QFile::remove(path);
+        return false;
+    }
+    f.close();
+    return true;
+}
+
 void YellowbackTab::startSubscriber() {
     if (subscriber != nullptr && subscriber->state() != QProcess::NotRunning) return;
     const QString bin = subscriberBinaryPath();
@@ -1852,7 +1896,11 @@ void YellowbackTab::startSubscriber() {
         const auto& c = conn->config;
         rpcUrl = "http://" % (c->host.isEmpty() ? QString("127.0.0.1") : c->host) % ":" % (c->port.isEmpty() ? QString("8832") : c->port);
         user = c->rpcuser; pass = c->rpcpassword;
-        QString candidate = c->zcashDir.isEmpty() ? QString() : cookiePathFor(c->zcashDir, ctl->network());
+        // The cookie lives in the network directory the conf implies (datadir=, testnet=,
+        // regtest=; audit F-4), not necessarily beside the conf.
+        const QString confLocation = Settings::getInstance()->getZcashdConfLocation();
+        QString candidate = !confLocation.isEmpty() ? QDir(NodeDataCheck::resolve(confLocation).netDir).filePath(".cookie")
+                          : c->zcashDir.isEmpty()   ? QString() : cookiePathFor(c->zcashDir, ctl->network());
         if (!candidate.isEmpty() && QFileInfo::exists(candidate)) cookie = candidate;
     }
     QString toml = subscriberConfigToml(s->getYellowbackTransportKind(), s->getYellowbackTransportPath(), s->getYellowbackTransportRelays(),
@@ -1860,14 +1908,11 @@ void YellowbackTab::startSubscriber() {
     QDir dir(Settings::appDataLocation());
     dir.mkpath(".");
     subscriberConfPath = dir.absoluteFilePath("yellowback-subscribe.toml");
-    QFile f(subscriberConfPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        uiSettings->lblSubscriberStatus->setText(tr("not running — cannot write %1").arg(subscriberConfPath));
+    QString writeError;
+    if (!writePrivateFile(subscriberConfPath, toml.toUtf8(), &writeError)) {   // it may carry the RPC password
+        uiSettings->lblSubscriberStatus->setText(tr("not running — cannot write %1: %2").arg(subscriberConfPath).arg(writeError));
         return;
     }
-    f.write(toml.toUtf8());
-    f.close();
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);   // it may carry the RPC password
 
     // A fresh process per start (a finished one is dropped), so the connections are made once
     if (subscriber != nullptr && subscriber->parent() == this) subscriber->deleteLater();

@@ -161,7 +161,7 @@ public:
     void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, OkFn ok, ErrFn err);
     void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)
     void sweepCarriers(OkFn ok, ErrFn err);                                           // v3: yed_sweepcarriers (W7)
-    void registerAttestor(double bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3
+    void registerAttestor(const QString& bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3; bondYec a decimal string (AmountFromValue takes it exactly, audit F-8)
     void withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err);                // v3
     void revive(int seq, qint64 priceMicroUsd, OkFn ok, ErrFn err);                   // v3
     void reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err);   // v3, two-step

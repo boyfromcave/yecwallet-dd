@@ -94,7 +94,7 @@ public:
     static QString describeClaimPath(const YellowbackClaimable& c);
     // v3: the attestor actions (Attestors page). Each is one confirmation and one yed_* call;
     // the buttons gather their inputs through inputFn and call these.
-    void registerAttestor(double bondYec, int lockBlocks, int tier, bool pool);
+    void registerAttestor(const QString& bondYec, int lockBlocks, int tier, bool pool);   // bondYec: a decimal string, sent as typed
     void withdrawBond(const YellowbackAttestor& a, const QString& to = QString());
     void reviveAttestor(const YellowbackAttestor& a, qint64 priceMicroUsd);
     void reportEquivocation(const QString& hexA, const QString& hexB);          // two-step
@@ -115,6 +115,7 @@ public:
     static QString subscriberConfigToml(const QString& kind, const QString& path, const QString& relays, const QString& peers,
                                         const QString& rpcUrl, const QString& cookieFile, const QString& rpcUser, const QString& rpcPassword);
     static QString cookiePathFor(const QString& zcashDir, const QString& network);   // <datadir>[/testnet3|/regtest]/.cookie
+    static bool writePrivateFile(const QString& path, const QByteArray& bytes, QString* error);   // 0600 before the first byte
     QString subscriberConfigPath() const { return subscriberConfPath; }
 
 private:

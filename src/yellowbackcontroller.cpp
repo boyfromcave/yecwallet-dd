@@ -797,8 +797,8 @@ void YellowbackController::sweepCarriers(OkFn ok, ErrFn err) {
     call(YellowbackRpc::SWEEPCARRIERS, json(nullptr), ok, err);
 }
 
-void YellowbackController::registerAttestor(double bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::REGISTERATTESTOR, json::array({bondYec, lockBlocks, flags}), ok, err);
+void YellowbackController::registerAttestor(const QString& bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::REGISTERATTESTOR, json::array({bondYec.toStdString(), lockBlocks, flags}), ok, err);
 }
 
 void YellowbackController::withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err) {
@@ -822,6 +822,12 @@ void YellowbackController::reportEquivocation(const QString& hexA, const QString
 // confirms the carrier is also the ChainTip on which the node builds the main transaction, so
 // one or two polls after the main transaction is mined usually settle it. The timer is a child
 // of this controller and dies with it.
+//
+// The match is by type and height, not by carrier: the node's yed_listtransactions rows carry
+// no carrierTxid (ycash-dd src/rpc/yellowbackwallet.cpp yed_listtransactions), so two actions
+// of one type pending at once (two mints, or one from another client of the same wallet) can
+// be cross-attributed in the summary dialog. Plan A6 adds carrierTxid/mainTxid to the rows;
+// this poll then matches on it (audit F-9).
 //
 // Two shapes the node's yed_listtransactions does not give as `type` (both node lines,
 // ycash-dd and ycash6 src/rpc/yellowbackwallet.cpp yed_listtransactions):

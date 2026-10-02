@@ -2232,6 +2232,21 @@ private slots:
         QCOMPARE(YellowbackTab::cookiePathFor("/data", "regtest"), QString("/data/regtest/.cookie"));
         QCOMPARE(YellowbackTab::cookiePathFor("/data", "test"),    QString("/data/testnet3/.cookie"));
         QCOMPARE(YellowbackTab::cookiePathFor("/data", "main"),    QString("/data/.cookie"));
+        // audit F-4: control characters cannot end the string or add a key
+        QString ctl = YellowbackTab::subscriberConfigToml("dir", "/tmp/a\nrpc_user = \"x\"\r\t\x01", "", "", "http://127.0.0.1:8832", "", "u", "p\x7f");
+        QVERIFY2(ctl.contains("path = \"/tmp/a\\nrpc_user = \\\"x\\\"\\r\\t\\u0001\"\n"), qPrintable(ctl));
+        QVERIFY2(ctl.contains("rpc_password = \"p\\u007f\"\n"), qPrintable(ctl));
+        QCOMPARE(ctl.count("rpc_user"), 2);   // the real key and the escaped text inside the path string
+        // the file is owner-only from its first byte, and an unwritable path is reported
+        QTemporaryDir tmp;
+        QString priv = tmp.filePath("private.toml"), err;
+        QVERIFY2(YellowbackTab::writePrivateFile(priv, "rpc_password = \"s\"\n", &err), qPrintable(err));
+        QVERIFY(!(QFile(priv).permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup |
+                                               QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther)));
+        QFile pf(priv); QVERIFY(pf.open(QIODevice::ReadOnly)); QCOMPARE(QString::fromUtf8(pf.readAll()), QString("rpc_password = \"s\"\n"));
+        QVERIFY(YellowbackTab::writePrivateFile(priv, "again\n", &err));                    // an existing file is replaced
+        QVERIFY(!YellowbackTab::writePrivateFile(tmp.filePath("no/such/dir/x.toml"), "x", &err));
+        QVERIFY(!err.isEmpty());
     }
 
 #ifndef Q_OS_WIN
@@ -2265,6 +2280,7 @@ private slots:
         QString toml = QString::fromUtf8(t.readAll());
         QVERIFY2(toml.contains("kind = \"dir\"\npath = \"" % tmp.filePath("bus") % "\""), qPrintable(toml));
         QVERIFY(toml.contains("rpc_url = \"http://127.0.0.1:8832\""));           // no connection in the QTest: the default
+        QVERIFY(!(t.permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther | QFileDevice::WriteGroup | QFileDevice::WriteOther)));   // audit F-4
         h.tab.stopSubscriber();
         QTRY_VERIFY_WITH_TIMEOUT(h.label("lblSubscriberStatus").startsWith("not running"), 5000);
         QVERIFY(h.button("btnSubscriberStart")->isEnabled());
@@ -2298,14 +2314,17 @@ private slots:
         Settings::getInstance()->setYellowbackBackupPending(false);
 
         // Register: the dialog states the bond, the lock and the one-hot-key-one-node warning
-        h.tab.registerAttestor(10.0, 200, 1, true);
+        h.tab.registerAttestor("10", 200, 1, true);
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.confirms[0].contains("Bond: 10.00000000 of YEC, locked in a bond output until height 721 (200 blocks"), qPrintable(h.confirms[0]));
         QVERIFY(h.confirms[0].contains("Source tier: mixed. Pool operator: yes."));
         QVERIFY(h.confirms[0].contains("eligible for bundles 8 blocks after"));      // params.attest.bondMaturity
         QVERIFY(h.confirms[0].contains("Run the yellowback-attest agent on this node only. One hot key on two nodes defeats"));
         QVERIFY(h.confirms[0].contains("Back up wallet.dat"));
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({10.0, 200, 5}));   // flags: tier 1 | pool bit
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"10", 200, 5}));   // the bond as a decimal string (F-8); flags: tier 1 | pool bit
+        h.tab.registerAttestor("0.12345678", 200, 2, false);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"0.12345678", 200, 2}));   // sent as typed, no double rounding
+        QVERIFY(h.confirms.last().contains("Bond: 0.12345678 of YEC"));
         QCOMPARE(YellowbackController::attestorFlags(2, false), 2);
         QVERIFY(h.notices.last().startsWith("Registration sent|"));
         QVERIFY(h.notices.last().contains("smExampleBondKeyAddr11111111111111111"));
@@ -2366,7 +2385,7 @@ private slots:
         h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
         QVERIFY(h.errorNotices.last().contains("does not hold the key"));
         h.rpc.errors[YellowbackRpc::REGISTERATTESTOR] = "bond-below-min: 9 < 10";
-        h.tab.registerAttestor(9.0, 200, 0, false);
+        h.tab.registerAttestor("9", 200, 0, false);
         QVERIFY(h.errorNotices.last().contains("below the minimum"));
         QVERIFY(h.copyIsClean());
     }
