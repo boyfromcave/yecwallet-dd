@@ -1,9 +1,9 @@
 # YecWallet fork CI: the Yellowback tab's offline QTest suite and the RPC-contract check.
 #
 # The wallet's release build uses a static Qt without testlib (build.sh --package); this job
-# builds the app and the `yellowback_test` target against a Qt 6.5 with testlib instead, the
-# way a developer runs them (docs/yellowback.md), and runs the suite offscreen. The devnet cases
-# QSKIP without YELLOWBACK_DEVNET_DIR. The contract check asserts that every RPC name the wallet
+# builds the app and the three QTest targets against a Qt 6.5 with testlib instead, the way a
+# developer runs them (docs/yellowback.md), and runs every registered suite offscreen through
+# ctest. The devnet cases QSKIP without YELLOWBACK_DEVNET_DIR. The contract check asserts that every RPC name the wallet
 # uses exists in the generated copy of the node's contract (the workspace's `make spec`).
 name: yecwallet-tests
 
@@ -18,7 +18,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned by commit (audit F-7); the comment names the tag the SHA was taken from.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       - name: Install the build tools and the libraries Qt links against
         run: |
           sudo apt-get update
@@ -26,7 +27,7 @@ jobs:
             libgl1-mesa-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6 libdbus-1-3 \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
       - name: Install Qt 6.5 (the version the wallet builds with; Ubuntu's own Qt 6 is 6.2)
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125   # v4 (v4.4.1)
         with:
           version: '6.5.3'
           modules: 'qtwebsockets'
@@ -38,19 +39,15 @@ jobs:
           ! grep -rn -i "trustless" src/ --include=*.cpp --include=*.h --include=*.ui
       - name: "Configure (system Qt 6, with testlib)"
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-      - name: Build the app and the QTest target
-        run: ninja -C build yecwallet yellowback_test nodecompat_test
-      - name: Run the Yellowback QTest suite offscreen
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ./build/bin/yellowback_test || ./build/yellowback_test
-      - name: Run the node-compatibility QTest (v4.5.0 and 6.20.0 call shapes, loopback mock node)
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ./build/bin/nodecompat_test || ./build/nodecompat_test
+      - name: Build the app and the three QTest targets
+        run: ninja -C build yecwallet yellowback_test nodecompat_test nodedatacheck_test
+      # Every registered suite (CMakeLists.txt): the Yellowback tab, the node-compatibility calls
+      # against a loopback mock node, and the data directory upgrade check (audit F-6).
+      - name: Run the QTest suites offscreen (ctest)
+        run: ctest --test-dir build --output-on-failure
       - name: Upload the test log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: yellowback-test-output
           path: build/Testing
