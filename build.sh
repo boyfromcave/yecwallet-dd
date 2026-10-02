@@ -164,7 +164,9 @@ if [[ "$TARGET" == macos-* ]]; then
         _default_sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
         if [[ -n "$_default_sdk" && ! -d "${_default_sdk}/System/Library/Frameworks/AGL.framework" ]]; then
             _pick=""
-            for _cand in "$(dirname "$_default_sdk")"/MacOSX[0-9]*.sdk; do
+            # Next to the default SDK, and in the Command Line Tools: once xcode-select points at a
+            # full Xcode (26.x ships only the 26 SDKs), the 15.x SDK with AGL lives only there.
+            for _cand in "$(dirname "$_default_sdk")"/MacOSX[0-9]*.sdk /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.sdk; do
                 [[ -d "${_cand}/System/Library/Frameworks/AGL.framework" ]] || continue
                 if [[ -z "$_pick" ]] || [[ "$(printf '%s\n%s\n' "$(sdk_version "$_pick")" "$(sdk_version "$_cand")" | sort -t. -k1,1n -k2,2n | tail -n1)" == "$(sdk_version "$_cand")" ]]; then
                     _pick="$_cand"
