@@ -226,6 +226,43 @@ a real `Connection`/`ZcashdRPC` and a loopback mock ycashd. Its `devnetImports` 
 and a Sapling ivk made on node 1 into node 0 of a running devnet (either line) when
 `YELLOWBACK_DEVNET_DIR` is set.
 
+### Packaging: the embedded node and an external one
+
+There is no separate "noembed" build. `build.sh --package --ycashd PATH` copies one ycashd into
+the package (macOS: `yecwallet.app/Contents/MacOS/ycashd`); without `--ycashd` the package ships no
+node. At run time the wallet always first connects to the node its `ycash.conf` names
+(`ConnectionLoader::doAutoConnect`); only when that connection is refused, and `--no-embedded`
+was not given, does it start the ycashd beside its own executable, with no arguments, so on the
+default datadir and conf (`startEmbeddedZcashd`). Whichever node answers, the version is read at
+connect ("Two node lines" above), so a running v4.5.0 node is driven with the v4.5.0 shapes even by
+a package that bundles 6.20.0.
+
+The rule: **the package bundles the 6.20.0 ycashd (`ycash6`)**; with `--no-embedded`, or whenever a
+node is already running on the conf's port, the wallet drives whichever line answers. Verified
+headless (`QT_QPA_PLATFORM=offscreen`, 2026-10-01, the development build with Homebrew Qt: the
+static release build links only the `cocoa` platform plugin, so the packaged binary cannot run
+offscreen): embedded 6.20.0 on a fresh regtest datadir ("ycashd 6200050: using the Ycash 6.20.0
+RPC shapes", "ycashd is online"); `--no-embedded --conf` against a 6.20.0 devnet node (the same
+two lines) and against a v4.5.0 devnet node ("ycashd is online", v4.5.0 shapes).
+
+Risks of an embedded 6.20.0 node:
+
+- **An existing v4.5.0 datadir is upgraded one way.** 6.20.0 cannot read the v4.5.0 block index
+  (`LoadBlockIndex() : failed to read value`, "Please restart with -reindex to recover"). The
+  wallet already reacts to that stderr line by showing it and adding `reindex=1` to `ycash.conf`;
+  the next start reindexes (the wallet.dat keys survive, Yellowback index healthy), after which
+  v4.5.0 refuses the datadir (`block index inconsistency detected (post-Heartwood; hashLightClientRoot
+  ... != hashChainHistoryRoot ...)`) until it reindexes in turn. On mainnet that is a full
+  reindex each way. Verified on regtest with both binaries.
+- **`ycash.conf` differences.** `fastsync` is `ibdskiptxverification` on 6.20.0 (handled, see the
+  table above); the Yellowback keys (`experimentalfeatures`, `yellowback`, and on regtest
+  `yellowbackstartheight`) are the same on both lines. 6.20.0 keeps every zcashd-deprecated RPC the
+  wallet calls enabled by default (`ref/ycash6/src/deprecation.h`, `DEFAULT_DENY_DEPRECATED` empty)
+  and has no end-of-service height.
+- **The startup version check** (`Controller::checkForUpdate`) compares `APP_VERSION` with the
+  release tags of `YcashFoundation/yecwallet` on GitHub; it is not a node check. With
+  `APP_VERSION` at 6.20.0, no upstream 4.x/5.x release is ever offered as an update.
+
 ## Network detection (plan H3)
 
 `Controller::getInfoThenRefresh` sets testnet mode from `getinfo.testnet`, which a regtest node
