@@ -299,10 +299,14 @@ line both lines print only after `LoadBlockIndex` succeeded (`ref/ycash/src/init
 `ref/ycash6/src/init.cpp:1018,2013`), so a failed 6.20.0 start does not count; the last 16 MiB of
 `debug.log` are read. A definitive check would read a `CDiskBlockIndex` record's leading client
 version out of LevelDB, which the wallet cannot do without a LevelDB dependency. Limits: a
-directory whose `debug.log` was deleted warns once even if it is already 6.20.0; a directory the
-user took back to v4.5.0 after accepting keeps its marker and is not warned about again (delete
-the marker to be asked again); the embedded node is started without arguments, so with
-`--conf` the check reads the named conf while the node reads the default one (as before).
+directory whose `debug.log` was deleted warns once even if it is already 6.20.0. The marker
+records the acceptance, not the upgrade: a marker beside a `debug.log` whose last index loader is
+still older than 6.20.0 (the user quit before the reindex started, or put an older `blocks/` back
+that v4.5.0 then loaded) is `Older` again and the dialog returns with a line saying the upgrade
+did not complete (audit F-2); a restored directory whose `debug.log` was not restored with it is
+not caught. With `--conf PATH` naming a file other than the default `ycash.conf`, the embedded
+node is started with `-conf=PATH`, so it reads the conf the check inspected and the `reindex=1`
+the wallet appended (audit F-10); with the default conf it is started without arguments as before.
 
 **The dialog** says the node data is upgraded, older YecWallet/ycashd versions need a full
 reindex to use it afterwards, the reindex takes hours on mainnet, and `wallet.dat` keys are kept;
@@ -317,7 +321,8 @@ writes nothing). On continue the wallet writes the marker, and for `Older` also 
 "-reindex" stderr line stays as the fallback (the `Unknown` case, or a marker write that failed).
 
 **Test hooks.** `YECWALLET_UPGRADE_ANSWER=backup|continue|quit` answers the dialog without
-showing it. `YECWALLET_TEST_ISOLATE=1` keeps QSettings in an INI file under
+showing it, but only when `YECWALLET_TEST_ISOLATE` is also set (audit F-5): in a normal run the
+variable is ignored and logged. `YECWALLET_TEST_ISOLATE=1` keeps QSettings in an INI file under
 `$HOME/.yecwallet-test-settings` and the log, labels, sent-tx store and Yellowback subscriber
 conf under `$HOME/.yecwallet-test-appdata` (`Settings::appDataLocation`); without it, on macOS
 both go to the real `~/Library` whatever `HOME` says.
