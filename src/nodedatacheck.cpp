@@ -98,14 +98,25 @@ Result inspect(const QString& netDir) {
     }
 
     int marker = markerVersion(netDir);
+    int loaded = lastIndexLoaderVersion(readDebugLogTail(netDir));
     if (marker >= UPGRADING_MIN_VERSION) {
+        r.marked = true;
+        // The marker records the acceptance, not the upgrade: when the log still shows an older
+        // node as the last to load the index, the reindex never ran (the user quit before it
+        // started, or restored an older blocks/ afterwards) and the warning is due again.
+        if (loaded != 0 && loaded < UPGRADING_MIN_VERSION) {
+            r.state = State::Older;
+            r.indexVersion = loaded;
+            r.reason = QString("marker %1 records version %2 but debug.log shows the block index last loaded by ycashd version %3: the upgrade did not complete")
+                           .arg(MARKER_FILE).arg(marker).arg(loaded);
+            return r;
+        }
         r.state = State::Marked;
         r.indexVersion = marker;
         r.reason = QString("marker %1 records version %2").arg(MARKER_FILE).arg(marker);
         return r;
     }
 
-    int loaded = lastIndexLoaderVersion(readDebugLogTail(netDir));
     if (loaded == 0) {
         r.state = State::Unknown;
         r.reason = "block index present, no marker, debug.log does not say which node wrote it";

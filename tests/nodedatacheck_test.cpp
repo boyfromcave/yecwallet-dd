@@ -140,11 +140,42 @@ private slots:
 
     void markerPresentDoesNotWarn() {
         QTemporaryDir tmp;
-        auto r = inspect(makeNetDir(tmp, "marked", true, V45_RUN, "6.20.0\n# comment\n"));
+        // The marker plus a log in which 6.20.0 loaded the index after v4.5.0: upgraded
+        auto r = inspect(makeNetDir(tmp, "marked", true, QString(V45_RUN) + V620_RUN, "6.20.0\n# comment\n"));
+        QCOMPARE(r.state, State::Marked);
+        QVERIFY(r.marked);
+        QVERIFY(!needsWarning(r.state));
+        // The marker with no log at all (rotated away): the acceptance stands
+        r = inspect(makeNetDir(tmp, "markednolog", true, QString(), "6.20.0\n"));
         QCOMPARE(r.state, State::Marked);
         QVERIFY(!needsWarning(r.state));
         // A marker naming an older version is not an acceptance.
         QCOMPARE(inspect(makeNetDir(tmp, "oldmarker", true, V45_RUN, "4.5.0\n")).state, State::Older);
+    }
+
+    // audit F-2: the marker records the acceptance, not the upgrade. When debug.log still shows
+    // an older node as the last to load the index (the user quit before the reindex started, or
+    // put an older blocks/ back), the warning is due again and says the upgrade did not complete.
+    void markerWithoutUpgradeWarnsAgain() {
+        QTemporaryDir tmp;
+        auto r = inspect(makeNetDir(tmp, "markedold", true, V45_RUN, "6.20.0\n"));
+        QCOMPARE(r.state, State::Older);
+        QVERIFY(r.marked);
+        QCOMPARE(r.indexVersion, 4050050);
+        QVERIFY(needsWarning(r.state));
+        QVERIFY2(r.reason.contains("did not complete"), qPrintable(r.reason));
+        // A 6.20.0 start that failed to load the index does not count as the upgrade
+        r = inspect(makeNetDir(tmp, "markedfailed", true, QString(V45_RUN) + V620_FAILED_RUN, "6.20.0\n"));
+        QCOMPARE(r.state, State::Older);
+        QVERIFY(r.marked);
+        // An older node after the upgrade (a restored v4.5.0 blocks/ that v4.5.0 then loaded)
+        r = inspect(makeNetDir(tmp, "markedrestored", true, QString(V620_RUN) + V45_RUN, "6.20.0\n"));
+        QCOMPARE(r.state, State::Older);
+        QVERIFY(r.marked);
+        // Without the marker, the same log is plain Older
+        r = inspect(makeNetDir(tmp, "plainold", true, V45_RUN));
+        QCOMPARE(r.state, State::Older);
+        QVERIFY(!r.marked);
     }
 
     void noEvidenceWarnsOnce() {

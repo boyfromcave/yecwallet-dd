@@ -50,6 +50,8 @@ enum class State {
 struct Result {
     State   state = State::Fresh;
     int     indexVersion = 0;  // the version that last loaded the index (Current/Older), else 0
+    bool    marked = false;    // the marker is present (Marked; or Older when debug.log shows the
+                               // upgrade never completed after the user accepted it, audit F-2)
     QString reason;            // one line for the wallet log
 };
 

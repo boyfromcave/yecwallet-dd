@@ -410,6 +410,9 @@ bool ConnectionLoader::confirmNodeDataUpgrade() {
         if (result.state == NodeDataCheck::State::Unknown)
             text += "\n\n" + QObject::tr("YecWallet could not tell which ycashd version last used this "
                 "data directory. If it was %1 or later, nothing is upgraded.").arg(bundledText);
+        if (result.marked)
+            text += "\n\n" + QObject::tr("You accepted this upgrade before, but the data directory still shows an "
+                "older ycashd as the last to use it: the upgrade did not complete. It starts again now.");
         QString detail = QObject::tr(
             "To keep a copy that an older version can open without a reindex, quit now and copy the "
             "whole data directory (%1, about %2; %3 free on that disk). YecWallet does not make that copy.")
