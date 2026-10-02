@@ -551,6 +551,29 @@ private slots:
         QVERIFY(!YellowbackTab::parseDollars("abc", &c));
         QVERIFY(!YellowbackTab::parseDollars("1.234", &c));
         QVERIFY(!YellowbackTab::parseDollars("-5", &c));
+        // audit F-3: comma-decimal locales; a comma before two digits is the decimal mark
+        QVERIFY(YellowbackTab::parseDollars("12,50", &c));     QCOMPARE(c, (qint64)1250);
+        QVERIFY(YellowbackTab::parseDollars("1,5", &c));       QCOMPARE(c, (qint64)150);
+        QVERIFY(YellowbackTab::parseDollars("1,234.56", &c));  QCOMPARE(c, (qint64)123456);
+        QVERIFY(YellowbackTab::parseDollars("1.234,56", &c));  QCOMPARE(c, (qint64)123456);
+        QVERIFY(YellowbackTab::parseDollars("1,234", &c));     QCOMPARE(c, (qint64)123400);
+        QVERIFY(YellowbackTab::parseDollars("1,234,567", &c)); QCOMPARE(c, (qint64)123456700);
+        QVERIFY(YellowbackTab::parseDollars("1.234.567,89", &c)); QCOMPARE(c, (qint64)123456789);
+        QVERIFY(YellowbackTab::parseDollars("$ 12,50", &c));   QCOMPARE(c, (qint64)1250);
+        QVERIFY(!YellowbackTab::parseDollars("12,345.678", &c));
+        QVERIFY(!YellowbackTab::parseDollars("1,23,45", &c));
+        QVERIFY(!YellowbackTab::parseDollars("12,5,0", &c));
+        QVERIFY(!YellowbackTab::parseDollars("1,2345", &c));
+        QVERIFY(!YellowbackTab::parseDollars("12.", &c));
+        QVERIFY(!YellowbackTab::parseDollars(",50", &c));
+        QVERIFY(!YellowbackTab::parseDollars("1234567890", &c));
+        // the Send page echoes what it read beside the field
+        Harness h;
+        h.feedActive();
+        h.sendTo("", "12,50");
+        QCOMPARE(h.tab.page(YellowbackTab::Send)->findChild<QLabel*>("lblAmountParsed")->text(), QString("= $12.50"));
+        h.sendTo("", "12,5,0");
+        QCOMPARE(h.tab.page(YellowbackTab::Send)->findChild<QLabel*>("lblAmountParsed")->text(), QString("not an amount"));
     }
 
     void formatsAmounts() {

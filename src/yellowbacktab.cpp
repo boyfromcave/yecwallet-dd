@@ -470,20 +470,46 @@ void YellowbackTab::newReceiveAddress() {
 
 // ── Send ──────────────────────────────────────────────────────────────────────────────────
 
+// Dollars and cents from what the user typed, in either separator convention (audit F-3: a
+// comma-decimal entry such as "12,50" used to parse as $1,250). When both '.' and ',' occur
+// the last one is the decimal mark and the other groups thousands ("1,234.56", "1.234,56");
+// a lone ',' or '.' followed by one or two digits is the decimal mark ("12,50", "1,5", "12.5");
+// a lone ',' followed by exactly three digits groups thousands ("1,234"); a lone '.' followed
+// by three digits is ambiguous and refused ("1.234"). Grouping must be in threes, at most two
+// decimals, at most nine whole digits.
 bool YellowbackTab::parseDollars(const QString& text, qint64* cents) {
     QString t = text.trimmed();
-    t.remove('$').remove(',').remove(' ');
-    static const QRegularExpression re("^(\\d{1,9})(?:\\.(\\d{1,2}))?$");
-    auto m = re.match(t);
-    if (!m.hasMatch()) return false;
-    qint64 whole = m.captured(1).toLongLong();
-    QString frac = m.captured(2);
-    qint64 c = 0;
-    if (!frac.isEmpty()) {
-        if (frac.length() == 1) frac += "0";
-        c = frac.toLongLong();
+    t.remove('$').remove(' ');
+    static const QRegularExpression chars("^[0-9.,]+$");
+    if (!chars.match(t).hasMatch()) return false;
+    const int lastDot = t.lastIndexOf('.'), lastComma = t.lastIndexOf(',');
+    QChar decimal, group;                                           // null QChar = none
+    if (lastDot >= 0 && lastComma >= 0) {
+        decimal = lastDot > lastComma ? '.' : ',';
+        group   = decimal == '.' ? ',' : '.';
+    } else if (lastComma >= 0) {
+        const int after = t.length() - lastComma - 1;
+        if (after == 3 || t.count(',') > 1) group = ','; else decimal = ',';
+    } else if (lastDot >= 0) {
+        decimal = '.';
     }
-    *cents = whole * 100 + c;
+    QString whole = t, frac;
+    if (!decimal.isNull()) {
+        const int at = t.lastIndexOf(decimal);
+        if (t.indexOf(decimal) != at) return false;                 // two decimal marks
+        whole = t.left(at); frac = t.mid(at + 1);
+        if (frac.isEmpty() || frac.length() > 2 || (!group.isNull() && frac.contains(group))) return false;
+    }
+    if (!group.isNull()) {
+        const QStringList groups = whole.split(group);
+        if (groups.size() < 2 || groups[0].isEmpty() || groups[0].length() > 3) return false;
+        for (int i = 1; i < groups.size(); i++) if (groups[i].length() != 3) return false;
+        whole.remove(group);
+    }
+    static const QRegularExpression digits("^\\d{1,9}$");
+    if (!digits.match(whole).hasMatch()) return false;
+    if (frac.length() == 1) frac += "0";
+    *cents = whole.toLongLong() * 100 + (frac.isEmpty() ? 0 : frac.toLongLong());
     return true;
 }
 
@@ -511,6 +537,13 @@ void YellowbackTab::setupSend() {
             uiSend->lblSendHint->clear();
     };
     QObject::connect(uiSend->txtRecipient, &QLineEdit::textChanged, validateLive);
+    // The amount as the wallet reads it, beside the field while it is typed (audit F-3)
+    QObject::connect(uiSend->txtAmount, &QLineEdit::textChanged, [=, this](const QString& text) {
+        qint64 cents = 0;
+        if (text.trimmed().isEmpty())           uiSend->lblAmountParsed->setText("-");
+        else if (parseDollars(text, &cents))    uiSend->lblAmountParsed->setText("= " % YellowbackFormat::cents(cents));
+        else                                    uiSend->lblAmountParsed->setText(tr("not an amount"));
+    });
 }
 
 void YellowbackTab::doSend() {
