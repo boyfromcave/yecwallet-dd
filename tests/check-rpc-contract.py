@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 The Ycash developers
+# Distributed under the MIT software license, see the accompanying
+# file LICENSE or https://www.opensource.org/licenses/mit-license.php .
+
 """Check src/yellowbackrpc.h against docs/yellowback-rpc-contract.json (plan P7, §6.0 item 6).
 
 The header is the single place the wallet names anything of the node's RPC surface; the JSON
