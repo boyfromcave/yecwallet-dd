@@ -15,6 +15,15 @@ Settings* Settings::getInstance() {
     return instance;
 }
 
+QString Settings::appDataLocation() {
+    if (qEnvironmentVariableIsSet("YECWALLET_TEST_ISOLATE")) {
+        QString dir = QDir::home().filePath(".yecwallet-test-appdata");
+        QDir().mkpath(dir);     // the Logger opens its file without creating the directory
+        return dir;
+    }
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+}
+
 Config Settings::getSettings() {
     // Load from the QT Settings. 
     QSettings s;

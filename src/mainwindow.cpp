@@ -48,7 +48,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
 	    
     ui->setupUi(this);
-    logger = new Logger(this, QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)).filePath("zec-qt-wallet.log"));
+    logger = new Logger(this, QDir(Settings::appDataLocation()).filePath("zec-qt-wallet.log"));
 
     // Status Bar
     setupStatusBar();

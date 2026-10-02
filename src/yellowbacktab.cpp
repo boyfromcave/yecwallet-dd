@@ -1801,7 +1801,7 @@ void YellowbackTab::startSubscriber() {
     }
     QString toml = subscriberConfigToml(s->getYellowbackTransportKind(), s->getYellowbackTransportPath(), s->getYellowbackTransportRelays(),
                                         s->getYellowbackTransportPeers(), rpcUrl, cookie, user, pass);
-    QDir dir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    QDir dir(Settings::appDataLocation());
     dir.mkpath(".");
     subscriberConfPath = dir.absoluteFilePath("yellowback-subscribe.toml");
     QFile f(subscriberConfPath);

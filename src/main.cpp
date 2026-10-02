@@ -190,6 +190,14 @@ public:
         QCoreApplication::setOrganizationName("ycash-foundation");
         QCoreApplication::setApplicationName("yecwallet");
 
+        // Test isolation (headless runs with a scratch HOME): on macOS QSettings writes through
+        // CFPreferences to the real ~/Library/Preferences whatever HOME says.
+        // YECWALLET_TEST_ISOLATE=1 keeps the settings in an INI file under $HOME instead.
+        if (qEnvironmentVariableIsSet("YECWALLET_TEST_ISOLATE")) {
+            QSettings::setDefaultFormat(QSettings::IniFormat);
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QDir::homePath() + "/.yecwallet-test-settings");
+        }
+
         QString locale = QLocale::system().name();
         locale.truncate(locale.lastIndexOf('_'));   // Get the language code
         qDebug() << "Loading locale " << locale;

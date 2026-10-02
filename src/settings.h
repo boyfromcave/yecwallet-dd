@@ -30,6 +30,11 @@ public:
     static  Settings* init();
     static  Settings* getInstance();
 
+    // AppDataLocation (wallet log, labels, sent-tx store, Yellowback subscriber conf), or
+    // $HOME/.yecwallet-test-appdata under YECWALLET_TEST_ISOLATE (main.cpp): on macOS
+    // AppDataLocation is the real ~/Library/Application Support whatever HOME says.
+    static  QString appDataLocation();
+
     Config  getSettings();
     void    saveSettings(const QString& host, const QString& port, const QString& username, const QString& password);
 

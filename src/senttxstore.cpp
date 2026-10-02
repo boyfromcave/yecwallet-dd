@@ -5,7 +5,7 @@
 QString SentTxStore::writeableFile() {
     auto filename = QStringLiteral("senttxstore.dat");
 
-    auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    auto dir = QDir(Settings::appDataLocation());
     if (!dir.exists())
         QDir().mkpath(dir.absolutePath());
 

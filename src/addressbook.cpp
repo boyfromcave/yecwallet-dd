@@ -285,7 +285,7 @@ void AddressBook::writeToStorage() {
 QString AddressBook::writeableFile() {
     auto filename = QStringLiteral("addresslabels.dat");
 
-    auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    auto dir = QDir(Settings::appDataLocation());
     if (!dir.exists())
         QDir().mkpath(dir.absolutePath());
 
