@@ -356,7 +356,10 @@ QString ConnectionLoader::embeddedZcashdProgram() {
  * gets here after the connection was refused). Returns false when the user chose Quit, or the
  * wallet.dat backup they asked for failed; nothing has been written then.
  *
- * Test hook: YECWALLET_UPGRADE_ANSWER=backup|continue|quit answers without showing the dialog.
+ * Test hook: YECWALLET_UPGRADE_ANSWER=backup|continue|quit answers without showing the dialog,
+ * honoured only under YECWALLET_TEST_ISOLATE (the test-isolation gate, main.cpp); in a normal
+ * run the variable is ignored and logged, so a launcher or profile cannot pre-answer the
+ * one-way upgrade (audit F-5).
  */
 bool ConnectionLoader::confirmNodeDataUpgrade() {
     auto program = embeddedZcashdProgram();
@@ -391,7 +394,11 @@ bool ConnectionLoader::confirmNodeDataUpgrade() {
     enum class Answer { Backup, Continue, Quit };
     Answer answer = Answer::Quit;
     const bool hasWallet = QFile::exists(dirs.walletPath);
-    const QString hook = qEnvironmentVariable("YECWALLET_UPGRADE_ANSWER").toLower();
+    QString hook = qEnvironmentVariable("YECWALLET_UPGRADE_ANSWER").toLower();
+    if (!hook.isEmpty() && !qEnvironmentVariableIsSet("YECWALLET_TEST_ISOLATE")) {
+        main->logger->write("YECWALLET_UPGRADE_ANSWER ignored: not a test run (YECWALLET_TEST_ISOLATE is not set)");
+        hook.clear();
+    }
     const bool hooked = !hook.isEmpty();
 
     if (hooked) {
@@ -517,13 +524,24 @@ bool ConnectionLoader::startEmbeddedZcashd() {
     });
 
 
+    // --conf PATH names a file other than the default: the node reads that one too, so the
+    // directory the data check inspected and the reindex=1/rescan=1 the wallet appends are the
+    // ones the node acts on (audit F-10). With the default conf nothing is passed, as before.
+    QStringList args;
+    const QString confLocation = Settings::getInstance()->getZcashdConfLocation();
+    if (!confLocation.isEmpty() &&
+        QFileInfo(confLocation).absoluteFilePath() != QFileInfo(zcashConfWritableLocation()).absoluteFilePath()) {
+        args << "-conf=" + QFileInfo(confLocation).absoluteFilePath();
+        main->logger->write("Starting ycashd with " + args.join(' '));
+    }
+
 #ifdef Q_OS_LINUX
-    ezcashd->start(zcashdProgram);
+    ezcashd->start(zcashdProgram, args);
 #elif defined(Q_OS_DARWIN)
-    ezcashd->start(zcashdProgram);
+    ezcashd->start(zcashdProgram, args);
 #else
     ezcashd->setWorkingDirectory(appPath.absolutePath());
-    ezcashd->start("ycashd.exe");
+    ezcashd->start("ycashd.exe", args);
 #endif // Q_OS_LINUX
 
 
@@ -628,6 +646,9 @@ void ConnectionLoader::refreshZcashdState(Connection* connection, std::function<
                     if (NodeCompat::isYcash6(connection->nodeVersion))
                         main->logger->write("ycashd " + QString::number(connection->nodeVersion) +
                                             ": using the Ycash 6.20.0 RPC shapes");
+                    else if (connection->nodeVersion == 0)
+                        main->logger->write("Warning: getinfo carries no numeric version; the node is driven "
+                                            "with the v4.5.0 RPC shapes (audit F-11)");
                     fnSuccess();
                 },
                 [=, this](auto reply, auto res) {            
