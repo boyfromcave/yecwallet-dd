@@ -491,9 +491,15 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
 
     // Warnings, most severe first
     if (abandoned)
-        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for about 30 days. "
+    {
+        // W21: ABANDON_BLOCKS (= GRACE, ~30 days on mainnet) from the node's own params, so regtest
+        // and devnet (128 blocks) read right too; "about 30 days" when the node does not send it.
+        const qint64 ab = YellowbackJson::toInt(YellowbackJson::obj(info, YellowbackRpc::Info::PARAMS), YellowbackRpc::Params::ABANDON_BLOCKS, 0);
+        const QString span = ab > 0 ? YellowbackFormat::blocksAndDuration((int)ab) : tr("about 30 days");
+        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for %1. "
                           "Nobody polices vault spends; after its claim height any vault can be emptied by anyone. "
-                          "Sweep your collateral before then (see Vaults).");
+                          "Sweep your collateral before then (see Vaults).").arg(span);
+    }
     if (valve)
         st.warnings << tr("This node's work valve tripped: it rejected a block the rest of the network built on, "
                           "so it stopped enforcing and rejoined the network's chain. Restart the node to re-arm it, "

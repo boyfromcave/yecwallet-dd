@@ -764,7 +764,14 @@ private slots:
         QVERIFY(h.ctl.isAbandoned());
         QVERIFY(h.label("lblBanner").startsWith("Enforcement abandoned"));
         QVERIFY(h.label("lblBanner").contains("Sweep"));
-        QVERIFY(h.label("lblBanner").contains("about 30 days"));            // W21: ABANDON_BLOCKS = GRACE
+        // W21: the span comes from the node's params.abandonBlocks (regtest/devnet 128 here) ...
+        QVERIFY2(h.label("lblBanner").contains("128 block"), qPrintable(h.label("lblBanner")));
+        info["params"]["abandonBlocks"] = 34560;                             // ... mainnet: ABANDON_BLOCKS = GRACE
+        h.feed(info, stats, activationActive());
+        QVERIFY2(h.label("lblBanner").contains("34560 block"), qPrintable(h.label("lblBanner")));
+        info["params"].erase("abandonBlocks");                               // ... and a node that does not send it
+        h.feed(info, stats, activationActive());
+        QVERIFY2(h.label("lblBanner").contains("about 30 days"), qPrintable(h.label("lblBanner")));
         QVERIFY(!h.label("lblBanner").contains("two full windows"));
         QVERIFY(!h.label("lblBanner").contains("Enforcement suspended"));   // abandonment supersedes
         QVERIFY(h.label("lblEnforcement").contains("abandoned"));
