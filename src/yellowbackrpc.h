@@ -82,6 +82,7 @@ namespace Info {   // contract: yed_getinfo
     constexpr const char* MINER             = "miner";
     constexpr const char* PARAMS            = "params";
     constexpr const char* ATTEST            = "attest";         // v3: the arming state at the index tip
+    constexpr const char* SUPPLY_CAP_REACHED = "supplyCapReached"; // v3 W20: the next mint of any class would exceed the cap; absent before W20
 }
 
 // v3: yed_getinfo.attest, the arming state (ARM-1/2) the Attestors view's banner shows.

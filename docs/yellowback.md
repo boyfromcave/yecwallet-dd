@@ -37,6 +37,25 @@ Refresh reads `yed_getinfo`, `yed_getstats`, `yed_getactivation`, `yed_getbalanc
 `yed_listpositions`, `yed_listclaimable` and `yed_listtransactions 200 0` on the stock
 `Controller`'s block-changed branch and after every successful action.
 
+**Mint limits (W16, W20).** The Mint gate distinguishes *paused* from *limited*.
+`yed_getstats.mintableClasses` lists the term classes that can mint now, and `mintingAllowed` is
+false whenever any halt bit is set or the supply cap is reached, so the wallet reads the two
+together. Under a lone `GLOBAL_RATIO` halt (W16) or, since plan v3 revision 4, once
+`yed_getinfo.supplyCapReached` is true with no halt bit (W20: the cap is soft above
+`params.recapRatioBps`, 500 %), or both, minting is *limited* while `mintableClasses` is
+non-empty: `YellowbackController::mintLimit()` explains which restriction applies (the supply
+in circulation, the cap and its share of issued YEC value; the global ratio and its floor), the
+Overview says "limited to class A", the cap row reads "$2,600.00 of $2,500.00 cap — class A
+only" instead of a negative headroom, and the lock lengths of the other classes are greyed out.
+`mintBlocker(cents, class)` lets a qualifying class through even when `supplyCents + cents`
+exceeds the cap, and refuses the others by name; while the cap still has room, an amount that
+would cross it is checked against the classes whose minimum ratio after the volatility
+multiplier (`baseRatioBps × sigmaMultBps / 10⁴`) reaches the floor — class A always, class B at
+≥ 1.25×. An empty `mintableClasses` (or any other halt bit) is *paused*, as before. A node from
+before W20 has no `supplyCapReached`: the cap stays a ceiling there and the wallet behaves
+exactly as it did. The abandonment banner says "about 30 days" (W21: `ABANDON_BLOCKS` = `GRACE`
+on mainnet and testnet; regtest keeps 128 blocks).
+
 **Errors.** Node error strings are stable identifiers and are always shown verbatim
 (`yed_x failed: <message>`); `YellowbackController::explainError` appends what the identifier
 means for `yellowback-unhealthy`, `change-floor`, `not-a-yellowback-address`, `insufficient-yed`,

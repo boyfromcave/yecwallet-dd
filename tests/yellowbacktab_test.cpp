@@ -764,6 +764,8 @@ private slots:
         QVERIFY(h.ctl.isAbandoned());
         QVERIFY(h.label("lblBanner").startsWith("Enforcement abandoned"));
         QVERIFY(h.label("lblBanner").contains("Sweep"));
+        QVERIFY(h.label("lblBanner").contains("about 30 days"));            // W21: ABANDON_BLOCKS = GRACE
+        QVERIFY(!h.label("lblBanner").contains("two full windows"));
         QVERIFY(!h.label("lblBanner").contains("Enforcement suspended"));   // abandonment supersedes
         QVERIFY(h.label("lblEnforcement").contains("abandoned"));
     }
@@ -851,13 +853,45 @@ private slots:
         QVERIFY(h.label("lblMintStatus").contains("NO_PRICE"));
     }
 
+    // W20: no halt bit, the cap reached: minting is limited to the classes at the 500 % floor, not paused
     void overviewCapReached() {
+        Harness h;
+        json info = infoActive();
+        info["supplyCapReached"] = true; info["params"]["supplyCapBps"] = 1500; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["supplyCents"] = 260000; stats["supplyCapCents"] = 250000;
+        stats["mintingAllowed"] = false; stats["mintableClasses"] = json::array({"A"});
+        h.feed(info, stats, activationActive());
+        QVERIFY(h.ctl.softSupplyCap());
+        QVERIFY(h.ctl.supplyCapReached());
+        QCOMPARE(h.label("lblMintStatus"), QString("limited to class A"));
+        QCOMPARE(h.label("lblCapHeadroom"), QString("$2,600.00 of $2,500.00 cap — class A only"));
+        const QString tip = h.tab.findChild<QLabel*>("lblMintStatus")->toolTip();
+        QVERIFY2(tip.contains("supply cap ($2,500.00, 15.00 % of issued YEC value)"), qPrintable(tip));
+    }
+
+    // A node from before W20 (no supplyCapReached): the cap is still a ceiling, exactly as before
+    void overviewCapReachedOnANodeBeforeW20() {
         Harness h;
         json stats = statsOpen();
         stats["supplyCapCents"] = 250000; stats["mintingAllowed"] = false;   // no halt bit, cap full
         h.feed(infoActive(), stats, activationActive());
+        QVERIFY(!h.ctl.softSupplyCap());
+        QVERIFY(!h.ctl.supplyCapReached());
         QVERIFY(h.label("lblMintStatus").contains("supply cap"));
+        QCOMPARE(h.label("lblMintStatus"), QString("paused (supply cap)"));
         QCOMPARE(h.label("lblCapHeadroom"), QString("$0.00 of $2,500.00 cap"));
+        QVERIFY(h.ctl.mintLimit().isEmpty());
+        QCOMPARE(h.ctl.mintBlocker(10000, "A"), QString("Minting is paused: the supply cap ($2,500.00) is reached with $2,500.00 in circulation."));
+        // with mintableClasses on a W16 node but no supplyCapReached: still paused
+        stats["mintableClasses"] = json::array();
+        h.feed(infoActive(), stats, activationActive());
+        QVERIFY(h.ctl.mintBlocker(10000, "A").startsWith("Minting is paused: the supply cap"));
+        // an amount over the cap is refused for every class while the cap has room
+        json room = statsOpen();
+        room["supplyCents"] = 240000; room["supplyCapCents"] = 250000;
+        h.feed(infoActive(), room, activationActive());
+        QCOMPARE(h.ctl.mintBlocker(20000, "A"), QString("Minting $200.00 would exceed the supply cap ($2,400.00 of $2,500.00 in circulation)."));
     }
 
     void overviewTrustCopy() {
@@ -928,6 +962,113 @@ private slots:
             QCOMPARE(model->item(i)->isEnabled(), cls == "A");
         }
         QVERIFY(h.copyIsClean());
+    }
+
+    // W20: above the cap the class at the 500 % floor still mints; the others are refused by name
+    void mintLimitedToRecapClassAboveTheSupplyCap() {
+        Harness h;
+        json info = infoActive();
+        info["supplyCapReached"] = true; info["params"]["supplyCapBps"] = 1500; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["supplyCents"] = 250000; stats["supplyCapCents"] = 250000;
+        stats["mintingAllowed"] = false; stats["mintableClasses"] = json::array({"A"});
+        h.feed(info, stats, activationActive());
+        QCOMPARE(h.ctl.mintableClasses(), QStringList({"A"}));
+        // class A mints even though supply + cents exceeds the cap
+        QVERIFY2(h.ctl.mintBlocker(10000, "A").isEmpty(), qPrintable(h.ctl.mintBlocker(10000, "A")));
+        QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
+        const QString c = h.ctl.mintBlocker(10000, "C");
+        QVERIFY2(c.contains("Class C cannot mint"), qPrintable(c));
+        QVERIFY2(c.contains("supply cap"), qPrintable(c));
+        QVERIFY2(c.contains("only class A"), qPrintable(c));
+        QVERIFY2(c.contains("500.00 %"), qPrintable(c));
+        QVERIFY(!c.contains("Minting is paused"));
+        const QString limit = h.ctl.mintLimit();
+        QVERIFY2(limit.startsWith("Minting is limited: YED in circulation ($2,500.00) has reached the supply cap ($2,500.00, 15.00 % of issued YEC value)."), qPrintable(limit));
+        QVERIFY2(limit.contains("Only class A can mint above the cap"), qPrintable(limit));
+        QVERIFY(!limit.contains("system-wide collateral ratio"));
+        QCOMPARE(h.label("lblMintStatus"), QString("limited to class A"));
+        QVERIFY(!h.label("lblMintStatus").contains("paused"));
+        QVERIFY(h.visible("lblGate"));
+        QVERIFY(h.label("lblGate").contains("limited"));
+        auto cmb = h.tab.findChild<QComboBox*>("cmbTier");
+        QVERIFY(cmb != nullptr);
+        auto model = qobject_cast<QStandardItemModel*>(cmb->model());
+        QVERIFY(model != nullptr);
+        for (int i = 0; i < cmb->count(); i++) {
+            const QString cls = h.ctl.classForLock(cmb->itemData(i).toInt()).name;
+            QCOMPARE(model->item(i)->isEnabled(), cls == "A");
+        }
+        QVERIFY(h.copyIsClean());
+    }
+
+    // W20: the cap not yet reached, but this amount would cross it: only a class at the floor may
+    void mintCrossingTheSupplyCapNeedsTheRecapFloor() {
+        Harness h;
+        json info = infoActive();
+        info["supplyCapReached"] = false; info["params"]["supplyCapBps"] = 1500; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["supplyCents"] = 240000; stats["supplyCapCents"] = 250000; stats["mintableClasses"] = json::array({"A", "B", "C"});
+        h.feed(info, stats, activationActive());
+        QVERIFY(h.ctl.mintLimit().isEmpty());
+        QCOMPARE(h.label("lblMintStatus"), QString("open"));
+        QCOMPARE(h.label("lblCapHeadroom"), QString("$100.00 of $2,500.00 cap"));
+        QVERIFY(h.ctl.mintBlocker(10000, "C").isEmpty());                   // fills the cap exactly
+        QVERIFY2(h.ctl.mintBlocker(20000, "A").isEmpty(), qPrintable(h.ctl.mintBlocker(20000, "A")));
+        QCOMPARE(h.ctl.mintBlocker(20000, "C"),
+                 QString("Minting $200.00 in class C would take YED in circulation above the supply cap ($2,400.00 of $2,500.00): "
+                         "above the cap only class A can mint, because its minimum ratio reaches the 500.00 % floor. "
+                         "Choose that lock length, or mint at most $100.00."));
+        // at a 1.25x volatility multiplier class B locks 500 % too, and qualifies (the floor is on the ratio locked)
+        stats["sigmaMultBps"] = 12500;
+        h.feed(info, stats, activationActive());
+        QVERIFY(h.ctl.mintBlocker(20000, "B").isEmpty());
+        QVERIFY(h.ctl.mintBlocker(20000, "C").contains("only class A or B can mint"));
+    }
+
+    // W16 + W20 together: a lone GLOBAL_RATIO halt with the cap reached; the notice says both
+    void mintLimitedUnderGlobalRatioHaltAndSupplyCap() {
+        Harness h;
+        json info = infoActive();
+        info["supplyCapReached"] = true;
+        info["params"]["supplyCapBps"] = 1500; info["params"]["globalRatioHaltBps"] = 25000; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["supplyCents"] = 260000; stats["supplyCapCents"] = 250000; stats["globalRatioBps"] = 21460;
+        stats["haltMask"] = json::array({"GLOBAL_RATIO"}); stats["mintingAllowed"] = false; stats["mintableClasses"] = json::array({"A"});
+        h.feed(info, stats, activationActive());
+        QVERIFY2(h.ctl.mintBlocker(10000, "A").isEmpty(), qPrintable(h.ctl.mintBlocker(10000, "A")));
+        const QString limit = h.ctl.mintLimit();
+        QVERIFY2(limit.contains("214.60 %, below its 250.00 % floor"), qPrintable(limit));
+        QVERIFY2(limit.contains("has reached the supply cap ($2,500.00"), qPrintable(limit));
+        QVERIFY2(limit.contains("Only class A can mint until both clear"), qPrintable(limit));
+        const QString c = h.ctl.mintBlocker(10000, "C");
+        QVERIFY2(c.contains("Class C cannot mint while the system-wide collateral ratio (214.60 %)"), qPrintable(c));
+        QVERIFY2(c.contains("at the supply cap ($2,500.00)"), qPrintable(c));
+        QVERIFY2(c.contains("only class A can"), qPrintable(c));
+        QCOMPARE(h.label("lblMintStatus"), QString("limited to class A"));
+        QCOMPARE(h.label("lblCapHeadroom"), QString("$2,600.00 of $2,500.00 cap — class A only"));
+    }
+
+    // W20: the cap reached and no class reaches the floor (here a second halt bit): paused, as before
+    void mintPausedAboveTheSupplyCapWhenNoClassQualifies() {
+        Harness h;
+        json info = infoActive();
+        info["supplyCapReached"] = true; info["params"]["recapRatioBps"] = 50000;
+        json stats = statsOpen();
+        stats["supplyCents"] = 250000; stats["supplyCapCents"] = 250000;
+        stats["mintingAllowed"] = false; stats["mintableClasses"] = json::array();
+        h.feed(info, stats, activationActive());
+        QVERIFY(h.ctl.mintLimit().isEmpty());
+        const QString b = h.ctl.mintBlocker(10000, "A");
+        QCOMPARE(b, QString("Minting is paused: the supply cap ($2,500.00) is reached with $2,500.00 in circulation. "
+                            "No term class reaches the 500.00 % floor a mint above the cap needs."));
+        QCOMPARE(h.label("lblMintStatus"), QString("paused (supply cap)"));
+        QCOMPARE(h.label("lblCapHeadroom"), QString("$2,500.00 of $2,500.00 cap — reached"));
+        // the cap plus another halt bit: the halt explains the pause
+        stats["haltMask"] = json::array({"DIVERGENCE"});
+        h.feed(info, stats, activationActive());
+        QVERIFY(h.ctl.mintBlocker(10000, "A").startsWith("Minting is paused. "));
+        QCOMPARE(h.label("lblMintStatus"), QString("paused: DIVERGENCE"));
     }
 
     void mintPausedUnderGlobalRatioWhenNoClassQualifies() {
@@ -1430,6 +1571,9 @@ private slots:
         QVERIFY(YellowbackController::explainError("mint-unsatisfiable: the required collateral exceeds MAX_MONEY").contains("maximum amount of YEC"));
         QVERIFY(YellowbackController::explainError("mintpol-participation: x").contains("60 %"));
         QVERIFY(YellowbackController::explainError("mintpol-cap: x").contains("supply cap"));
+        QCOMPARE(YellowbackController::explainError("mintpol-cap: x"), QString("Minting is paused: the supply cap is reached."));   // before W20
+        const QString w20 = YellowbackController::explainError("mintpol-cap: supply cap headroom is 0 cents; above the cap only a term class whose minimum ratio is at least 500 % can mint (class A)");
+        QVERIFY2(w20.contains("above the supply cap") && w20.contains("class the node names") && !w20.contains("paused"), qPrintable(w20));
         QVERIFY(YellowbackController::explainError("mintpol-divergence: x").contains("diverge"));
         QVERIFY(YellowbackController::explainError("mintpol-global-ratio: x").contains("collateral ratio"));
         QVERIFY(YellowbackController::explainError("mintpol-not-active: x").contains("activation"));

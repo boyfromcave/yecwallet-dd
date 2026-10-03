@@ -374,7 +374,16 @@ void YellowbackTab::updateOverview() {
         uiOverview->lblCapHeadroom->setText(s.empty() ? "-" : tr("no cap"));
     } else {
         qint64 cap = YellowbackJson::toInt(s, Stats::SUPPLY_CAP_CENTS), supply = YellowbackJson::toInt(s, Stats::SUPPLY_CENTS);
-        uiOverview->lblCapHeadroom->setText(tr("%1 of %2 cap").arg(YellowbackFormat::cents(std::max<qint64>(0, cap - supply))).arg(YellowbackFormat::cents(cap)));
+        if (ctl->softSupplyCap() && (ctl->supplyCapReached() || supply >= cap)) {
+            // W20: at or above the cap there is no headroom to show; say what is in circulation
+            // against the cap and which classes can still mint above it
+            const QStringList mintable = ctl->mintableClasses();
+            uiOverview->lblCapHeadroom->setText(mintable.isEmpty()
+                ? tr("%1 of %2 cap — reached").arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap))
+                : tr("%1 of %2 cap — class %3 only").arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap)).arg(mintable.join(tr(" or "))));
+        } else {
+            uiOverview->lblCapHeadroom->setText(tr("%1 of %2 cap").arg(YellowbackFormat::cents(std::max<qint64>(0, cap - supply))).arg(YellowbackFormat::cents(cap)));
+        }
     }
 
     QString blocker = ctl->mintBlocker(0);
@@ -836,7 +845,8 @@ void YellowbackTab::doMint() {
         uiMint->lblMintHint->setText(tr("Enter an amount in dollars and choose a lock length."));
         return;
     }
-    QString blocker = ctl->mintBlocker(cents);
+    // the class matters: under the global-ratio halt or above the supply cap only some classes mint (W16, W20)
+    QString blocker = ctl->mintBlocker(cents, ctl->classForLock(lockBlocks).name);
     if (!blocker.isEmpty()) { uiMint->lblMintHint->setText(blocker); return; }
     auto cls = ctl->classForLock(lockBlocks);
     if (cls.name.isEmpty()) { uiMint->lblMintHint->setText(tr("A lock of %1 blocks falls in no term class.").arg(lockBlocks)); return; }

@@ -122,8 +122,14 @@ public:
     QString mintBlocker(qint64 cents, const QString& termClass = QString()) const;
     /** W16: the classes yed_getstats says can mint now (every class while minting is open). */
     QStringList mintableClasses() const;
-    /** W16: non-blocking notice when the global-ratio halt limits minting to the recapitalising classes; empty otherwise. */
+    /** W16/W20: non-blocking notice when the global-ratio halt or the supply cap (or both) limit
+     *  minting to the classes at or above the recapitalisation floor; empty otherwise. */
     QString mintLimit() const;
+    /** W20: the node reports yed_getinfo.supplyCapReached (a node from before W20 does not, and
+     *  keeps the hard cap: every mint above it is refused). */
+    bool    softSupplyCap() const;
+    /** W20: yed_getinfo.supplyCapReached; false on a node from before W20. */
+    bool    supplyCapReached() const;
     /** The Balance tab's two Yellowback lines (owner's request, regtest plan F-22): the YED
      *  balance, and the YEC locked as collateral in this wallet's active vaults. "-" until known. */
     QString balanceSummary() const;

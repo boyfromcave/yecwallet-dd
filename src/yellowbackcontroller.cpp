@@ -491,7 +491,7 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
 
     // Warnings, most severe first
     if (abandoned)
-        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for two full windows. "
+        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for about 30 days. "
                           "Nobody polices vault spends; after its claim height any vault can be emptied by anyone. "
                           "Sweep your collateral before then (see Vaults).");
     if (valve)
@@ -670,26 +670,57 @@ QStringList YellowbackController::mintableClasses() const {
     return all;
 }
 
-// The one halt a mint can pass (W16): GLOBAL_RATIO alone, with at least one class at or above
-// the recapitalisation floor. Every other halt, and the cap, still stop every mint.
-static bool recapOnly(const json& stats, const QStringList& mintable) {
+bool YellowbackController::softSupplyCap() const {
+    return YellowbackJson::has(infoJson, YellowbackRpc::Info::SUPPLY_CAP_REACHED);
+}
+
+bool YellowbackController::supplyCapReached() const {
+    return softSupplyCap() && YellowbackJson::toBool(infoJson, YellowbackRpc::Info::SUPPLY_CAP_REACHED, false);
+}
+
+// The restrictions a mint can pass when its class reaches the recapitalisation floor: GLOBAL_RATIO
+// alone (W16), the supply cap with no halt bit (W20), or both, with at least one class at or above
+// the floor. Every other halt still stops every mint; so does the cap on a node from before W20.
+static bool recapOnly(const json& stats, const QStringList& mintable, bool capReached) {
     using namespace YellowbackRpc;
+    if (mintable.isEmpty()) return false;
     QStringList halts = YellowbackJson::strings(stats, Stats::HALT_MASK);
-    return halts.size() == 1 && halts.first() == Stats::HALT_GLOBAL_RATIO && !mintable.isEmpty();
+    if (halts.size() == 1 && halts.first() == Stats::HALT_GLOBAL_RATIO) return true;
+    return halts.isEmpty() && capReached;
+}
+
+// "YED in circulation ($X) has reached the supply cap ($Y, Z % of issued YEC value)"
+static QString capPhrase(const json& stats, const json& params) {
+    using namespace YellowbackRpc;
+    return QObject::tr("YED in circulation (%1) has reached the supply cap (%2, %3 of issued YEC value)")
+        .arg(YellowbackFormat::cents(YellowbackJson::toInt(stats, Stats::SUPPLY_CENTS)))
+        .arg(YellowbackJson::isNull(stats, Stats::SUPPLY_CAP_CENTS) ? QObject::tr("undefined") : YellowbackFormat::cents(YellowbackJson::toInt(stats, Stats::SUPPLY_CAP_CENTS)))
+        .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(params, Params::SUPPLY_CAP_BPS)));
 }
 
 QString YellowbackController::mintLimit() const {
     using namespace YellowbackRpc;
     if (!available || statsJson.empty()) return QString();
     const QStringList mintable = mintableClasses();
-    if (!recapOnly(statsJson, mintable)) return QString();
+    const bool cap = supplyCapReached();
+    if (!recapOnly(statsJson, mintable, cap)) return QString();
+    const bool ratio = YellowbackJson::strings(statsJson, Stats::HALT_MASK).contains(Stats::HALT_GLOBAL_RATIO);
+    const QString globalRatio = YellowbackJson::isNull(statsJson, Stats::GLOBAL_RATIO_BPS) ? tr("undefined") : YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(statsJson, Stats::GLOBAL_RATIO_BPS));
+    const QString haltFloor = YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::GLOBAL_RATIO_HALT_BPS, 25000));
+    const QString recapFloor = YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000));
+    if (ratio && cap)
+        return tr("Minting is limited: the system-wide collateral ratio is %1, below its %2 floor, and %3. "
+                  "Only class %4 can mint until both clear, because its minimum ratio reaches the %5 recapitalisation floor; "
+                  "every such mint raises the ratio and is heavily over-collateralised.")
+            .arg(globalRatio).arg(haltFloor).arg(capPhrase(statsJson, paramsJson)).arg(mintable.join(tr(" or "))).arg(recapFloor);
+    if (cap)
+        return tr("Minting is limited: %1. Only class %2 can mint above the cap, because its minimum ratio reaches the %3 floor; "
+                  "such mints are heavily over-collateralised.")
+            .arg(capPhrase(statsJson, paramsJson)).arg(mintable.join(tr(" or "))).arg(recapFloor);
     return tr("Minting is limited: the system-wide collateral ratio is %1, below its %2 floor. "
               "Only class %3 can mint until it recovers, because its minimum ratio reaches the %4 recapitalisation floor; "
               "every such mint raises the ratio.")
-        .arg(YellowbackJson::isNull(statsJson, Stats::GLOBAL_RATIO_BPS) ? tr("undefined") : YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(statsJson, Stats::GLOBAL_RATIO_BPS)))
-        .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::GLOBAL_RATIO_HALT_BPS, 25000)))
-        .arg(mintable.join(tr(" or ")))
-        .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000)));
+        .arg(globalRatio).arg(haltFloor).arg(mintable.join(tr(" or "))).arg(recapFloor);
 }
 
 QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass) const {
@@ -698,7 +729,9 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
     if (statsJson.empty()) return tr("Waiting for yed_getstats.");
 
     const QStringList mintable = mintableClasses();
-    const bool limited = recapOnly(statsJson, mintable);
+    const bool cap = supplyCapReached();
+    const bool limited = recapOnly(statsJson, mintable, cap);
+    const qint64 recap = YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000);
     QStringList halts = YellowbackJson::strings(statsJson, Stats::HALT_MASK);
     if (!halts.isEmpty() && !limited) {
         QStringList lines;
@@ -711,7 +744,6 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
                          .arg(YellowbackFormat::blocksAndDuration(slow));
         }
         if (halts.contains(Stats::HALT_GLOBAL_RATIO)) {
-            const qint64 recap = YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000);
             QStringList recapClasses;
             for (const auto& c : termClasses()) if (c.baseRatioBps >= recap) recapClasses << c.name;
             lines << tr("The global ratio recovers as the price rises or as vaults are redeemed and claimed; once it is the only halt left, class %1 can mint again and each such mint raises it.")
@@ -720,20 +752,37 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
         return tr("Minting is paused. ") % lines.join(" ");
     }
     if (limited && !termClass.isEmpty() && !mintable.contains(termClass)) {
+        const bool ratio = halts.contains(Stats::HALT_GLOBAL_RATIO);
+        const QString globalRatio = YellowbackJson::isNull(statsJson, Stats::GLOBAL_RATIO_BPS) ? tr("undefined") : YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(statsJson, Stats::GLOBAL_RATIO_BPS));
+        const QString haltFloor = YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::GLOBAL_RATIO_HALT_BPS, 25000));
+        const QString capCents = YellowbackJson::isNull(statsJson, Stats::SUPPLY_CAP_CENTS) ? tr("undefined") : YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS));
+        if (ratio && cap)
+            return tr("Class %1 cannot mint while the system-wide collateral ratio (%2) is below its %3 floor and YED in circulation (%4) is at the supply cap (%5): "
+                      "only class %6 can, because its minimum ratio reaches the %7 recapitalisation floor. Choose that lock length, or wait for both to clear.")
+                .arg(termClass).arg(globalRatio).arg(haltFloor)
+                .arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS))).arg(capCents)
+                .arg(mintable.join(tr(" or "))).arg(YellowbackFormat::bpsAsPercent(recap));
+        if (cap)
+            return tr("Class %1 cannot mint while YED in circulation (%2) is at the supply cap (%3): above the cap only class %4 can, "
+                      "because its minimum ratio reaches the %5 floor. Choose that lock length, or wait for redemptions or a higher YEC price to make room.")
+                .arg(termClass).arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS))).arg(capCents)
+                .arg(mintable.join(tr(" or "))).arg(YellowbackFormat::bpsAsPercent(recap));
         return tr("Class %1 cannot mint while the system-wide collateral ratio (%2) is below its %3 floor: only class %4 can, "
                   "because its minimum ratio reaches the %5 recapitalisation floor. Choose that lock length, or wait for the ratio to recover.")
-            .arg(termClass)
-            .arg(YellowbackJson::isNull(statsJson, Stats::GLOBAL_RATIO_BPS) ? tr("undefined") : YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(statsJson, Stats::GLOBAL_RATIO_BPS)))
-            .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::GLOBAL_RATIO_HALT_BPS, 25000)))
+            .arg(termClass).arg(globalRatio).arg(haltFloor)
             .arg(mintable.join(tr(" or ")))
-            .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(paramsJson, Params::RECAP_RATIO_BPS, 50000)));
+            .arg(YellowbackFormat::bpsAsPercent(recap));
     }
     if (!limited && !YellowbackJson::toBool(statsJson, Stats::MINTING_ALLOWED, true)) {
         // No halt bit, yet not allowed: the supply cap has no room (mintpol-cap)
-        if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS))
-            return tr("Minting is paused: the supply cap (%1) is reached with %2 in circulation.")
+        if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS)) {
+            QString line = tr("Minting is paused: the supply cap (%1) is reached with %2 in circulation.")
                     .arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS)))
                     .arg(YellowbackFormat::cents(YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS)));
+            // W20: above the cap a class at or over the floor could mint, but none reaches it now
+            if (cap) line += tr(" No term class reaches the %1 floor a mint above the cap needs.").arg(YellowbackFormat::bpsAsPercent(recap));
+            return line;
+        }
         return tr("Minting is paused (yed_getstats reports mintingAllowed = false).");
     }
 
@@ -742,11 +791,33 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
             return tr("A mint must be between %1 and %2.")
                     .arg(YellowbackFormat::cents(minMintCents())).arg(YellowbackFormat::cents(maxMintCents()));
         if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS)) {
-            qint64 cap    = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS);
+            qint64 capC   = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS);
             qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
-            if (supply + cents > cap)
-                return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
-                        .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(cap));
+            if (supply + cents > capC) {
+                if (!softSupplyCap())   // a node from before W20: the cap is a ceiling
+                    return tr("Minting %1 would exceed the supply cap (%2 of %3 in circulation).")
+                            .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(capC));
+                // W20 (MINT-6 amended): above the cap only a class whose minimum ratio after the
+                // volatility multiplier reaches the recapitalisation floor is accepted
+                const qint64 sigma = YellowbackJson::toInt(statsJson, Stats::SIGMA_MULT_BPS, 10000);
+                QStringList above;
+                for (const auto& c : termClasses()) if (c.baseRatioBps * sigma / 10000 >= recap) above << c.name;
+                const bool ok = termClass.isEmpty() ? !above.isEmpty() : above.contains(termClass);
+                if (!ok) {
+                    const QString what = termClass.isEmpty() ? tr("Minting %1").arg(YellowbackFormat::cents(cents))
+                                                             : tr("Minting %1 in class %2").arg(YellowbackFormat::cents(cents)).arg(termClass);
+                    if (above.isEmpty())
+                        return tr("%1 would take YED in circulation above the supply cap (%2 of %3), and no term class reaches the %4 floor a mint above the cap needs.")
+                                .arg(what).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(capC)).arg(YellowbackFormat::bpsAsPercent(recap));
+                    return tr("%1 would take YED in circulation above the supply cap (%2 of %3): above the cap only class %4 can mint, "
+                              "because its minimum ratio reaches the %5 floor. %6")
+                            .arg(what).arg(YellowbackFormat::cents(supply)).arg(YellowbackFormat::cents(capC))
+                            .arg(above.join(tr(" or "))).arg(YellowbackFormat::bpsAsPercent(recap))
+                            .arg(capC - supply >= minMintCents()
+                                 ? tr("Choose that lock length, or mint at most %1.").arg(YellowbackFormat::cents(capC - supply))
+                                 : tr("Choose that lock length."));
+                }
+            }
         }
     }
     return QString();
@@ -983,8 +1054,13 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("Minting is paused: the network's overall collateral ratio is too low.");
     if (is(Errors::MINTPOL_DIVERGENCE))
         return tr("Minting is paused: the fast and slow price medians diverge too much.");
-    if (is(Errors::MINTPOL_CAP))
+    if (is(Errors::MINTPOL_CAP)) {
+        // W20: a node with the soft cap names the classes that can still mint above it
+        if (e.contains("above the cap only"))
+            return tr("This mint would take YED in circulation above the supply cap, and its class does not reach the floor a mint above the cap needs. "
+                      "Choose the lock length of a class the node names, or a smaller amount.");
         return tr("Minting is paused: the supply cap is reached.");
+    }
     if (is(Errors::MINT_UNSATISFIABLE))
         return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
     if (is(Errors::MINT_BAD_LOCK))
