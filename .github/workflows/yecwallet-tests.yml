@@ -1,54 +1,318 @@
-# YecWallet fork CI: the Yellowback tab's offline QTest suite and the RPC-contract check.
+# YecWallet fork CI: the Yellowback tab's QTest suites and the RPC-contract checks.
 #
-# The wallet's release build uses a static Qt without testlib (build.sh --package); this job
-# builds the app and the three QTest targets against a Qt 6.5 with testlib instead, the way a
-# developer runs them (docs/yellowback.md), and runs every registered suite offscreen through
-# ctest. The devnet cases QSKIP without YELLOWBACK_DEVNET_DIR. The contract check asserts that every RPC name the wallet
-# uses exists in the generated copy of the node's contract (the workspace's `make spec`).
+# Tiers (workspace CI/CD design, 2026-10-06):
+#   push / pull_request   `contract` (seconds) and `qtest` (the app and the three QTest targets
+#                         built once against Qt 6.5 with testlib, every registered suite run
+#                         offscreen through ctest; the devnet cases QSKIP without
+#                         YELLOWBACK_DEVNET_DIR). Target <= 10 min warm (Qt and ccache restored).
+#   workflow_dispatch     the same, plus `node` + `devnet` when the `devnet` input is set: ycashd
+#                         is built from a node line (ycash-dd or ycash6) at the branch that matches
+#                         this one, a fresh default devnet is brought up, and the QTest binaries
+#                         `qtest` built are run against it (build once, test twice). The component
+#                         repos carry no schedule: the node lines' nightlies own the cross-repo runs.
+#
+# The wallet's release build uses a static Qt without testlib (build.sh --package); `qtest` builds
+# against a Qt 6.5 with testlib instead, the way a developer runs the suites (docs/yellowback.md).
+# ccache keeps the precompiled headers (the sources rely on src/precompiled.h being force-included:
+# singleapplication/singleapplication.cpp does not build without it), so it runs with the PCH
+# sloppiness its manual requires (CMake includes the PCH with -include, which GCC needs).
 name: yecwallet-tests
 
+# The branch list lives once, here: pull_request is unfiltered (every PR runs), push runs on the
+# hardening and upgrade lines, the branch of record (AGENTS.md) and the ci/* branches that carry
+# CI changes before they merge. yecwallet-legacy (the pristine v4.5.0 baseline) is never pushed to.
 on:
   push:
-    branches: [ feature/yellowback-price-attest, yecwallet-legacy ]
+    branches: [ harden/yellowback, upgrade/vault, main, feature/yellowback-price-attest, 'ci/**' ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      devnet:
+        description: Also build ycashd and run the devnet QTest cases against a fresh devnet
+        type: boolean
+        default: false
+      node_line:
+        description: Which node line the devnet runs (both must stay green, AGENTS.md)
+        type: choice
+        options: [ ycash-dd, ycash6 ]
+        default: ycash-dd
+      node_ref:
+        description: Node branch, tag or commit (empty = the branch matching this one)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A newer push or PR update supersedes the older run; a dispatched run is never cancelled.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  QT_VERSION: '6.5.3'
+  # The node repositories (public) the contract copy and the devnet come from.
+  NODE_REPO_YCASH_DD: boyfromcave/ycash-dd
+  NODE_REPO_YCASH6: boyfromcave/ycash6
 
 jobs:
-  wallet:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       # Actions pinned by commit (audit F-7); the comment names the tag the SHA was taken from.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
-      - name: Install the build tools and the libraries Qt links against
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev python3 \
-            libgl1-mesa-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6 libdbus-1-3 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
-      - name: Install Qt 6.5 (the version the wallet builds with; Ubuntu's own Qt 6 is 6.2)
-        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125   # v4 (v4.4.1)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
         with:
-          version: '6.5.3'
-          modules: 'qtwebsockets'
-          cache: true
-      - name: "RPC contract check: yellowbackrpc.h against docs/yellowback-rpc-contract.json"
+          persist-credentials: false
+      - name: "RPC contract check: the RPC headers against docs/yellowback-rpc-contract.json"
         run: python3 tests/check-rpc-contract.py
       - name: "Copy check (plan 8.1): never 'trustless', never a federation"
         run: |
           ! grep -rn -i "trustless" src/ --include=*.cpp --include=*.h --include=*.ui
-      - name: "Configure (system Qt 6, with testlib)"
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: The contract copy equals the node's (ycash-dd at the matching branch)
+        # docs/yellowback-rpc-contract.json is generated by the workspace's `make spec` into the
+        # node and the wallet alike; a copy that drifted from the node's is a wallet built against a
+        # contract the node does not serve. Skipped (with a notice) while the matching node branch
+        # is not on GitHub yet.
+        env:
+          BRANCH: ${{ github.base_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$BRANCH" in
+            ci/harden*|harden/yellowback) node=harden/yellowback ;;
+            ci/upgrade*|upgrade/vault)    node=upgrade/vault ;;
+            *)                            node=feature/yellowback-price-attest ;;
+          esac
+          url="https://raw.githubusercontent.com/$NODE_REPO_YCASH_DD/$node/doc/yellowback-rpc-contract.json"
+          if ! curl -fsSL -o "$RUNNER_TEMP/node-contract.json" "$url"; then
+            echo "::notice::$NODE_REPO_YCASH_DD has no $node (or no contract there) yet; copy comparison skipped"
+            exit 0
+          fi
+          cmp docs/yellowback-rpc-contract.json "$RUNNER_TEMP/node-contract.json" \
+            && echo "docs/yellowback-rpc-contract.json = $NODE_REPO_YCASH_DD@$node doc/yellowback-rpc-contract.json"
+
+  qtest:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install the build tools and the libraries Qt links against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build ccache pkg-config libssl-dev python3 \
+            libgl1-mesa-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+          { echo "CCACHE_DIR=$HOME/.cache/ccache"; echo "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime"; } >> "$GITHUB_ENV"
+      - name: Install Qt 6.5 (the version the wallet builds with; Ubuntu's own Qt 6 is 6.2)
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125   # v4.4.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: 'qtwebsockets'
+          cache: true
+      - name: Restore ccache
+        # Exact key per commit; restore by this branch first, then any branch's (the base branch's
+        # cache is what a new branch or PR may read). Every compiler input is in ccache's own hash,
+        # so a restored entry from another commit can only hit when it is byte-identical.
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-qt${{ env.QT_VERSION }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-qt${{ env.QT_VERSION }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-qt${{ env.QT_VERSION }}-
+      - name: Configure (Qt 6.5 with testlib, through ccache)
+        run: |
+          ccache --zero-stats
+          ccache --max-size=400M
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build the app and the three QTest targets
         run: ninja -C build yecwallet yellowback_test nodecompat_test nodedatacheck_test
+      - name: ccache statistics
+        if: ${{ !cancelled() }}
+        run: ccache --show-stats
       # Every registered suite (CMakeLists.txt): the Yellowback tab, the node-compatibility calls
-      # against a loopback mock node, and the data directory upgrade check (audit F-6).
+      # against a loopback mock node (an ephemeral port, so the suites run in parallel), and the
+      # data directory upgrade check (audit F-6).
       - name: Run the QTest suites offscreen (ctest)
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -j3
       - name: Upload the test log on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
         with:
           name: yellowback-test-output
           path: build/Testing
+          if-no-files-found: ignore
+      - name: Keep the QTest binaries for the devnet job
+        if: github.event_name == 'workflow_dispatch' && inputs.devnet
+        run: tar -C build -cf qtest-bin.tar bin/yellowback_test bin/nodecompat_test
+      - if: github.event_name == 'workflow_dispatch' && inputs.devnet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: qtest-bin
+          path: qtest-bin.tar
+          retention-days: 3
+
+  node:
+    # ycashd for the devnet, from the node line the dispatch names. The binaries are cached per node
+    # commit, so a second dispatch at the same node commit skips the build; depends and the zk
+    # parameters are cached the way the node's own CI caches them.
+    if: github.event_name == 'workflow_dispatch' && inputs.devnet
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    outputs:
+      repo: ${{ steps.ref.outputs.repo }}
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Resolve the node branch
+        id: ref
+        env:
+          LINE: ${{ inputs.node_line }}
+          NODE_REF: ${{ inputs.node_ref }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$LINE" = ycash6 ]; then repo=$NODE_REPO_YCASH6; record=feature/yellowback; else repo=$NODE_REPO_YCASH_DD; record=feature/yellowback-price-attest; fi
+          ref=$NODE_REF
+          if [ -z "$ref" ]; then
+            case "$BRANCH" in
+              ci/harden*|harden/yellowback) ref=harden/yellowback ;;
+              ci/upgrade*|upgrade/vault)    ref=upgrade/vault ;;
+              *)                            ref=$record ;;
+            esac
+          fi
+          if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+            sha=$ref
+          else
+            sha=$(git ls-remote "https://github.com/$repo.git" "refs/heads/$ref" "refs/tags/$ref^{}" "refs/tags/$ref" | awk 'NR==1{print $1}')
+          fi
+          [ -n "$sha" ] || { echo "::error::$repo has no ref $ref"; exit 1; }
+          echo "node: $repo $ref = $sha"
+          { echo "repo=$repo"; echo "sha=$sha"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          repository: ${{ steps.ref.outputs.repo }}
+          ref: ${{ steps.ref.outputs.sha }}
+          path: node
+          persist-credentials: false
+      - name: Cache the node binaries (per node commit)
+        id: cache-bin
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: node-bin.tar
+          key: node-bin-${{ runner.os }}-${{ steps.ref.outputs.repo }}-${{ steps.ref.outputs.sha }}
+      - name: Install build prerequisites
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libc6-dev m4 g++-multilib \
+            autoconf libtool ncurses-dev unzip git python3 zlib1g-dev curl bsdmainutils automake libtinfo5
+      - name: Cache depends
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        id: cache-depends
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: |
+            node/depends/x86_64-pc-linux-gnu
+            node/depends/built
+            node/depends/sources
+          key: depends-${{ runner.os }}-${{ steps.ref.outputs.repo }}-${{ hashFiles('node/depends/packages/**', 'node/depends/Makefile', 'node/depends/hosts/**', 'node/depends/builders/**') }}
+      - name: Build depends
+        if: steps.cache-bin.outputs.cache-hit != 'true' && steps.cache-depends.outputs.cache-hit != 'true'
+        working-directory: node
+        run: BUILD_STAGE=depends ./zcutil/build.sh -j"$(nproc)"
+      - name: Build ycashd and ycash-cli
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        working-directory: node
+        run: |
+          ./zcutil/build.sh -j"$(nproc)"
+          tar -cf ../node-bin.tar src/ycashd src/ycash-cli
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: node-bin
+          path: node-bin.tar
+          retention-days: 3
+
+  devnet:
+    # The devnet QTest cases (docs/yellowback.md "Testing"): the default `yellowback-devnet up`
+    # (ARMED, three attestors) on a fresh directory, then the two suites with YELLOWBACK_DEVNET_DIR.
+    # The cases run in declaration order, as the doc requires.
+    needs: [ qtest, node ]
+    if: github.event_name == 'workflow_dispatch' && inputs.devnet
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          repository: ${{ needs.node.outputs.repo }}
+          ref: ${{ needs.node.outputs.sha }}
+          path: node
+          persist-credentials: false
+      - name: Install the libraries the Qt test binaries and the node load
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libfreetype6 \
+            libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+      - name: Install Qt 6.5 (restored from the cache `qtest` filled; the binaries link it by path)
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125   # v4.4.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: 'qtwebsockets'
+          cache: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5.6.0
+        # 3.11 as the node's CI: the devnet's quote agents read TOML with the stdlib tomllib, and the
+        # inherited framework still imports asyncore, which 3.12 removed.
+        with:
+          python-version: '3.11'
+      - name: Install the devnet's Python prerequisites (as the node's CI)
+        run: |
+          python3 -m pip install --user simplejson pyzmq
+          site=$(python3 -c 'import site; print(site.getusersitepackages())')
+          mkdir -p "$site"
+          printf '%s\n' '"""Shim: pyblake2 is unmaintained; Python 3.6+ has hashlib.blake2b with the same API."""' \
+                        'from hashlib import blake2b, blake2s  # noqa: F401' > "$site/pyblake2.py"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: node-bin
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: qtest-bin
+      - name: Unpack the binaries
+        run: |
+          tar -C node -xf node-bin.tar
+          mkdir -p build && tar -C build -xf qtest-bin.tar
+      - name: Cache zk parameters
+        id: cache-params
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: ~/.zcash-params
+          key: zcash-params-${{ hashFiles('node/zcutil/fetch-params.sh') }}
+      - name: Fetch zk parameters
+        if: steps.cache-params.outputs.cache-hit != 'true'
+        working-directory: node
+        run: ./zcutil/fetch-params.sh
+      - name: Devnet up (default preset, fresh directory)
+        working-directory: node
+        run: python3 contrib/yellowback/devnet/yellowback-devnet up --dir "$RUNNER_TEMP/yb-devnet" --portseed 7 --bitcoind "$PWD/src/ycashd" --no-viz
+      - name: The devnet QTest cases
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export YELLOWBACK_DEVNET_DIR="$RUNNER_TEMP/yb-devnet"
+          build/bin/yellowback_test
+          build/bin/nodecompat_test
+      - name: Devnet down
+        if: ${{ always() }}
+        working-directory: node
+        run: python3 contrib/yellowback/devnet/yellowback-devnet down --dir "$RUNNER_TEMP/yb-devnet" || true
+      - name: Upload the devnet logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: devnet-logs
+          path: |
+            ${{ runner.temp }}/yb-devnet/**/*.log
+            ${{ runner.temp }}/yb-devnet/**/debug.log
           if-no-files-found: ignore
