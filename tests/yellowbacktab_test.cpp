@@ -448,7 +448,17 @@ struct DevnetTransport {
     bool settle(const QString& txid = QString()) {
         for (int w = 0; w < 600; w++) {
             json pool = rpc("getrawmempool"), info = rpc("yed_getinfo"), count = rpc("getblockcount");
-            bool chain = pool.is_array() && pool.empty() && info.is_object() && count.is_number() &&
+            // Only this wallet's transactions count: since P4-b the attestors' agents heartbeat on
+            // their own nodes (SET_HEARTBEAT every heartbeat_blocks), and such a transaction sits in
+            // node 0's mempool until a pool mines it
+            bool ownPending = false;
+            if (pool.is_array())
+                for (const auto& t : pool) {
+                    QString e;
+                    post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "gettransaction"}, {"params", json::array({t})}}, &e);
+                    if (e.isEmpty()) { ownPending = true; break; }
+                }
+            bool chain = pool.is_array() && !ownPending && info.is_object() && count.is_number() &&
                          info.value("height", -1) == count.get<int>() &&
                          info.value("chainHeight", -2) == count.get<int>();
             // The wallet marks the block's inputs spent on its own thread, ~1 s after UpdateTip;
@@ -510,6 +520,29 @@ struct DevnetTransport {
         for (int p : {2, 3, 4})
             rpcOn(p, "yed_setquote", json::array({(qint64)llround(usd.toDouble() * 1000000.0), 1}));
         return ok;
+    }
+    // Every devnet case starts at the devnet's $50 with full price windows: a case that crashed the
+    // market and failed before restoring it would otherwise starve every later mint (pMint is the
+    // lowest window median, so the main transaction of a two-step mint cannot be funded).
+    bool restoreMarket(const QString& usd = "50") {
+        if (!setMarketPrice(usd)) return false;
+        const qint64 floor = (qint64)llround(usd.toDouble() * 1000000.0 * 0.8);
+        for (int i = 0; i < 300; i++) {
+            // both sources: the pools' windows (yed_getstats) and the attestors' bound, which only the
+            // estimate shows (pMint = min(xMint, aMint) while armed; the agents follow their mock
+            // price at their next tick)
+            json st = rpc("yed_getstats");
+            QString e;
+            json est = post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_estimatecollateral"}, {"params", json::array({10000, 48})}}, &e);
+            if (st.is_object() && st["pMint"].is_number() && st["pMint"].get<qint64>() >= floor &&
+                e.isEmpty() && est.is_object() && est["pMint"].is_number() && est["pMint"].get<qint64>() >= floor) return true;
+            // a stale attestation pool (bundle-insufficient) fills at the agents' next tick: wait for it
+            if (!e.isEmpty() && e.contains("bundle-insufficient") && i % 3 != 0) { QTest::qWait(700); continue; }
+            const int before = rpc("getblockcount").get<int>();
+            rpcOn(2 + i % 3, "generate", json::array({1}));
+            for (int w = 0; w < 400 && rpc("getblockcount").get<int>() <= before; w++) QTest::qWait(25);
+        }
+        return false;
     }
     // Node 0's wallet has the transaction in a block already
     bool confirmed(const QString& txid) {
@@ -1359,6 +1392,28 @@ private slots:
         QVERIFY(h.button("btnRedeem")->isVisible() == false || !h.button("btnRedeem")->isEnabled());
         QVERIFY(!h.button("btnRenew")->isEnabled());
         QVERIFY(h.label("lblVaultAction").contains("being claimed"));
+    }
+
+    // Both node lines' yed_listpositions omit `intents` on a CLAIMING row (found on the devnet): the
+    // wallet takes them from yed_listvaults, in either order of arrival
+    void claimingRowIntentsFromListVaults() {
+        json bare = claimingVault(); bare.erase("intents");
+        Harness h;
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({bare}));
+        QVERIFY(h.ctl.positionsModel()->positionAt(0)->intents.isEmpty());
+        h.ctl.feedUpgrade(json::array({claimingVault()}), json(nullptr));
+        QCOMPARE(h.ctl.positionsModel()->positionAt(0)->intents.size(), 2);
+        QCOMPARE(h.ctl.positionsModel()->positionAt(0)->claimantIntent()->releaseHeight, 415);
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({bare}));    // a later yed_listpositions
+        QCOMPARE(h.ctl.positionsModel()->positionAt(0)->intents.size(), 2);
+        QCOMPARE(h.ctl.pendingClaimsModel()->rowAt(0)->mineVault, true);
+        // a claim of an own vault is listed "claimed": it is ours when our YED was burned in it
+        json own = txMint(); own["type"] = "claimed"; own["path"] = "claim"; own["txid"] = CLAIM_TXID; own["amountCents"] = -100000;
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({own}));
+        QVERIFY(h.ctl.pendingClaimsModel()->rowAt(0)->mineClaim);
+        own["amountCents"] = 0;                       // somebody else claimed our vault
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({own}));
+        QVERIFY(!h.ctl.pendingClaimsModel()->rowAt(0)->mineClaim);
     }
 
     // rpcversion 5: the Pending claims page from yed_listvaults "CLAIMING": one row per intent,
@@ -3127,13 +3182,22 @@ private slots:
         DevnetTransport dev;
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
+        QVERIFY2(dev.restoreMarket(), "the devnet price did not come back to $50");
 
         Harness h;
         h.ctl.setTransport(dev.transport());
         h.ctl.onConnected();                        // yed_getinfo, rpcversion check, then every refresh
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
         QCOMPARE(h.ctl.network(), QString("regtest"));
-        QVERIFY(h.ctl.mintBlocker(10000).isEmpty());
+        // an earlier case may have left the price windows short or crashed: pool blocks refill them
+        for (int i = 0; i < 140 && !h.ctl.mintBlocker(10000).isEmpty(); i++) {
+            const int before = dev.rpc("getblockcount").get<int>();
+            dev.rpcOn(2 + i % 3, "generate", json::array({1}));
+            for (int w = 0; w < 400 && dev.rpc("getblockcount").get<int>() <= before; w++) QTest::qWait(25);
+            QVERIFY(dev.settle());
+            h.ctl.refresh(true);
+        }
+        QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
         const qint64 yedBefore = h.ctl.confirmedCents();
         const int    vaultsBefore = h.ctl.positionsModel()->rowCount(QModelIndex());
 
@@ -3143,6 +3207,8 @@ private slots:
         QVERIFY(tier != nullptr && tier->count() >= 1);
         tier->setCurrentIndex(0);
         QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { dev.rpc("generate", json::array({1})); }), "node 0's attestation pool did not become fresh");
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);                            // waitFresh may have mined: the wallet's tip must be the node's
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
@@ -3229,6 +3295,7 @@ private slots:
         DevnetTransport dev;
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
+        QVERIFY2(dev.restoreMarket(), "the devnet price did not come back to $50");
         // Blocks come from the pools (nodes 2-4, round-robin), as `yellowback-devnet mine` does:
         // node 0's own blocks carry no tag, and a run of them halts minting (NO_PRICE) before the
         // renewal's mint leg. Wait for node 0 to have the block.
@@ -3248,6 +3315,10 @@ private slots:
         QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)5);
         QVERIFY2(h.ctl.upgradeActive(), "the devnet's vault upgrade is not active");
         QVERIFY(YellowbackJson::has(h.ctl.info(), YellowbackRpc::Info::MINT_REQUIRES_ARMED));
+        // devnetEndToEnd mines node 0's untagged blocks to its lock height: let the pools refill the price windows
+        for (int i = 0; i < 96 && !h.ctl.mintBlocker(10000).isEmpty(); i++) { mineOne(); h.ctl.refresh(true); }
+        for (int i = 0; i <= h.ctl.refLag(); i++) mineOne();
+        h.ctl.refresh(true);
         QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
         const qint64 yedBefore = h.ctl.confirmedCents();
 
@@ -3256,6 +3327,8 @@ private slots:
         QVERIFY(tier != nullptr && tier->count() >= 1);
         tier->setCurrentIndex(0);
         QVERIFY2(dev.waitFresh(h.ctl.refLag(), mineOne), "node 0's attestation pool did not become fresh");
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);                            // waitFresh may have mined: the wallet's tip must be the node's
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
@@ -3353,6 +3426,7 @@ private slots:
         DevnetTransport dev;
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
+        QVERIFY2(dev.restoreMarket(), "the devnet price did not come back to $50");
         // node 5 runs an automated attestor: its wallet holds a member key of the YED attestor set
         DevnetTransport att;
         if (!att.attachNode(dir, 5, &att.request, &why)) QFAIL(qPrintable(why));
@@ -3378,6 +3452,15 @@ private slots:
                 dev.rpcOn(pools[turn++ % 3], "generate", json::array({1}));
                 for (int w = 0; w < 400 && height() < want; w++) QTest::qWait(25);
             }
+        };
+        // A transaction one node broadcast must reach every pool before one of them mines
+        auto waitInPools = [&](const QString& txid) {
+            auto inPool = [&](int node) {
+                json m = dev.rpcOn(node, "getrawmempool");
+                if (m.is_array()) for (const auto& t : m) if (QString::fromStdString(t.get<std::string>()) == txid) return true;
+                return false;
+            };
+            for (int w = 0; w < 400 && !(inPool(2) && inPool(3) && inPool(4)); w++) QTest::qWait(25);
         };
         auto positionOf = [&](const QString& txid) {
             YellowbackPosition p;
@@ -3411,6 +3494,8 @@ private slots:
             tier->setCurrentIndex(0);                   // the shortest class-A lock
             const int noticesBefore = h.notices.size();
             QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
+            QVERIFY(dev.settle());
+            h.ctl.refresh(true);                        // waitFresh may have mined: the wallet's tip must be the node's
             h.tab.doMint();
             QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
             QVERIFY2(dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); },
@@ -3448,6 +3533,7 @@ private slots:
             for (int t = 0; t < 20 && row == nullptr; t++) {
                 if (t > 0) minePools(1);
                 if (!dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); })) { qWarning("node 0's attestation pool did not become fresh"); return QString(); }
+                dev.settle();
                 h.ctl.refresh(true);
                 for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
                     if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid) row = h.ctl.claimableModel()->rowAt(i);
@@ -3455,7 +3541,23 @@ private slots:
             if (row == nullptr) { qWarning("vault %s is not in yed_listclaimable", qPrintable(vaultTxid)); return QString(); }
             h.errorNotices.clear();
             const int noticesBefore = h.notices.size();
-            h.tab.claimVault(*row);
+            // bundle-insufficient (a stale attestation pool) is answered by the retry dialog, which
+            // sends nothing: mine towards the agents' next tick and try again
+            // (a claim's selection is keyed by the vault outpoint, so waitFresh's probe with the
+            // empty selector does not tell when it can be built: mine and wait for the next tick)
+            for (int t = 0; t < 16; t++) {
+                const int confirmsBefore = h.confirms.size();
+                h.tab.claimVault(*row);
+                if (h.confirms.size() > confirmsBefore && h.confirms.last().startsWith("Claim vault")) break;
+                minePools(1);
+                QTest::qWait(1500);
+                dev.settle();
+                h.ctl.refresh(true);
+                row = nullptr;
+                for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
+                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid) row = h.ctl.claimableModel()->rowAt(i);
+                if (row == nullptr) return QString();
+            }
             if (!h.errorNotices.isEmpty()) { qWarning("%s", qPrintable(h.errorNotices.join("\n"))); return QString(); }
             if (!h.confirms.last().contains(QString("waits in a claim intent for %1 blocks").arg(delay))) { qWarning("%s", qPrintable(h.confirms.last())); return QString(); }
             if (!dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); }, [&]() { minePools(1); })) return QString();
@@ -3491,6 +3593,7 @@ private slots:
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
         QVERIFY2(h.notices.last().startsWith("Release sent|"), qPrintable(h.notices.last()));
         const QString releaseTx = noticeTxid(h.notices.last());
+        waitInPools(releaseTx);
         minePools(1);
         QVERIFY(dev.settle(releaseTx));
         h.ctl.refresh(true);
@@ -3524,6 +3627,7 @@ private slots:
         const QString cancelTx = noticeTxid(a.notices.last());
         QCOMPARE(cancelTx.size(), 64);
         qInfo("cancel result:\n%s", qPrintable(a.notices.last()));
+        waitInPools(cancelTx);                          // node 5 broadcast it
         minePools(1);
         QVERIFY(dev.settle());
         h.ctl.refresh(true);
@@ -3547,8 +3651,11 @@ private slots:
         QVERIFY(!Settings::getInstance()->getYellowbackSignedCancel(claimC % ":0").isEmpty());
         QVERIFY(h.copyIsClean());
         QVERIFY(a.copyIsClean());
-        QVERIFY(dev.setMarketPrice("50"));          // the devnet's price, for the next case
-        minePools(1);
+        // The devnet's price for the next case, through a full slow window: pMint is the lowest
+        // window median, so one crashed window left behind would starve every later mint
+        QVERIFY(dev.setMarketPrice("50"));
+        minePools(70);
+        QVERIFY(dev.settle());
     }
 
     // ── Devnet v3 (A5-b): an attested mint, a claim notice and the emergency claim ────────
@@ -3564,6 +3671,7 @@ private slots:
         DevnetTransport dev;
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
+        QVERIFY2(dev.restoreMarket(), "the devnet price did not come back to $50");
 
         Harness h;
         h.ctl.setTransport(dev.transport());
@@ -3602,6 +3710,8 @@ private slots:
         h.mintAmount("100");
         h.tab.findChild<QComboBox*>("cmbTier")->setCurrentIndex(0);
         QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);                            // waitFresh may have mined: the wallet's tip must be the node's
         h.tab.doMint();
         QVERIFY2(h.confirms.size() == 1, qPrintable("no confirmation; hint: " % h.label("lblMintHint") % "; status: " %
                                                     h.label("lblMintPageStatus") % "; " % h.errorNotices.join("\n")));
@@ -3685,6 +3795,7 @@ private slots:
         QVERIFY2(h.notices.last().contains("claim path: emergency clause (b)"), qPrintable(h.notices.last()));
         QVERIFY(h.copyIsClean());
         writeMock(priceBefore);
+        minePools(70);                                  // a full slow window at the restored price, for the next run
     }
 };
 

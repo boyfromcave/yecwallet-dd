@@ -329,9 +329,18 @@ QString YellowbackController::p2pkhScriptForKeyId(const QString& keyIdHex) {
     return "76a914" % internal.toLower() % "88ac";
 }
 
+// A claim this wallet made: a "claim" row, or a "claimed" row in which this wallet spent YED (the
+// node lists a claim of an own vault as "claimed" on both lines; a stranger's claim of an own vault
+// is "claimed" too, but this wallet's YED did not move in it).
+bool YellowbackController::isOwnClaim(const YellowbackTx& t) {
+    using namespace YellowbackRpc::Transaction;
+    return t.type == TYPE_CLAIM || (t.type == TYPE_CLAIMED && t.path == "claim" && t.amountCents < 0);
+}
+
 void YellowbackController::applyClaimingVaults(const json& arr) {
     claimingJson = arr.is_array() ? arr : json::array();
-    rebuildPendingClaims();
+    if (!positionsJson.empty()) applyPositions(positionsJson);   // re-merges the intents (and rebuilds the pending claims)
+    else rebuildPendingClaims();
 }
 
 void YellowbackController::rebuildPendingClaims() {
@@ -339,7 +348,7 @@ void YellowbackController::rebuildPendingClaims() {
     QSet<QString> myClaims, myVaults;
     for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
         const YellowbackTx* t = transactions->txAt(i);
-        if (t != nullptr && t->type == Transaction::TYPE_CLAIM) myClaims.insert(t->txid);
+        if (t != nullptr && isOwnClaim(*t)) myClaims.insert(t->txid);
     }
     for (int i = 0; ; i++) {
         const YellowbackPosition* p = positions->positionAt(i);
@@ -396,7 +405,7 @@ void YellowbackController::refreshClaimOutcomes() {
     using namespace YellowbackRpc;
     for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
         const YellowbackTx* t = transactions->txAt(i);
-        if (t == nullptr || t->type != Transaction::TYPE_CLAIM || t->expired || t->height <= 0) continue;
+        if (t == nullptr || !isOwnClaim(*t) || t->expired || t->height <= 0) continue;
         const QString claimTxid = t->txid;
         if (outcomes.contains(claimTxid) && (outcomes[claimTxid].outcome == "released" || outcomes[claimTxid].outcome == "cancelled")) continue;
         YellowbackClaimOutcome base;
@@ -567,9 +576,19 @@ void YellowbackController::applyBalance(const json& b) {
 }
 
 void YellowbackController::applyPositions(const json& arr) {
+    positionsJson = arr.is_array() ? arr : json::array();
     QList<YellowbackPosition> list;
-    if (arr.is_array())
-        for (auto& it : arr) list.append(YellowbackPosition::fromJson(it));
+    for (auto& it : positionsJson) list.append(YellowbackPosition::fromJson(it));
+    // Both node lines' yed_listpositions omit `intents` on a CLAIMING row (the wallet-context mirror
+    // of VaultToJSON lacks them; yed_getvault and yed_listvaults carry them): take them from the
+    // CLAIMING vaults of yed_listvaults
+    for (auto& p : list) {
+        if (p.status != YellowbackRpc::Position::STATUS_CLAIMING || !p.intents.isEmpty()) continue;
+        for (auto& v : claimingJson)
+            if (YellowbackJson::toStr(v, YellowbackRpc::Position::TXID) == p.txid &&
+                YellowbackJson::toInt(v, YellowbackRpc::Position::VOUT) == p.vout)
+                p.intents = YellowbackPosition::fromJson(v).intents;
+    }
     positions->setPrices(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_FAST) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_FAST),
                          YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
     positions->setNewData(list, indexHeight);
