@@ -1402,8 +1402,8 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
             auto ask = [=, this](qint64 redeemFee, const QString& feeLine) {
                 const QString text = tr("Renew vault %1: redeem it, then mint %2 of YED again in a new vault.\n\n"
                                         "1. Redeem now: burn %2 of YED from this wallet (%3 confirmed). %4 "
-                                        "Collateral out: about %5 of YEC to a fresh transparent address of this wallet.\n\n"
-                                        "2. Mint, once the redeem is mined: %2 of YED against %6 of YEC (at most %7; the node refuses the mint if the price moves further), "
+                                        "Collateral out: about %5 to a fresh transparent address of this wallet.\n\n"
+                                        "2. Mint, once the redeem is mined: %2 of YED against %6 (at most %7; the node refuses the mint if the price moves further), "
                                         "lock %8 blocks (class %9). Lock height about %10 (~%11), claim height about %12 (~%13). "
                                         "Collateral ratio %14 at a mint price of %15 per YEC. The new vault is funded from your transparent YEC, "
                                         "which the redeem pays back into, and pays its own enforcement fee.\n\n"
@@ -1442,7 +1442,7 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
                             .arg(YellowbackFormat::zec(fee)).arg(YellowbackFormat::zec(p.collateralZat)).arg(YellowbackFormat::zec(local)) }), true);
                         return;
                     }
-                    ask(fee, tr("Enforcement fee: %1 of YEC from the collateral.").arg(YellowbackFormat::zec(fee)));
+                    ask(fee, tr("Enforcement fee: %1 from the collateral.").arg(YellowbackFormat::zec(fee)));
                 },
                 [=, this](const QString& err) {
                     if (err.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive)) ask(0, tr("Enforcement fee: none (no pool published a price quote in the payee window)."));
@@ -1487,7 +1487,7 @@ void YellowbackTab::continueRenew() {
             if (!bad.isEmpty()) { stop(tr("the node's estimate failed the wallet's check (%1).").arg(bad.join("; "))); return; }
             const qint64 collateral = YellowbackController::mintCollateralZatFor(ctl->params(), YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT));
             if (collateral > r.maxCollateralZat) {
-                stop(tr("the new vault now needs %1 of YEC, above the %2 you confirmed.").arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(r.maxCollateralZat)));
+                stop(tr("the new vault now needs %1, above the %2 you confirmed.").arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(r.maxCollateralZat)));
                 return;
             }
             ctl->mint(r.cents, r.lockBlocks, QString(), r.maxCollateralZat,

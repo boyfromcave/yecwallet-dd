@@ -3019,6 +3019,124 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
+    // ── Devnet renew (hardening H5-a, H-9.2) ─────────────────────────────────────────────
+    // Mint $100 through the Mint page (two-step), wait for its lock height, then Renew through
+    // the Vaults page: one confirmation, the redeem at once, the mint when the redeem is mined.
+    // Every figure the dialogs show passed the wallet's H-9.3 recomputation against the real node.
+    void devnetMintAndRenew() {
+        QString dir = qEnvironmentVariable("YELLOWBACK_DEVNET_DIR");
+        if (dir.isEmpty())
+            QSKIP("YELLOWBACK_DEVNET_DIR is unset: the devnet case needs a running node");
+        DevnetTransport dev;
+        QString why;
+        if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
+        // Blocks come from the pools (nodes 2-4, round-robin), as `yellowback-devnet mine` does:
+        // node 0's own blocks carry no tag, and a run of them halts minting (NO_PRICE,
+        // PARTICIPATION) before the renewal's mint leg. Wait for node 0 to have the block.
+        int pool = 0;
+        auto mineOne = [&]() {
+            const int before = dev.rpc("getblockcount").get<int>();
+            dev.rpcOn(2 + (pool++ % 3), "generate", json::array({1}));
+            for (int w = 0; w < 400 && dev.rpc("getblockcount").get<int>() <= before; w++) QTest::qWait(25);
+        };
+        auto mineTo = [&](int target) { while (dev.rpc("getblockcount").get<int>() < target) mineOne(); };
+
+        Harness h;
+        h.ctl.setTransport(dev.transport());
+        h.ctl.setPendingPollMs(250);
+        h.ctl.onConnected();
+        QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
+        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)4);
+        QVERIFY(YellowbackJson::has(h.ctl.info(), YellowbackRpc::Info::MINT_REQUIRES_ARMED));
+        QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
+        const qint64 yedBefore = h.ctl.confirmedCents();
+
+        h.mintAmount("100");
+        auto tier = h.tab.findChild<QComboBox*>("cmbTier");
+        QVERIFY(tier != nullptr && tier->count() >= 1);
+        tier->setCurrentIndex(0);
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), mineOne), "node 0's attestation pool did not become fresh");
+        h.tab.doMint();
+        QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        QVERIFY2(dev.awaitTwoStep([&]() { return !h.notices.isEmpty() || !h.errorNotices.isEmpty(); }, mineOne),
+                 qPrintable("no mint result; status: " % h.label("lblMintPageStatus")));
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        const QString mintTxid = noticeTxid(h.notices[0]);
+        QVERIFY2(mintTxid.size() == 64, qPrintable(h.notices[0]));
+        mineOne();
+        QVERIFY(dev.settle(mintTxid));
+        h.ctl.refresh(true);
+        YellowbackPosition vault;
+        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
+            if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
+        QCOMPARE(vault.status, QString("ACTIVE"));
+        QCOMPARE(vault.mintedCents, (qint64)10000);
+        // H-9.3 on the node's own record: claimHeight = lockHeight + GRACE, lockHeight − refHeight in class A
+        QVERIFY2(YellowbackController::checkVaultHeights(h.ctl.params(), vault).isEmpty(),
+                 qPrintable(YellowbackController::checkVaultHeights(h.ctl.params(), vault).join("; ")));
+        const int lockBlocks = vault.lockHeight - vault.refHeight;
+        qInfo("minted vault %s: refHeight %d lockHeight %d claimHeight %d collateral %lld",
+              qPrintable(mintTxid), vault.refHeight, vault.lockHeight, vault.claimHeight, (long long)vault.collateralZat);
+        // regtest GRACE is 24 blocks, so the claim height is always inside the one-day warning
+        QVERIFY(!h.ctl.deadlineWarnings().isEmpty());
+
+        // To the lock height, then Renew
+        mineTo(vault.lockHeight);
+        QVERIFY(dev.settle());
+        QVERIFY2(dev.waitFresh(h.ctl.refLag(), mineOne), "node 0's attestation pool did not become fresh");
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);
+        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
+            if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
+        auto acts = YellowbackTab::vaultActions(vault, h.ctl.height(), h.ctl.isAbandoned());
+        QVERIFY(acts.renew && acts.redeem);
+        QVERIFY2(h.ctl.mintBlocker(vault.mintedCents, h.ctl.classForLock(h.ctl.renewLockBlocks(vault)).name).isEmpty(),
+                 qPrintable(h.ctl.mintBlocker(vault.mintedCents)));
+        const int noticesBefore = h.notices.size();
+        const int confirmsBefore = h.confirms.size();
+        h.tab.renewVault(vault);
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        QCOMPARE(h.confirms.size(), confirmsBefore + 1);
+        QVERIFY(h.confirms.last().startsWith("Renew vault " % mintTxid));
+        QVERIFY(h.tab.renewPending());
+        qInfo("renew confirmation:\n%s", qPrintable(h.confirms.last()));
+
+        // Mine the redeem; the next yed_listpositions reads the vault CLOSED and the mint leg goes
+        // out (two-step): keep the attestation pool fresh and mine until the result is posted
+        QVERIFY(dev.awaitTwoStep([&]() {
+                    if (h.notices.size() > noticesBefore || !h.errorNotices.isEmpty() || !h.tab.renewPending()) return true;
+                    h.ctl.refresh(true);
+                    return false;
+                }, [&]() { dev.waitFresh(h.ctl.refLag(), mineOne, 10); mineOne(); }, 30));
+        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+        QVERIFY2(h.notices.size() == noticesBefore + 1 && h.notices.last().startsWith("Vault renewed|"),
+                 qPrintable(h.notices.join("\n") % " / " % h.label("lblVaultAction")));
+        qInfo("renew result:\n%s", qPrintable(h.notices.last()));
+        const QString newTxid = noticeTxid(h.notices.last().section("Minted $", 1));
+        QVERIFY2(newTxid.size() == 64 && newTxid != mintTxid, qPrintable(h.notices.last()));
+        mineOne();
+        QVERIFY(dev.settle(newTxid));
+        h.ctl.refresh(true);
+        YellowbackPosition old, fresh;
+        for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++) {
+            const YellowbackPosition* q = h.ctl.positionsModel()->positionAt(i);
+            if (q->txid == mintTxid) old = *q;
+            if (q->txid == newTxid)  fresh = *q;
+        }
+        QCOMPARE(old.status, QString("CLOSED"));
+        QCOMPARE(old.burnedCents, (qint64)10000);
+        QCOMPARE(fresh.status, QString("ACTIVE"));
+        QCOMPARE(fresh.mintedCents, (qint64)10000);
+        QCOMPARE(fresh.lockHeight - fresh.refHeight, lockBlocks);                 // the same lock length
+        QVERIFY(fresh.claimHeight > vault.claimHeight);                          // the deadline moved out
+        QVERIFY(YellowbackController::checkVaultHeights(h.ctl.params(), fresh).isEmpty());
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);                      // burned 100, minted 100
+        qInfo("renewed vault %s: refHeight %d lockHeight %d claimHeight %d (old claimHeight %d)",
+              qPrintable(newTxid), fresh.refHeight, fresh.lockHeight, fresh.claimHeight, vault.claimHeight);
+        QVERIFY(h.copyIsClean());
+    }
+
     // ── Devnet claim and sweep (N28, L10, L13) ───────────────────────────────────────────
     // The whole schedule is the test's own: it crashes the pools' quotes for a full slow window
     // so pClaim = max(pMid, pSlow) falls (the sequence of ycash-dd/qa/rpc-tests/yellowback_claim.py),
