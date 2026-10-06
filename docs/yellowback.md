@@ -56,6 +56,26 @@ before W20 has no `supplyCapReached`: the cap stays a ceiling there and the wall
 exactly as it did. The abandonment banner says "about 30 days" (W21: `ABANDON_BLOCKS` = `GRACE`
 on mainnet and testnet; regtest keeps 128 blocks).
 
+**Hardening H5-a (rpcversion 4, 2026-10-05).** The wallet accepts `rpcversion` 4 only.
+*Deadlines (H-9.2):* every ACTIVE vault states its lock and claim heights with estimated dates
+(the table and the action line); from `lockHeight` the Vaults page offers **Renew** beside
+Redeem — one confirmation covering both legs: `yed_redeem` at once, then, when
+`yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's own lock
+length (or the shortest enabled one), funded from the transparent balance the redeem paid back
+into and held to the `maxCollateralZat` the dialog showed; a mint that cannot be built then
+(minting paused, price past the cap, the vault claimed instead) stops the renewal with a notice
+and sends nothing else. From `claimHeight − 1 day` (1,152 blocks) the banner warns persistently
+about the vault (a VOID one: release). The sunset warning of H-9.2 is dropped (upgrade plan §7).
+*Plausibility (H-9.3):* before any confirmation the wallet recomputes from `yed_getinfo.params`
+FEE-1, AFEE-1, `requiredZat` (and MINT-5's `4 · FEE_MIN` floor, which is what the vault locks
+and what `maxCollateralZat` caps), `refHeight = tip − REF_LAG` (one block of slack),
+`lockHeight = refHeight + lockBlocks`, `claimHeight = lockHeight + GRACE`, the class and its
+ratio, and refuses to send on any mismatch; `yed_claim` carries `minOutZat` and `maxBurnCents`
+(the debt plus at most the H4 sub-dollar remainder). *Mint gate (H-1, H-5):* with
+`mintRequiresArmed` and the layer not ARMED the Mint page and Renew are paused by name;
+disabled classes (empty term ranges) are not offered and the page says only class A can be
+minted; MAX_MINT is $2,500 off regtest (H-12; the contract does not report it).
+
 **Errors.** Node error strings are stable identifiers and are always shown verbatim
 (`yed_x failed: <message>`); `YellowbackController::explainError` appends what the identifier
 means for `yellowback-unhealthy`, `change-floor`, `not-a-yellowback-address`, `insufficient-yed`,
