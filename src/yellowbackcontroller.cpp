@@ -616,7 +616,8 @@ QList<QPair<QString, double>> YellowbackController::transparentAddresses() const
 // MIN_MINT / MAX_MINT / MIN_OUTPUT are §3.1 constants the v2 contract does not report; the
 // compiled-in values stand (the node refuses out-of-range amounts anyway).
 qint64 YellowbackController::minMintCents() const   { return YellowbackRpc::MIN_MINT_CENTS; }
-qint64 YellowbackController::maxMintCents() const   { return YellowbackRpc::MAX_MINT_CENTS; }
+// H-12: MAX_MINT is $2,500 on mainnet and testnet for the first parameter lifetime; regtest keeps $10,000.
+qint64 YellowbackController::maxMintCents() const   { return net == "regtest" || net.isEmpty() ? YellowbackRpc::MAX_MINT_CENTS : YellowbackRpc::MAX_MINT_CENTS_GUARDED; }
 qint64 YellowbackController::minOutputCents() const { return YellowbackRpc::MIN_OUTPUT_CENTS; }
 int    YellowbackController::refLag() const         { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_LAG, 0); }
 int    YellowbackController::refWindow() const      { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_WINDOW, 0); }
@@ -733,6 +734,12 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
     using namespace YellowbackRpc;
     if (!available) return reason;
     if (statsJson.empty()) return tr("Waiting for yed_getstats.");
+
+    // H-1: on a network that requires it, no mint is built while the layer is not ARMED (the node
+    // refuses mintpol-unarmed; mintableClasses is empty), whatever else the halt mask says
+    if (mintRequiresArmed() && !isArmed())
+        return tr("Minting is paused until the attestation layer is ARMED (%1): on this network every mint needs an attested price, "
+                  "and a mint without one would be VOID (mint-halted-unarmed).").arg(describeAttest(attest()));
 
     const QStringList mintable = mintableClasses();
     const bool cap = supplyCapReached();
@@ -861,9 +868,9 @@ void YellowbackController::redeem(const QString& vaultTxid, const QString& to, O
 
 // yed_claim <vaultTxid> [to] [bundleHex] [wait]: "" for the default destination, the bundle
 // from the pool, wait false (as yed_mint).
-void YellowbackController::claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, OkFn ok, ErrFn err) {
-    // yed_claim "vaultTxid" ( "to" "bundleHex" wait minOutZat )
-    call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString(), "", false, minOutZat}), ok, err);
+void YellowbackController::claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, qint64 maxBurnCents, OkFn ok, ErrFn err) {
+    // yed_claim "vaultTxid" ( "to" "bundleHex" wait minOutZat maxBurnCents )
+    call(YellowbackRpc::CLAIM, json::array({vaultTxid.toStdString(), to.toStdString(), "", false, minOutZat, maxBurnCents}), ok, err);
 }
 
 void YellowbackController::claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err) {
@@ -1014,9 +1021,205 @@ void YellowbackController::getFeePayee(int refHeight, qint64 collateralZat, OkFn
 }
 
 YellowbackController::TermClass YellowbackController::classForLock(int lockBlocks) const {
-    for (const auto& c : termClasses())
+    for (const auto& c : enabledClasses())
         if (lockBlocks >= c.minBlocks && lockBlocks <= c.maxBlocks) return c;
     return TermClass();
+}
+
+QList<YellowbackController::TermClass> YellowbackController::enabledClasses() const {
+    QList<TermClass> out;
+    for (const auto& c : termClasses()) if (c.enabled()) out.append(c);
+    return out;
+}
+
+// ── Hardening H-1 / H-5 ───────────────────────────────────────────────────────────────────
+
+bool YellowbackController::mintRequiresArmed() const {
+    return YellowbackJson::toBool(infoJson, YellowbackRpc::Info::MINT_REQUIRES_ARMED, false);
+}
+
+bool YellowbackController::isArmed() const {
+    return YellowbackJson::toBool(attest(), YellowbackRpc::Attest::ARMED, false);
+}
+
+QString YellowbackController::mintClassNote() const {
+    QStringList lines;
+    const auto all = termClasses();
+    const auto on  = enabledClasses();
+    if (!all.isEmpty() && on.size() < all.size()) {
+        QStringList offered, disabled;
+        for (const auto& c : all) {
+            if (c.enabled())
+                offered << tr("class %1 (lock %2–%3 blocks, about %4–%5 days, base ratio %6)").arg(c.name).arg(c.minBlocks).arg(c.maxBlocks)
+                               .arg((qint64)c.minBlocks * YellowbackRpc::SECONDS_PER_BLOCK / 86400)
+                               .arg((qint64)c.maxBlocks * YellowbackRpc::SECONDS_PER_BLOCK / 86400)
+                               .arg(YellowbackFormat::bpsAsPercent(c.baseRatioBps));
+            else
+                disabled << c.name;
+        }
+        lines << (offered.isEmpty()
+                  ? tr("No term class is enabled on this network: minting is not offered.")
+                  : tr("Only %1 can be minted on this network: class %2 %3 disabled in this release's parameters.")
+                        .arg(offered.join(tr(" or "))).arg(disabled.join(tr(" and "))).arg(disabled.size() == 1 ? tr("is") : tr("are")));
+    }
+    if (mintRequiresArmed())
+        lines << (isArmed()
+                  ? tr("Every mint on this network needs the attestation layer ARMED (it is): a mint priced without the attestors' bound would be VOID.")
+                  : tr("Every mint on this network needs the attestation layer ARMED, and it is not (%1): minting waits for it, because a mint without an attested price would be VOID (mint-halted-unarmed).")
+                        .arg(describeAttest(attest())));
+    return lines.join(" ");
+}
+
+// ── Hardening H-9.3: local recomputation ──────────────────────────────────────────────────
+
+static constexpr qint64 ZAT_PER_YEC = 100000000;
+
+qint64 YellowbackController::feeZatFor(const json& params, qint64 collateralZat) {
+    using namespace YellowbackRpc;
+    const qint64 feeMin = YellowbackJson::toInt(params, Params::FEE_MIN_ZAT, 0);
+    const qint64 feeBps = std::max<qint64>(0, YellowbackJson::toInt(params, Params::FEE_BPS, 0));
+    const __int128 f = (__int128)std::max<qint64>(0, collateralZat) * feeBps / 10000;
+    return std::max<qint64>(feeMin, (qint64)f);
+}
+
+qint64 YellowbackController::attestFeeZatFor(const json& params, qint64 feeZat) {
+    using namespace YellowbackRpc;
+    const qint64 bps = YellowbackJson::toInt(YellowbackJson::obj(params, Params::ATTEST), ParamsAttest::ATTEST_FEE_BPS, 0);
+    if (feeZat <= 0 || bps <= 0) return 0;
+    return (qint64)((__int128)feeZat * bps / 10000);
+}
+
+qint64 YellowbackController::requiredZatFor(qint64 cents, qint64 minRatioBps, qint64 pMint) {
+    if (cents <= 0 || minRatioBps <= 0 || pMint <= 0) return -1;
+    const __int128 num = (__int128)cents * minRatioBps * ZAT_PER_YEC;
+    __int128 r = (num + pMint - 1) / pMint;
+    if (r % 1000 != 0) r += 1000 - r % 1000;
+    if (r > (__int128)21000000 * ZAT_PER_YEC) return -1;    // MAX_MONEY (K14): mint-unsatisfiable
+    return (qint64)r;
+}
+
+qint64 YellowbackController::mintCollateralZatFor(const json& params, qint64 requiredZat) {
+    if (requiredZat < 0) return -1;
+    qint64 c = std::max(requiredZat, 4 * YellowbackJson::toInt(params, YellowbackRpc::Params::FEE_MIN_ZAT, 0));
+    if (c % 1000 != 0) c += 1000 - c % 1000;
+    return c;
+}
+
+QStringList YellowbackController::checkEstimate(const json& params, int indexHeight, qint64 cents, int lockBlocks, const json& e) {
+    using namespace YellowbackRpc;
+    QStringList bad;
+    auto mismatch = [&](const QString& what, qint64 node, qint64 local) {
+        if (node != local) bad << tr("%1 is %2 where the parameters give %3").arg(what).arg(node).arg(local);
+    };
+    const int refLag = (int)YellowbackJson::toInt(params, Params::REF_LAG, 0);
+    const int grace  = (int)YellowbackJson::toInt(params, Params::GRACE, 0);
+    const int ref    = (int)YellowbackJson::toInt(e, Estimate::REF_HEIGHT, -1);
+    const int refNow = std::max(0, indexHeight - refLag);
+    // the node's tip may be one block past the wallet's last yed_getinfo: allow refNow + 1, never more
+    if (ref != refNow && ref != refNow + 1)
+        bad << tr("refHeight is %1 where the tip %2 less REF_LAG %3 gives %4").arg(ref).arg(indexHeight).arg(refLag).arg(refNow);
+    const qint64 lock = YellowbackJson::toInt(e, Estimate::LOCK_HEIGHT, -1);
+    mismatch(tr("lockHeight"), lock, (qint64)ref + lockBlocks);
+    mismatch(tr("claimHeight"), YellowbackJson::toInt(e, Estimate::CLAIM_HEIGHT, -1), lock + grace);
+    // the class and its ratio, from params.classes (enabled rows only, H-5)
+    TermClass cls;
+    if (params.is_object() && params.find(Params::CLASSES) != params.end() && params[Params::CLASSES].is_array())
+        for (auto& c : params[Params::CLASSES]) {
+            TermClass t;
+            t.name = YellowbackJson::toStr(c, ParamClass::CLASS);
+            t.minBlocks = (int)YellowbackJson::toInt(c, ParamClass::MIN_BLOCKS);
+            t.maxBlocks = (int)YellowbackJson::toInt(c, ParamClass::MAX_BLOCKS);
+            t.baseRatioBps = YellowbackJson::toInt(c, ParamClass::BASE_RATIO_BPS);
+            if (t.enabled() && lockBlocks >= t.minBlocks && lockBlocks <= t.maxBlocks) { cls = t; break; }
+        }
+    if (cls.name.isEmpty()) {
+        bad << tr("a lock of %1 blocks falls in no enabled term class").arg(lockBlocks);
+        return bad;
+    }
+    if (YellowbackJson::toStr(e, Estimate::TERM_CLASS) != cls.name)
+        bad << tr("termClass is %1 where a lock of %2 blocks is class %3").arg(YellowbackJson::toStr(e, Estimate::TERM_CLASS)).arg(lockBlocks).arg(cls.name);
+    mismatch(tr("baseRatioBps"), YellowbackJson::toInt(e, Estimate::BASE_RATIO_BPS, -1), cls.baseRatioBps);
+    const qint64 sigma = YellowbackJson::toInt(e, Estimate::SIGMA_MULT_BPS, -1);
+    if (sigma < 10000) bad << tr("sigmaMultBps is %1, below its floor of 10000").arg(sigma);
+    const qint64 minRatio = cls.baseRatioBps * sigma / 10000;
+    mismatch(tr("minRatioBps"), YellowbackJson::toInt(e, Estimate::MIN_RATIO_BPS, -1), minRatio);
+    if (!YellowbackJson::isNull(e, Estimate::REQUIRED_ZAT)) {
+        const qint64 required = YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT);
+        mismatch(tr("requiredZat"), required, requiredZatFor(cents, minRatio, YellowbackJson::toInt(e, Estimate::P_MINT, -1)));
+        // AFEE-1 on FEE-1 of the requirement, and only when a bundle was used (armed)
+        if (YellowbackJson::has(e, Estimate::ATTEST_FEE_ZAT)) {
+            const qint64 af = YellowbackJson::toInt(e, Estimate::ATTEST_FEE_ZAT);
+            const bool bundle = !YellowbackJson::strings(e, Estimate::BUNDLE_SEQS).isEmpty() ||
+                                (e.is_object() && e.find(Estimate::BUNDLE_SEQS) != e.end() && e[Estimate::BUNDLE_SEQS].is_array() && !e[Estimate::BUNDLE_SEQS].empty());
+            mismatch(tr("attestFeeZat"), af, bundle ? attestFeeZatFor(params, feeZatFor(params, required)) : 0);
+        }
+    }
+    return bad;
+}
+
+QStringList YellowbackController::checkClaimable(const json& params, int indexHeight, const YellowbackClaimable& c) {
+    QStringList bad;
+    const qint64 fee = feeZatFor(params, c.collateralZat);
+    if (c.feeZat != fee)
+        bad << tr("the enforcement fee is %1 where FEE-1 of the collateral gives %2").arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(fee));
+    const qint64 af = attestFeeZatFor(params, fee);
+    if (c.attestFeeZat != 0 && c.attestFeeZat != af)
+        bad << tr("the attestation fee is %1 where AFEE-1 gives %2").arg(YellowbackFormat::zec(c.attestFeeZat)).arg(YellowbackFormat::zec(af));
+    if (c.residualZat < 0 || c.collateralZat - fee - c.attestFeeZat - c.residualZat <= 0)
+        bad << tr("the residual %1 leaves nothing of the collateral %2 for the claimant").arg(YellowbackFormat::zec(c.residualZat)).arg(YellowbackFormat::zec(c.collateralZat));
+    if (indexHeight < c.claimHeight)
+        bad << tr("the claim height %1 is not reached (the chain is at %2)").arg(c.claimHeight).arg(indexHeight);
+    return bad;
+}
+
+QStringList YellowbackController::checkVaultHeights(const json& params, const YellowbackPosition& p) {
+    QStringList bad;
+    if (!params.is_object() || !YellowbackJson::has(params, YellowbackRpc::Params::GRACE)) return bad;
+    const int grace = (int)YellowbackJson::toInt(params, YellowbackRpc::Params::GRACE);
+    if (p.claimHeight != p.lockHeight + grace)
+        bad << tr("its claim height %1 is not its lock height %2 plus GRACE %3").arg(p.claimHeight).arg(p.lockHeight).arg(grace);
+    if (p.lockHeight <= p.refHeight)
+        bad << tr("its lock height %1 is not after its reference height %2").arg(p.lockHeight).arg(p.refHeight);
+    return bad;
+}
+
+// ── Hardening H-9.2: deadlines ────────────────────────────────────────────────────────────
+
+QString YellowbackController::deadlineWarning(const YellowbackPosition& p, int height) {
+    using namespace YellowbackRpc::Position;
+    if (height <= 0 || (p.status != STATUS_ACTIVE && p.status != STATUS_VOID)) return QString();
+    if (height < p.claimHeight - BLOCKS_PER_DAY) return QString();
+    const QString vault = p.txid.left(12) % "…";
+    const QString when = YellowbackFormat::estimateDate(p.claimHeight, height).toString("yyyy-MM-dd HH:mm");
+    if (p.status == STATUS_VOID) {
+        if (height >= p.claimHeight)
+            return tr("VOID vault %1 is past its claim height %2: anyone may take its collateral by the claim path. Release it now.").arg(vault).arg(p.claimHeight);
+        return tr("VOID vault %1 reaches its claim height %2 (~%3, in %4): release its collateral before then.")
+            .arg(vault).arg(p.claimHeight).arg(when).arg(YellowbackFormat::blocksAndDuration(p.claimHeight - height));
+    }
+    if (height >= p.claimHeight)
+        return tr("Vault %1 is past its claim height %2: anyone may claim its collateral by burning its debt once it is underwater. Redeem or renew it now.")
+            .arg(vault).arg(p.claimHeight);
+    return tr("Vault %1 reaches its claim height %2 (~%3, in %4): redeem or renew it before then. After it, anyone may claim the collateral by burning its debt once it is underwater.")
+        .arg(vault).arg(p.claimHeight).arg(when).arg(YellowbackFormat::blocksAndDuration(p.claimHeight - height));
+}
+
+QStringList YellowbackController::deadlineWarnings() const {
+    QStringList out;
+    for (int i = 0; ; i++) {
+        const YellowbackPosition* p = positions->positionAt(i);
+        if (p == nullptr) break;
+        QString w = deadlineWarning(*p, indexHeight);
+        if (!w.isEmpty()) out << w;
+    }
+    return out;
+}
+
+int YellowbackController::renewLockBlocks(const YellowbackPosition& p) const {
+    const int own = p.lockHeight - p.refHeight;
+    if (own > 0 && !classForLock(own).name.isEmpty()) return own;
+    const auto on = enabledClasses();
+    return on.isEmpty() ? 0 : on.first().minBlocks;
 }
 
 // ── Error identifiers (§4.5) ──────────────────────────────────────────────────────────────
@@ -1069,8 +1272,12 @@ QString YellowbackController::explainError(const QString& e) {
     }
     if (is(Errors::MINT_UNSATISFIABLE))
         return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
+    if (is(Errors::MINTPOL_UNARMED))
+        return tr("Minting is paused: this network requires the attestation layer to be ARMED for every mint, and it is not at the reference height. Nothing was sent.");
     if (is(Errors::MINT_BAD_LOCK))
-        return tr("The lock length falls in no term class.");
+        return tr("The lock length falls in no enabled term class (on mainnet and testnet only class A is enabled; B and C are disabled).");
+    if (is(Errors::CLAIM_BURN_ABOVE_MAX))
+        return tr("The claim would burn more YED than the vault's debt you confirmed, so nothing was sent. Re-check the claimable list and confirm again.");
     if (is(Errors::COLLATERAL_ABOVE_MAX))
         return tr("The price moved: at the node's reference height the mint would lock more YEC than the amount you confirmed, so nothing was sent. Re-estimate and confirm again.");
     if (is(Errors::CLAIM_OUT_BELOW_MIN))
