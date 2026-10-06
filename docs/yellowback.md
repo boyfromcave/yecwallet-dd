@@ -1,5 +1,37 @@
 # Yellowback in YecWallet — development notes
 
+**Status (2026-10-06, the vault upgrade, upgrade plan P6; branch `upgrade/vault`):** the wallet
+speaks `rpcversion` 5 only. Ycash Yellowback (YED) is the rule module of the Ycash vault primitive
+(`UPGRADE_VAULT`, branch ID `6d5b7a31`): its rules are consensus, so the wallet shows the upgrade's
+status (`yed_getinfo.upgrade`, `vault_getinfo`) where it showed activation, signalling and
+enforcement, and the valve, sunset, abandonment and Sweep screens are gone with the fields they read.
+No `ycash.conf` line enables Yellowback any more (the wallet writes none and offers no repair); a
+`-32601` from `yed_getinfo` means the node has no vault upgrade or no YED attestor set. The rest of
+this file describes the v2/v3 flows it grew from; where they differ, this section wins.
+
+- **Claims are intents (U-23).** `yed_claim` burns the debt and moves the collateral, less the
+  RED-5 residual, into a claimant intent; the fees come from the claimant's YEC, so the dialog's
+  figure and `minOutZat` floor are `collateral - residual`. A claim must pay a transparent address
+  (D-U1, refused locally). The new **Pending claims** page lists every CLAIMING vault's intents
+  (`yed_listvaults CLAIMING`; `yed_listpositions` rows lack `intents` on both node lines, so the
+  wallet merges them from there) with its release height; **Release** is `vault_release` (the
+  claimant's intent with no recipient argument; the owner's residual with the owner's P2PKH script,
+  `p2pkhScriptForKeyId(ownerKeyId)`).
+- **Cancelled claims (U-24, D-U3).** A claim of this wallet whose vault is gone (`yed_getvault`
+  answers `vault-not-found` after an attestor cancel re-created it under the cancel's txid) is
+  listed on Pending claims with the sentence that its burn is not refunded.
+- **Attestors are set members (P4-b).** The Attestors page shows this wallet's member keys of the
+  YED attestor set (`set_getinfo`: current or dormant, last act, bond frozen) and the table's
+  `lastAct` / `bondFrozen`; **Heartbeat** (`set_heartbeat`) replaces Revive; joining is
+  `yed_registerattestor` (= `set_join`, one key for hot, bond and fee, D-U4; no flags). On a node
+  whose wallet holds a current member key, Pending claims offers **Cancel wrong-price claim**
+  (`vault_buildcancel`, `set_signcancel`, `vault_send`) behind a warning naming the lost burn and
+  the equivocation risk. A signed cancel is kept (`yellowback/signedcancel/<outpoint>`) and only
+  ever re-sent: two different signed spends of one intent are a provable equivocation.
+- The primitive's RPCs are named once in `src/vaultrpc.h`; `tests/check-rpc-contract.py` learned
+  `// optional` for fields the contract marks optional and its example omits.
+- Trust text (Overview): a summary of the upgrade plan's §10 statement for Yellowback.
+
 **Status (2026-09-10, Yellowback v2, Phase 7b-b):** the wallet talks to the miner-enforced
 Yellowback v2 node over `rpcversion 2` (`docs/plans/yellowback-v2-development-plan.md` in the
 workspace, §4.8 and Phase 7b). Phase 0 removed the federation prototype (the co-signing redemption
@@ -31,7 +63,7 @@ reported, makes one call, and shows the node's result.
 | **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, fee and payee from `yed_getfeepayee <tip − refLag> <collateralZat>`, destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
 | **Release** (Vaults row, VOID) | VOID at or past `lockHeight`; the dialog says no YED is burned and no fee is paid, and names `sweepBefore` (= `claimHeight`) | the same `yed_redeem <vaultTxid>` (L14) | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
 | **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED | `yed_claim <vaultTxid> [to]` | the `yed_redeem` shape |
-| **Sweep** (Vaults row, ACTIVE while `yed_getinfo.abandoned`) | the dialog carries `I understand this leaves YED unbacked` verbatim and names `sweepBefore` | `yed_sweep <vaultTxid> "I understand this leaves YED unbacked" [to]` (L10) | `txid`, `hex` (copied to the clipboard for submission elsewhere), `collateralOut`, `to`, `unbackedCents` |
+| **Sweep** (retired in rpcversion 5; kept here as the v2 record) (Vaults row, ACTIVE while `yed_getinfo.abandoned`) | the dialog carries `I understand this leaves YED unbacked` verbatim and names `sweepBefore` | `yed_sweep <vaultTxid> "I understand this leaves YED unbacked" [to]` (L10) | `txid`, `hex` (copied to the clipboard for submission elsewhere), `collateralOut`, `to`, `unbackedCents` |
 
 Refresh reads `yed_getinfo`, `yed_getstats`, `yed_getactivation`, `yed_getbalance`,
 `yed_listpositions`, `yed_listclaimable` and `yed_listtransactions 200 0` on the stock
@@ -413,7 +445,8 @@ against the contract's example values until the node ships `yed_claim` / `yed_sw
 | `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/activation/balance, mint gate reasons, `classForLock`, `explainError`, `parseChangeFloor`, `setTransport` (the test's fake Connection). Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
 | `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackClaimable` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, the positions, claimable and transactions table models |
 | `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its nine sub-pages; the five action flows and their confirmation dialogs (`confirmFn`/`noticeFn` for the test) |
-| `src/connection.{cpp,h}` | `createZcashConf` writes `experimentalfeatures=1` / `yellowback=1`; `Connection::offerYellowbackConfRepair` appends them to an existing conf |
+| `src/vaultrpc.h` | rpcversion 5: the vault primitive RPCs the wallet calls (`set_getinfo`, `set_heartbeat`, `vault_release`, `vault_buildcancel`, `set_signcancel`, `vault_send`, `vault_getinfo`) |
+| `src/connection.{cpp,h}` | rpcversion 5: `createZcashConf` no longer writes `experimentalfeatures=1` / `yellowback=1` and the conf repair is gone (no flag gates YED) |
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
 | `src/nodedatacheck.{cpp,h}`, `tests/nodedatacheck_test.cpp` | the one-way data directory upgrade check and its QTest (see "The upgrade warning"); the dialog is `ConnectionLoader::confirmNodeDataUpgrade` in `src/connection.cpp` |

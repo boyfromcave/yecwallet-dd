@@ -124,6 +124,7 @@ public:
     /** The P2PKH script (hex) of a key id as yed_getvault prints it (CKeyID::GetHex, byte-reversed):
      *  the residual intent's recipient, which vault_release needs when this wallet is not the owner. */
     static QString p2pkhScriptForKeyId(const QString& keyIdHex);
+    static bool isOwnClaim(const YellowbackTx& t);   // a claim this wallet made (its YED was burned in it)
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
     double  yecBalance() const;                   // from the stock DataModel: every transparent address
@@ -378,6 +379,7 @@ private:
     json    priceJson      = json::object();
     json    selectionJson  = json::object();
     json    claimingJson   = json::array();
+    json    positionsJson  = json::array();   // the last yed_listpositions reply
     json    setJson        = json::object();
     json    vaultInfoJson  = json::object();
     QMap<QString, YellowbackClaimOutcome> outcomes;   // by claim txid
