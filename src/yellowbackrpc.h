@@ -7,7 +7,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 4), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 5), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -18,19 +18,26 @@
 // are keys of in docs/yellowback-rpc-contract.json (`[]` = the example row of a list result);
 // a constant marked `// value` is a field *value* (a status or type name), not a key; the
 // method constants must be top-level commands of that file; the Errors namespace's identifiers
-// must be listed under `errors`; and RPC_VERSION must equal the file's `rpcversion`.
+// must be listed under `errors`; and RPC_VERSION must equal the file's `rpcversion`. A constant
+// marked `// optional` is a field the contract marks optional and its example omits, and a
+// namespace marked `// contract: optional <command>.<path>` holds the keys of such an object.
+//
+// The vault primitive's own RPCs (set_*, vault_*) are in vaultrpc.h: they are the primitive's
+// contract (ycash-dd/doc/vault-rpc.md), not Yellowback's.
 
 namespace YellowbackRpc {
 
 // The rpcversion this build of the wallet understands. yed_getinfo.rpcversion must equal it
 // (bumped to 2 in Phase 7b-a's first commit, N27; to 3 in v3 Phase A5's first commit; to 4 with
-// the hardening H-9.3 client bounds, yed_claim's maxBurnCents, H5-a).
-constexpr int RPC_VERSION = 4;
+// the hardening H-9.3 client bounds, yed_claim's maxBurnCents, H5-a; to 5 with the vault upgrade,
+// upgrade plan §15.10: the enforcement machinery, the sweep and VOID are gone, a claim is an intent).
+constexpr int RPC_VERSION = 5;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
 constexpr const char* GETSTATS            = "yed_getstats";
-constexpr const char* GETACTIVATION       = "yed_getactivation";
+constexpr const char* GETACTIVATION       = "yed_getactivation";   // rpcversion 5: the vault upgrade's status
+constexpr const char* LISTVAULTS          = "yed_listvaults";      // rpcversion 5: every CLAIMING vault (the Pending claims page)
 constexpr const char* GETVAULT            = "yed_getvault";
 constexpr const char* LISTCLAIMABLE       = "yed_listclaimable";
 constexpr const char* GETTXINFO           = "yed_gettxinfo";
@@ -49,7 +56,6 @@ constexpr const char* MINT                = "yed_mint";
 constexpr const char* SEND                = "yed_send";
 constexpr const char* REDEEM              = "yed_redeem";
 constexpr const char* CLAIM               = "yed_claim";
-constexpr const char* SWEEP               = "yed_sweep";
 constexpr const char* LISTPOSITIONS       = "yed_listpositions";
 constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
 // v3 (plan §4.8, A5-b): the two-step notice, the carrier sweep and the attestor actions
@@ -57,7 +63,6 @@ constexpr const char* CLAIMNOTICE         = "yed_claimnotice";        // step 1 
 constexpr const char* SWEEPCARRIERS       = "yed_sweepcarriers";      // reclaim lapsed carriers (W7)
 constexpr const char* REGISTERATTESTOR    = "yed_registerattestor";
 constexpr const char* WITHDRAWBOND        = "yed_withdrawbond";
-constexpr const char* REVIVE              = "yed_revive";
 constexpr const char* REPORTEQUIVOCATION  = "yed_reportequivocation";
 
 // ── yed_getinfo result ─────────────────────────────────────────────────────────────────────
@@ -70,16 +75,9 @@ namespace Info {   // contract: yed_getinfo
     constexpr const char* START_HEIGHT      = "startHeight";
     constexpr const char* HEALTHY           = "healthy";
     constexpr const char* UNHEALTHY_REASON  = "unhealthyReason";
-    constexpr const char* ENFORCING         = "enforcing";      // false under kill switch, valve, sunset, unhealthy
-    constexpr const char* VALVE_TRIPPED     = "valveTripped";   // ACT-7, L7: restart the node to re-arm
-    constexpr const char* SUNSET            = "sunset";         // L8: this release's enforcement has ended
-    constexpr const char* REJECTED_BLOCKS   = "rejectedBlocks";
-    constexpr const char* SUPPRESSED_BLOCKS = "suppressedBlocks";   // L11: information, not a warning
-    constexpr const char* TEMPLATE_POLICY   = "templatePolicy";
-    constexpr const char* ABANDONED         = "abandoned";      // L10 predicate
     constexpr const char* LOCKED_OUTPUTS    = "lockedOutputs";      // H10: YED outpoints the index holds locked
     constexpr const char* PROTECTED_BY_INDEX = "protectedByIndex";  // H10: false means ordinary sends could burn YED
-    constexpr const char* ACTIVATION        = "activation";
+    constexpr const char* UPGRADE           = "upgrade";        // rpcversion 5: the yed_getactivation object
     constexpr const char* MINER             = "miner";
     constexpr const char* PARAMS            = "params";
     constexpr const char* ATTEST            = "attest";         // v3: the arming state at the index tip
@@ -104,36 +102,38 @@ namespace Attest {   // contract: yed_getinfo.attest
     constexpr const char* STATUS_ARMED      = "ARMED";          // value
 }
 
-namespace Activation {   // contract: yed_getinfo.activation
-    constexpr const char* STATUS            = "status";         // signaling | locked_in | active
-    constexpr const char* LOCK_IN_HEIGHT    = "lockInHeight";
-    constexpr const char* ACTIVATE_HEIGHT   = "activateHeight";
-    constexpr const char* SIGNAL_COUNT      = "signalCount";
-    constexpr const char* WINDOW            = "window";
+// rpcversion 5: the vault upgrade (UPGRADE_VAULT) the Yellowback rules are consensus under; the
+// same object as yed_getactivation. Signalling, lock-in, the valve and the sunset are retired.
+namespace Upgrade {   // contract: yed_getinfo.upgrade
+    constexpr const char* NAME              = "name";           // "Vault"
+    constexpr const char* BRANCH_ID         = "branchId";       // "6d5b7a31"
+    constexpr const char* STATUS            = "status";         // active | pending
+    constexpr const char* ACTIVATION_HEIGHT = "activationHeight";
+    constexpr const char* ATTESTOR_SET_ID   = "attestorSetId";  // the vault primitive set whose members cancel claims
+    constexpr const char* CLAIM_DELAY       = "claimDelay";     // CLAIM_DELAY: blocks a claim intent waits before release
+    constexpr const char* HEIGHT            = "height";
 
-    constexpr const char* STATUS_SIGNALING  = "signaling";      // value
-    constexpr const char* STATUS_LOCKED_IN  = "locked_in";      // value
     constexpr const char* STATUS_ACTIVE     = "active";         // value
+    constexpr const char* STATUS_PENDING    = "pending";        // value
 }
 
 // The connected node's own mining state (only meaningful when it is a pool node).
 namespace Miner {   // contract: yed_getinfo.miner
     constexpr const char* PAYOUT_ADDRESS    = "payoutAddress";  // null when the node has no payout key
-    constexpr const char* SIGNAL            = "signal";
-    constexpr const char* QUOTE_KIND        = "quoteKind";      // quote | signal | none
+    constexpr const char* QUOTE_KIND        = "quoteKind";      // quote | none (the signal-only tag left with ACT-1)
     constexpr const char* QUOTE_AGE_SECONDS = "quoteAgeSeconds"; // null when no quote is held
     constexpr const char* REGISTERED        = "registered";
     constexpr const char* ELIGIBLE          = "eligible";
 
     constexpr const char* KIND_QUOTE        = "quote";          // value
-    constexpr const char* KIND_SIGNAL       = "signal";         // value
     constexpr const char* KIND_NONE         = "none";           // value
 }
 
 // yed_getinfo.params: the network's protocol parameters (§3.1). Displayed, never configurable.
 namespace Params {   // contract: yed_getinfo.params
     constexpr const char* START_HEIGHT        = "startHeight";
-    constexpr const char* ENFORCE_UNTIL_HEIGHT= "enforceUntilHeight";   // 0 = none
+    constexpr const char* ATTESTOR_SET_ID     = "attestorSetId";   // rpcversion 5 (U-22)
+    constexpr const char* CLAIM_DELAY         = "claimDelay";      // rpcversion 5 (U-23)
     constexpr const char* SIGMA_REF_BPS       = "sigmaRefBps";
     constexpr const char* SUPPLY_CAP_BPS      = "supplyCapBps";
     constexpr const char* REF_LAG             = "refLag";
@@ -144,8 +144,6 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* FEE_BPS             = "feeBps";
     constexpr const char* TOKEN_VALUE_ZAT     = "tokenValueZat";
     constexpr const char* FEE_ZAT             = "feeZat";       // the network fee, not the enforcement fee
-    constexpr const char* VALVE_BLOCKS        = "valveBlocks";
-    constexpr const char* ABANDON_BLOCKS      = "abandonBlocks";
     constexpr const char* WINDOWS             = "windows";
     constexpr const char* MIN_FILL            = "minFill";
     constexpr const char* CLASSES             = "classes";
@@ -204,29 +202,19 @@ namespace Stats {   // contract: yed_getstats
     // haltMask names (§3.6)
     constexpr const char* HALT_NOT_ACTIVE   = "NOT_ACTIVE";     // value
     constexpr const char* HALT_NO_PRICE     = "NO_PRICE";       // value
-    constexpr const char* HALT_PARTICIPATION= "PARTICIPATION";  // value
     constexpr const char* HALT_GLOBAL_RATIO = "GLOBAL_RATIO";   // value
     constexpr const char* HALT_DIVERGENCE   = "DIVERGENCE";     // value
-    constexpr const char* HALT_ENFORCEMENT  = "ENFORCEMENT";    // value
 }
 
-// ── yed_getactivation result ───────────────────────────────────────────────────────────────
+// ── yed_getactivation result (rpcversion 5: the vault upgrade, the Upgrade keys) ───────────
 namespace ActivationInfo {   // contract: yed_getactivation
-    constexpr const char* STATUS               = "status";
-    constexpr const char* LOCK_IN_HEIGHT       = "lockInHeight";
-    constexpr const char* ACTIVATE_HEIGHT      = "activateHeight";
-    constexpr const char* SIGNAL_COUNT         = "signalCount";
-    constexpr const char* WINDOW               = "window";
-    constexpr const char* THRESHOLD            = "threshold";
-    constexpr const char* PARTICIPATION_FLOOR  = "participationFloor";
-    constexpr const char* ENFORCEMENT_FLOOR    = "enforcementFloor";
-    constexpr const char* ENFORCEMENT_RESUME   = "enforcementResume";
-    constexpr const char* MINT_HALTED          = "mintHalted";
-    constexpr const char* ENFORCEMENT_SUSPENDED= "enforcementSuspended";
-    constexpr const char* ENFORCING            = "enforcing";
-    constexpr const char* VALVE_TRIPPED        = "valveTripped";
-    constexpr const char* SUNSET               = "sunset";
-    constexpr const char* ENFORCE_UNTIL_HEIGHT = "enforceUntilHeight";
+    constexpr const char* NAME              = "name";
+    constexpr const char* BRANCH_ID         = "branchId";
+    constexpr const char* STATUS            = "status";
+    constexpr const char* ACTIVATION_HEIGHT = "activationHeight";
+    constexpr const char* ATTESTOR_SET_ID   = "attestorSetId";
+    constexpr const char* CLAIM_DELAY       = "claimDelay";
+    constexpr const char* HEIGHT            = "height";
 }
 
 // ── yed_getbalance result ──────────────────────────────────────────────────────────────────
@@ -237,12 +225,13 @@ namespace Balance {   // contract: yed_getbalance
 }
 
 // ── yed_getvault result / yed_listpositions element ────────────────────────────────────────
-// yed_listpositions rows are yed_getvault rows plus the three can* flags; both are read with
-// the same constants (the checker verifies them against yed_listpositions[], a superset).
+// yed_listpositions rows are yed_getvault rows plus the can* flags; both are read with the same
+// constants (the checker verifies them against yed_listpositions[], a superset). yed_listvaults
+// rows are yed_getvault rows.
 namespace Position {   // contract: yed_listpositions[]
     constexpr const char* TXID              = "txid";
     constexpr const char* VOUT              = "vout";
-    constexpr const char* STATUS            = "status";        // ACTIVE | VOID | CLOSED | CLAIMED
+    constexpr const char* STATUS            = "status";        // ACTIVE | CLAIMING | CLOSED | CLAIMED (| VOID before the upgrade)
     constexpr const char* OWNER_PUBKEY      = "ownerPubKey";
     constexpr const char* OWNER_KEY_ID      = "ownerKeyId";
     constexpr const char* OWNER_ADDRESS     = "ownerAddress";
@@ -258,14 +247,14 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* CLOSE_HEIGHT      = "closeHeight";   // null until CLOSED/CLAIMED
     constexpr const char* CLOSING_TXID      = "closingTxid";   // "" until CLOSED/CLAIMED
     constexpr const char* BURNED_CENTS      = "burnedCents";
-    constexpr const char* UNBACKED          = "unbacked";      // closed without its burn (a sweep)
+    constexpr const char* UNBACKED          = "unbacked";      // closed without its burn (no rule produces one since the upgrade)
     constexpr const char* CLAIMABLE         = "claimable";
     constexpr const char* UNDERWATER_AT     = "underwaterAt";  // µUSD; null for VOID
-    constexpr const char* VOID_REASON       = "voidReason";    // "" unless VOID
-    constexpr const char* SWEEP_BEFORE      = "sweepBefore";   // optional: VOID, or ACTIVE under abandonment
+    constexpr const char* VOID_REASON       = "voidReason";    // "" unless VOID (none is produced since the upgrade)
+    constexpr const char* SCRIPT_PUBKEY     = "scriptPubKey";  // rpcversion 5: the vault's V template in hex
+    constexpr const char* INTENTS           = "intents";       // optional: present while CLAIMING (PositionIntent rows)
     constexpr const char* CAN_REDEEM        = "canRedeem";     // listpositions only
     constexpr const char* CAN_CLAIM         = "canClaim";      // listpositions only
-    constexpr const char* CAN_SWEEP         = "canSweep";      // listpositions only
     constexpr const char* NOTICED           = "noticed";       // v3: a Notices record stands (NOT-1)
     constexpr const char* NOTICE_HEIGHT     = "noticeHeight";  // v3: null unless noticed
     constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: first refHeight a clause-(b) claim may cite; null unless noticed
@@ -275,6 +264,19 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* STATUS_VOID       = "VOID";          // value
     constexpr const char* STATUS_CLOSED     = "CLOSED";        // value
     constexpr const char* STATUS_CLAIMED    = "CLAIMED";       // value
+    constexpr const char* STATUS_CLAIMING   = "CLAIMING";      // value, rpcversion 5: a claim intent awaits release or cancel
+}
+
+// rpcversion 5: one claim intent of a CLAIMING vault (yed_getvault.intents, absent from the example).
+namespace PositionIntent {   // contract: optional yed_getvault.intents[]
+    constexpr const char* TXID              = "txid";
+    constexpr const char* VOUT              = "vout";
+    constexpr const char* ROLE              = "role";          // claimant | residual
+    constexpr const char* HEIGHT            = "height";        // the claim's height
+    constexpr const char* RELEASE_HEIGHT    = "releaseHeight"; // height + CLAIM_DELAY: the first height vault_release can spend it
+
+    constexpr const char* ROLE_CLAIMANT     = "claimant";      // value
+    constexpr const char* ROLE_RESIDUAL     = "residual";      // value
 }
 
 // ── yed_listclaimable element ──────────────────────────────────────────────────────────────
@@ -319,12 +321,15 @@ namespace Transaction {   // contract: yed_listtransactions[]
     constexpr const char* TYPE_REDEEM       = "redeem";        // value
     constexpr const char* TYPE_CLAIM        = "claim";         // value
     constexpr const char* TYPE_CLAIMED      = "claimed";       // value
-    constexpr const char* TYPE_SWEEP        = "sweep";         // value
     constexpr const char* TYPE_NOTICE       = "notice";        // value, v3: a CLAIM_NOTICE this wallet posted
     constexpr const char* TYPE_NOTICED      = "noticed";       // value, v3: a notice against a vault of ours
     constexpr const char* TYPE_REGISTER     = "register";      // value, v3
     constexpr const char* TYPE_EQUIVOCATION = "equivocation";  // value, v3
-    constexpr const char* TYPE_REVIVE       = "revive";        // value, v3
+    constexpr const char* TYPE_REVIVE       = "revive";        // value, v3 (not written since P4-b)
+    // rpcversion 5: yed_gettxinfo types of the claim intent spends and of the attestor set's acts
+    constexpr const char* TYPE_CLAIM_RELEASE = "claim_release"; // value
+    constexpr const char* TYPE_CLAIM_CANCEL = "claim_cancel";  // value
+    constexpr const char* TYPE_SET_ACT      = "set_act";       // value
 
     constexpr const char* VERDICT_EXPIRED   = "expired";       // value
 }
@@ -386,6 +391,8 @@ namespace Attestor {   // contract: yed_listattestors[]
     constexpr const char* FLAGS             = "flags";
     constexpr const char* LAST_BUNDLE_HEIGHT= "lastBundleHeight";  // null when none
     constexpr const char* POOL_FRESH        = "poolFresh";
+    constexpr const char* LAST_ACT          = "lastAct";       // P4-b: the set's lastAct for the member (join + maturity, or its last heartbeat)
+    constexpr const char* BOND_FROZEN       = "bondFrozen";    // P4-b: the set froze the bond (removal with burn, set or price equivocation)
 
     constexpr const char* STATUS_PENDING    = "PENDING";       // value
     constexpr const char* STATUS_ELIGIBLE   = "ELIGIBLE";      // value
@@ -543,6 +550,8 @@ namespace TxInfo {   // contract: yed_gettxinfo
     constexpr const char* RESIDUAL_ZAT      = "residualZat";
     constexpr const char* NOTICE            = "notice";        // true when this transaction wrote a notice
     constexpr const char* BURNED            = "burned";
+    constexpr const char* CLOSED_VAULTS     = "closedVaults";  // [{txid, vout}]
+    constexpr const char* REOPENED_VAULTS   = "reopenedVaults";  // rpcversion 5: the vault an attestor cancel re-created
 }
 
 // v3: yed_sweepcarriers result (W7).
@@ -574,14 +583,6 @@ namespace WithdrawResult {   // contract: yed_withdrawbond
     constexpr const char* TO                = "to";
 }
 
-// v3: yed_revive result.
-namespace ReviveResult {   // contract: yed_revive
-    constexpr const char* TXID              = "txid";
-    constexpr const char* SEQ               = "seq";
-    constexpr const char* CITED_HEIGHT      = "citedHeight";
-    constexpr const char* PRICE_MICRO_USD   = "priceMicroUsd";
-}
-
 // v3: yed_reportequivocation result (two-step, as yed_mint).
 namespace EquivocationResult {   // contract: yed_reportequivocation
     constexpr const char* TXID              = "txid";
@@ -591,15 +592,6 @@ namespace EquivocationResult {   // contract: yed_reportequivocation
     constexpr const char* CITED_HEIGHT      = "citedHeight";
     constexpr const char* PRICE_A           = "priceA";
     constexpr const char* PRICE_B           = "priceB";
-}
-
-// ── yed_sweep result ───────────────────────────────────────────────────────────────────────
-namespace SweepResult {   // contract: yed_sweep
-    constexpr const char* TXID              = "txid";
-    constexpr const char* HEX               = "hex";
-    constexpr const char* COLLATERAL_OUT    = "collateralOut";
-    constexpr const char* TO                = "to";
-    constexpr const char* UNBACKED_CENTS    = "unbackedCents";
 }
 
 // ── yed_validateaddress result ─────────────────────────────────────────────────────────────
@@ -625,13 +617,10 @@ namespace Errors {   // contract: errors
     constexpr const char* VAULT_NOT_FOUND   = "vault-not-found";
     constexpr const char* VAULT_NOT_ACTIVE  = "vault-not-active";     // CLOSED or CLAIMED only (L14)
     constexpr const char* VAULT_NOT_OWNED   = "vault-not-owned";
-    constexpr const char* SWEEP_NOT_ABANDONED = "sweep-not-abandoned";
-    constexpr const char* SWEEP_ACKNOWLEDGEMENT_MISSING = "sweep-acknowledgement-missing";
     constexpr const char* INSUFFICIENT_YED  = "insufficient-yed";
     // yed_mint: MINTPOL-1, one per halt bit and the cap
     constexpr const char* MINTPOL_NOT_ACTIVE    = "mintpol-not-active";
     constexpr const char* MINTPOL_NO_PRICE      = "mintpol-no-price";
-    constexpr const char* MINTPOL_PARTICIPATION = "mintpol-participation";
     constexpr const char* MINTPOL_GLOBAL_RATIO  = "mintpol-global-ratio";
     constexpr const char* MINTPOL_DIVERGENCE    = "mintpol-divergence";
     constexpr const char* MINTPOL_CAP           = "mintpol-cap";
@@ -647,6 +636,7 @@ namespace Errors {   // contract: errors
     constexpr const char* CLAIM_BURN_ABOVE_MAX  = "claim-burn-above-max";
     constexpr const char* CLAIM_NOT_YET         = "claim-not-yet";
     constexpr const char* CLAIM_NOT_UNDERWATER  = "claim-not-underwater";
+    constexpr const char* BAD_ADDRESS           = "bad-address";            // rpcversion 5: a claim to a Sapling address (D-U1)
     // The contract lists `mempool-check-failed:<verdict>`; the wallet matches the prefix
     constexpr const char* MEMPOOL_CHECK_FAILED  = "mempool-check-failed";   // value
     constexpr const char* FEE_NO_ELIGIBLE_PAYEE = "fee-no-eligible-payee";  // yed_getfeepayee under FEE-0: not an error for the wallet
@@ -664,7 +654,6 @@ namespace Errors {   // contract: errors
     constexpr const char* LOCK_BELOW_MIN        = "lock-below-min";
     constexpr const char* BOND_LOCKED           = "bond-locked";
     constexpr const char* BOND_SPENT            = "bond-spent";
-    constexpr const char* NOT_DORMANT           = "not-dormant";
     constexpr const char* NOT_EQUIVOCATION      = "not-equivocation";
     constexpr const char* ATTEST_KEY_NOT_HELD   = "attest-key-not-held";
     constexpr const char* ATTEST_UNKNOWN_SEQ    = "attest-unknown-seq";
@@ -675,11 +664,15 @@ namespace Errors {   // contract: errors
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).
 namespace RpcErrors {
-    // JSON-RPC: the node has no yed_* methods (experimentalfeatures / yellowback not set)
+    // JSON-RPC: the node has no yed_* methods (rpcversion 5: no vault upgrade or no YED attestor set;
+    // the wallet probes yed_getinfo, never getexperimentalfeatures, which no longer lists yellowback)
     constexpr const char* METHOD_NOT_FOUND  = "Method not found";
     constexpr int         METHOD_NOT_FOUND_CODE = -32601;
     // yed_mint / yed_send / yed_redeem on an encrypted, locked wallet
     constexpr const char* WALLET_LOCKED     = "walletpassphrase";
+    // yed_registerattestor since P4-b (the doc names them; the contract's error table does not)
+    constexpr const char* REGISTER_NEEDS_ADMISSION = "register-needs-admission";
+    constexpr const char* NO_ATTESTOR_SET   = "yellowback-no-attestor-set";
 }
 
 // ── Display constants ─────────────────────────────────────────────────────────────────────
@@ -690,8 +683,6 @@ constexpr qint64 MIN_MINT_CENTS      = 10000;     // $100 (§3.1 MIN_MINT)
 constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000 (§3.1 MAX_MINT; regtest)
 constexpr qint64 MAX_MINT_CENTS_GUARDED = 250000; // $2,500 on mainnet and testnet (hardening H-12; not reported by yed_getinfo)
 constexpr qint64 MIN_OUTPUT_CENTS    = 100;       // $1 change floor (§3.1 MIN_OUTPUT)
-// The exact acknowledgement yed_sweep requires as its second argument (L10).
-constexpr const char* SWEEP_ACKNOWLEDGEMENT = "I understand this leaves YED unbacked";
 // v3: an attestation travels through RPC as 74 bytes of hex (yed_reportequivocation's arguments).
 constexpr int ATTESTATION_HEX_LENGTH = 148;
 

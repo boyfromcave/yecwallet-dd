@@ -13,6 +13,8 @@ struct YellowbackPosition;
 class YellowbackPositionsFilter;
 struct YellowbackClaimable;
 struct YellowbackAttestor;
+struct YellowbackPendingClaim;
+struct YellowbackClaimOutcome;
 
 namespace Ui {
     class YellowbackTab;
@@ -29,14 +31,16 @@ namespace Ui {
 }
 
 // The Yellowback tab: a status banner, the wallet.dat backup nag, and a QTabWidget of sub-pages
-// in the order Overview, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Attestors,
-// Settings (plan §4.8; Attestors is the read-only v3 view). Every action goes through YellowbackController; nothing here touches keys or
-// the network.
+// in the order Overview, Receive, Send, Mint, Vaults, Claim, Pending claims, Transactions, Redeem,
+// Attestors, Settings (plan §4.8; Pending claims is rpcversion 5's). Every action goes through
+// YellowbackController; nothing here touches keys or the network.
 //
-// The spending actions — Mint, Send, Redeem/Release, Claim, Sweep — are each one confirmation
-// dialog and one yed_* call (plan §4.8, V24, L10, L14); the node builds, checks, signs and
-// commits. Modal prompts go through confirmFn / noticeFn / inputFn so the offline QTest can
-// answer them.
+// The spending actions — Mint, Send, Redeem/Release, Renew, Claim — are each one confirmation
+// dialog and one yed_* call (plan §4.8, V24, L14); the node builds, checks, signs and commits.
+// rpcversion 5 (the vault upgrade): a claim moves the collateral into a claim intent; the Pending
+// claims page releases it after CLAIM_DELAY (vault_release) and, on an attestor's node, cancels a
+// wrong-price claim before then (vault_buildcancel, set_signcancel, vault_send). Modal prompts go
+// through confirmFn / noticeFn / inputFn so the offline QTest can answer them.
 //
 // v3 (A5-b): Mint, Claim, the claim notice and the equivocation report are two-step (W7): the
 // call returns after the carrier broadcast with `pending`, the page says "preparing price proof
@@ -58,23 +62,22 @@ public:
     YellowbackController* controller() { return ctl; }
 
     // Sub-page indices in subTabs
-    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Claim, Transactions, Redeem, Attestors, Settings, PageCount };
+    enum Page { Overview = 0, Receive, Send, Mint, Vaults, Claim, PendingClaims, Transactions, Redeem, Attestors, Settings, PageCount };
     QWidget* page(Page p) { return pages[p]; }
 
     // Parses "12.34" / "12" / "$12.34" / "1,234.56" into cents; false on anything else
     static bool parseDollars(const QString& text, qint64* cents);
 
     // What the Vaults page says about the selected row's actions (plan §4.8 Vaults row):
-    // which of Release / Redeem / Sweep the row offers and why the others are not offered.
-    // Pure function of the row, the index height and the abandonment flag (offline-testable).
+    // which of Release / Redeem / Renew the row offers and why the others are not offered.
+    // Pure function of the row and the index height (offline-testable).
     struct VaultActions {
         bool    release = false;   // VOID at or past lockHeight (yed_redeem, no burn, no fee; L14)
         bool    redeem  = false;   // ACTIVE at or past lockHeight (yed_redeem)
-        bool    sweep   = false;   // ACTIVE while abandoned (yed_sweep, L10)
-        bool    renew   = false;   // H-9.2: ACTIVE at or past lockHeight, not abandoned (yed_redeem, then yed_mint)
+        bool    renew   = false;   // H-9.2: ACTIVE at or past lockHeight (yed_redeem, then yed_mint)
         QString text;              // the sentence shown under the table
     };
-    static VaultActions vaultActions(const YellowbackPosition& p, int height, bool abandoned);
+    static VaultActions vaultActions(const YellowbackPosition& p, int height);
 
     // Modal prompts (defaults: QMessageBox / QInputDialog). The QTest replaces them to read the copy and answer.
     std::function<bool(const QString& title, const QString& text)>              confirmFn;
@@ -86,8 +89,15 @@ public:
     void doSend();
     void redeemVault(const YellowbackPosition& p, const QString& to = QString());   // ACTIVE: Redeem; VOID: Release (L14)
     static QString extraBurnLine(const nlohmann::json& r);      // H4: the extraBurnCents clause, empty when there is none
-    void claimVault(const YellowbackClaimable& c, const QString& to = QString());
-    void sweepVault(const YellowbackPosition& p, const QString& to = QString());    // L10: carries the acknowledgement
+    void claimVault(const YellowbackClaimable& c, const QString& to = QString());   // to: "" or a transparent address (D-U1)
+    // rpcversion 5, the Pending claims page: release a matured claim intent (vault_release), or,
+    // on a node whose wallet holds a current member key of the YED attestor set, cancel a claim
+    // made at a wrong price before it matures (vault_buildcancel + set_signcancel + vault_send).
+    // A cancel is signed at most once per intent: the signed transaction is kept and only ever
+    // re-sent, because two different signed spends of one intent are a provable equivocation.
+    void releaseClaim(const YellowbackPendingClaim& c);
+    void cancelClaim(const YellowbackPendingClaim& c);
+    static QString describeCancelledClaims(const QList<YellowbackClaimOutcome>& outcomes);
     // Hardening H-9.2: renew = redeem the vault and re-mint its debt in a new vault, in one flow.
     // One confirmation covers both legs; the redeem is sent at once, and the mint follows when the
     // redeem has closed the vault (continueRenew, on each yed_listpositions), held to the
@@ -100,11 +110,12 @@ public:
     void noticeVault(const YellowbackPosition& p);
     // v3: what the Claim page says about a row's clause and residual before confirming
     static QString describeClaimPath(const YellowbackClaimable& c);
-    // v3: the attestor actions (Attestors page). Each is one confirmation and one yed_* call;
-    // the buttons gather their inputs through inputFn and call these.
-    void registerAttestor(const QString& bondYec, int lockBlocks, int tier, bool pool);   // bondYec: a decimal string, sent as typed
+    // v3: the attestor actions (Attestors page). Each is one confirmation and one call; the
+    // buttons gather their inputs through inputFn and call these. P4-b: registering is joining
+    // the YED attestor set (yed_registerattestor = set_join), staying live is a SET_HEARTBEAT.
+    void registerAttestor(const QString& bondYec, int lockBlocks);   // bondYec: a decimal string, sent as typed
     void withdrawBond(const YellowbackAttestor& a, const QString& to = QString());
-    void reviveAttestor(const YellowbackAttestor& a, qint64 priceMicroUsd);
+    void heartbeatMember(const QString& memberKey);                   // set_heartbeat <attestorSetId> <key>
     void reportEquivocation(const QString& hexA, const QString& hexB);          // two-step
     void sweepCarriers();                                                        // yed_sweepcarriers (Settings page)
 
@@ -138,6 +149,7 @@ private:
     void setupRedeem();
     void setupSettings();
     void setupAttestors();
+    void setupPendingClaims();
 
     void updateBanner();
     void updateOverview();
@@ -161,6 +173,8 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     void updateSettingsPage();
     void updateAttestors();                 // v3: the arming banner and the table
     void updateAttestorButtons();           // v3: which attestor action the selected row offers
+    void updateMembership();                // rpcversion 5: this wallet's members of the YED attestor set
+    void updatePendingClaims();             // rpcversion 5: the Pending claims page
     void updateMintAttest();                // v3: the selection line under the estimate
     // v3 two-step: the "preparing price proof" status, then the follow-up (W7)
     void followPending(const QString& type, const nlohmann::json& pendingReply, QLabel* status,
@@ -212,6 +226,16 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     Ui::YellowbackRedeem*       uiRedeem     = nullptr;
     Ui::YellowbackSettings*     uiSettings   = nullptr;
     Ui::YellowbackAttestors*    uiAttestors  = nullptr;
+    // rpcversion 5: the Pending claims page, built in code (no .ui)
+    QTableView*                 tblPendingClaims   = nullptr;
+    QLabel*                     lblPendingIntro    = nullptr;
+    QLabel*                     lblPendingAction   = nullptr;
+    QLabel*                     lblCancelledClaims = nullptr;
+    QPushButton*                btnReleaseClaim    = nullptr;
+    QPushButton*                btnCancelClaim     = nullptr;
+public:
+    const YellowbackPendingClaim* selectedPendingClaim() const;
+private:
     QProcess*                   subscriber   = nullptr;
     QString                     subscriberBinary;      // override; "" = defaultSubscriberBinaryPath()
     QString                     subscriberConfPath;    // the toml the launcher last wrote

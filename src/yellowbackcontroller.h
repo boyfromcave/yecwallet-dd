@@ -16,13 +16,41 @@ class Connection;
 
 // What the status banner shows, computed from yed_getinfo / yed_getstats / yed_getactivation
 // by YellowbackController::describeStatus (a pure function, so the offline QTest can feed it
-// canned replies). Wording follows plan §4.8 (banner row) and §8.1.
+// canned replies). Wording follows plan §4.8 (banner row) and the upgrade plan's trust statement
+// (§10): under the vault upgrade the Yellowback rules are consensus, checked by every full node.
 struct YellowbackStatus {
     bool        available = false;   // node answers, enabled, rpcversion ok, synced, healthy
     QString     reason;              // why not, when !available
-    QString     headline;            // one line: activation state and enforcement
-    QStringList warnings;            // valve tripped, sunset, suspended, abandoned, participation halt
-    QStringList notes;               // information lines (suppressedBlocks, own-pool quote state)
+    QString     headline;            // one line: the vault upgrade's status
+    QStringList warnings;            // unprotected YED outputs, own vaults being claimed
+    QStringList notes;               // information lines (locked outputs, own-pool quote state)
+};
+
+// rpcversion 5: one member of the YED attestor set as set_getinfo reports it (vault-rpc.md).
+struct YellowbackSetMember {
+    QString key;
+    QString status;              // active | removed | ejected | withdrawn
+    bool    current    = false;  // ACTIVE and past the set's maturity
+    bool    live       = false;  // lastAct within the set's liveness window
+    int     joinHeight = 0;
+    int     lastAct    = 0;
+    qint64  bondValue  = 0;      // zat
+    int     bondLocktime = 0;
+    bool    bondFrozen = false;
+    bool    wallet     = false;  // this wallet holds the key
+    static YellowbackSetMember fromJson(const nlohmann::json& j);
+    /** "current, live" | "current, DORMANT (no act since h)" | "joined, maturing" | "removed" ... */
+    QString describe(int height, int livenessWindow) const;
+};
+
+// rpcversion 5: what became of a claim this wallet made (derived from yed_gettxinfo and
+// yed_getvault; the node lists no row for a release or a cancel to the claimant).
+struct YellowbackClaimOutcome {
+    QString claimTxid;
+    QString vaultTxid;           // the vault the claim moved into intents
+    qint64  burnedCents = 0;
+    int     height      = 0;
+    QString outcome;             // "pending" | "released" | "cancelled" | "" (unknown)
 };
 
 // Issues every yed_* call through the existing Connection (plan §4.8, mapping.md §12).
@@ -77,8 +105,25 @@ public:
     const json& attest() const;                                 // v3: yed_getinfo.attest (empty object until answered)
     const json& price() const { return priceJson; }             // v3: yed_getprice at the tip
     const json& selection() const { return selectionJson; }     // v3: yed_getselection at refHeightNow()
-    bool    isAbandoned() const;                                // yed_getinfo.abandoned (L10)
-    bool    isEnforcing() const;                                // yed_getinfo.enforcing
+    // ── rpcversion 5: the vault upgrade and the YED attestor set ─────────────────────────
+    const json& upgrade() const;                                // yed_getinfo.upgrade (empty until answered)
+    const json& vaultInfo() const { return vaultInfoJson; }    // vault_getinfo
+    bool    upgradeActive() const;                              // upgrade.status == active
+    QString attestorSetId() const;                              // params.attestorSetId, else upgrade.attestorSetId
+    int     claimDelay() const;                                 // params.claimDelay (CLAIM_DELAY)
+    const json& attestorSet() const { return setJson; }         // set_getinfo <attestorSetId>
+    QList<YellowbackSetMember> setMembers() const;              // every member record
+    QList<YellowbackSetMember> walletMembers() const;           // the members whose key this wallet holds
+    /** This node's wallet holds the key of a current, unfrozen member of the YED attestor set:
+     *  it may sign a cancel of a wrong-price claim (and heartbeat). */
+    bool    isAttestor() const;
+    int     setLivenessWindow() const;
+    int     setCancelThreshold() const;
+    YellowbackPendingClaimsModel* pendingClaimsModel() { return pendingClaims; }
+    QList<YellowbackClaimOutcome> claimOutcomes() const { return outcomes.values(); }
+    /** The P2PKH script (hex) of a key id as yed_getvault prints it (CKeyID::GetHex, byte-reversed):
+     *  the residual intent's recipient, which vault_release needs when this wallet is not the owner. */
+    static QString p2pkhScriptForKeyId(const QString& keyIdHex);
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
     double  yecBalance() const;                   // from the stock DataModel: every transparent address
@@ -92,6 +137,9 @@ public:
     YellowbackClaimableModel* claimableModel() { return claimable; }
     YellowbackTxModel*        transactionsModel() { return transactions; }
     YellowbackAttestorsModel* attestorsModel() { return attestors; }   // v3
+    // rpcversion 5: the CLAIMING vaults (yed_listvaults "CLAIMING"), and set_getinfo of the
+    // attestor set, through the same offline feed.
+    void feedUpgrade(const json& claimingVaults, const json& attestorSet, const json& vaultInfo = json(nullptr));
 
     // ── Protocol parameters: yed_getinfo.params when present, else the compiled-in defaults ─
     qint64  minMintCents() const;
@@ -205,9 +253,19 @@ public:
     void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, qint64 maxBurnCents, OkFn ok, ErrFn err);
     void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)
     void sweepCarriers(OkFn ok, ErrFn err);                                           // v3: yed_sweepcarriers (W7)
-    void registerAttestor(const QString& bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3; bondYec a decimal string (AmountFromValue takes it exactly, audit F-8)
+    // P4-b: a SET_JOIN to the attestor set with a fresh wallet key (the flags argument is ignored
+    // since P4-b and not sent); bondYec a decimal string (AmountFromValue takes it exactly, audit F-8)
+    void registerAttestor(const QString& bondYec, int lockBlocks, OkFn ok, ErrFn err);
     void withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err);                // v3
-    void revive(int seq, qint64 priceMicroUsd, OkFn ok, ErrFn err);                   // v3
+    void heartbeat(const QString& memberKey, OkFn ok, ErrFn err);                     // P4-b: set_heartbeat <attestorSetId> <key>
+    // rpcversion 5: the claim intent spends (the primitive's RPCs, vaultrpc.h)
+    void releaseIntent(const QString& outpoint, const QString& recipientScript, OkFn ok, ErrFn err);   // vault_release; script "" = the wallet's own
+    void buildCancel(const QString& outpoint, OkFn ok, ErrFn err);                    // vault_buildcancel
+    void signCancel(const QString& hex, OkFn ok, ErrFn err);                          // set_signcancel
+    void sendVaultTx(const QString& hex, OkFn ok, ErrFn err);                         // vault_send
+    /** Follow every claim of this wallet (yed_listtransactions "claim") to its outcome: pending,
+     *  released, or cancelled by the attestor set (the burn is not refunded, U-24). */
+    void refreshClaimOutcomes();
     void reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err);   // v3, two-step
 
     // v3 two-step follow-up (W7). A pending reply names only the carrier; the main
@@ -221,10 +279,7 @@ public:
     void awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err,
                       const QString& vaultTxid = QString());
     void setPendingPollMs(int ms) { pendingPollMs = ms; }   // the QTest shortens it
-    // The flags byte yed_registerattestor takes (proposal §5.2): bits 0-1 the source tier, bit 2 pool operator.
-    static int attestorFlags(int tier, bool pool) { return (tier & 3) | (pool ? 4 : 0); }
     void refreshSelection();                      // v3: public so the Mint page's retry can re-query it
-    void sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);      // sends the L10 acknowledgement
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
     void getFeePayee(int refHeight, qint64 collateralZat, OkFn ok, ErrFn err);   // FEE-1 / FEE-W for a confirmation
@@ -263,6 +318,9 @@ signals:
     void priceUpdated();          // v3
     void attestorsUpdated();      // v3
     void selectionUpdated();      // v3
+    void pendingClaimsUpdated();  // rpcversion 5: yed_listvaults CLAIMING
+    void attestorSetUpdated();    // rpcversion 5: set_getinfo of the attestor set
+    void claimOutcomesUpdated();  // rpcversion 5
 
 private:
     void applyInfo(const json& info);
@@ -275,6 +333,9 @@ private:
     void applyPrice(const json& p);
     void applyAttestors(const json& arr);
     void applySelection(const json& s);
+    void applyClaimingVaults(const json& arr);
+    void rebuildPendingClaims();
+    void applyAttestorSet(const json& s);
     void refreshStats();
     void refreshActivation();
     void refreshBalance();
@@ -283,6 +344,9 @@ private:
     void refreshTransactions();
     void refreshPrice();
     void refreshAttestors();
+    void refreshPendingClaims();
+    void refreshAttestorSet();
+    void refreshVaultInfo();
     void setAvailability(bool avail, const QString& why);
     void log(const QString& line);
 
@@ -294,13 +358,13 @@ private:
     YellowbackClaimableModel* claimable    = nullptr;
     YellowbackTxModel*        transactions = nullptr;
     YellowbackAttestorsModel* attestors    = nullptr;
+    YellowbackPendingClaimsModel* pendingClaims = nullptr;
 
     bool    available   = false;
     bool    enabled     = false;
     bool    versionOk   = false;
     bool    synced      = false;
     bool    healthy     = false;
-    bool    confRepairOffered = false;
     QString reason;
     QString net;
     int     indexHeight      = 0;
@@ -313,6 +377,10 @@ private:
     json    paramsJson     = json::object();
     json    priceJson      = json::object();
     json    selectionJson  = json::object();
+    json    claimingJson   = json::array();
+    json    setJson        = json::object();
+    json    vaultInfoJson  = json::object();
+    QMap<QString, YellowbackClaimOutcome> outcomes;   // by claim txid
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
     int     pendingPollMs = 5000;

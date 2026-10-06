@@ -202,10 +202,6 @@ void ConnectionLoader::createZcashConf() {
     out << "rpcuser=ycash\n";
     out << "rpcpassword=" % randomPassword() << "\n";
 
-    // Yellowback: the yed_* RPCs are gated behind both of these (plan §4.7 Settings row).
-    out << "experimentalfeatures=1\n";
-    out << "yellowback=1\n";
-
     // Fast sync override. Written as ibdskiptxverification, which both node lines read
     // (6.20.0 dropped the fastsync alias; nodecompat.h).
     if (ui.chkFastSync->isChecked()) {
@@ -997,28 +993,6 @@ void Connection::showTxError(const QString& error) {
     QMessageBox::critical(main, QObject::tr("Transaction Error"), QObject::tr("There was an error sending the transaction. The error was:") + "\n\n"
         + error, QMessageBox::StandardButton::Ok);
     shown = false;
-}
-
-/**
- * Yellowback: called when yed_getinfo answers "Method not found". If the node is configured
- * from a ycash.conf we can write to, offer to append the two lines the yed_* RPCs need.
- * Returns true if the lines were appended (the node must be restarted afterwards).
- */
-bool Connection::offerYellowbackConfRepair() {
-    auto confLocation = Settings::getInstance()->getZcashdConfLocation();
-    if (confLocation.isEmpty() || !QFile(confLocation).exists())
-        return false;
-
-    auto answer = QMessageBox::question(main, QObject::tr("Yellowback not enabled"),
-        QObject::tr("The connected ycashd does not have Yellowback enabled. YecWallet needs these two lines in") + "\n" +
-        confLocation + ":\n\nexperimentalfeatures=1\nyellowback=1\n\n" +
-        QObject::tr("Add them now? ycashd must be restarted afterwards for the Yellowback tab to work."),
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
-    if (answer != QMessageBox::Yes)
-        return false;
-
-    return Settings::addToZcashConf(confLocation, "experimentalfeatures=1") &&
-           Settings::addToZcashConf(confLocation, "yellowback=1");
 }
 
 /**

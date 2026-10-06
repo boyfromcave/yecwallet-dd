@@ -42,20 +42,21 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 4, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 5, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
-      "chainHeight": 331, "startHeight": 1, "healthy": true, "unhealthyReason": "",
-      "enforcing": true, "valveTripped": false, "sunset": false, "rejectedBlocks": 0,
-      "suppressedBlocks": 0, "templatePolicy": "strict", "abandoned": false,
-      "activation": {"status": "active", "lockInHeight": 129, "activateHeight": 193, "signalCount": 64, "window": 64},
-      "miner": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "signal": true, "quoteKind": "quote",
+      "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
+      "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
+      "upgrade": {"name": "Vault", "branchId": "6d5b7a31", "status": "active", "activationHeight": 103,
+                  "attestorSetId": "5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", "claimDelay": 10, "height": 331},
+      "miner": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "quoteKind": "quote",
                 "quoteAgeSeconds": 12, "registered": true, "eligible": true},
       "attest": {"status": "ARMED", "triggerHeight": 300, "armHeight": 308, "seatedCount": 3, "poolSize": 9,
                  "poolFresh": 3, "carrierMode": "scriptsig", "required": true, "armed": true},
-      "params": {"startHeight": 1, "enforceUntilHeight": 0, "sigmaRefBps": 0, "supplyCapBps": 0, "refLag": 2,
+      "params": {"startHeight": 103, "attestorSetId": "5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", "claimDelay": 10,
+                 "sigmaRefBps": 0, "supplyCapBps": 0, "refLag": 2,
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
-                 "tokenValueZat": 10000, "feeZat": 1000, "valveBlocks": 6, "abandonBlocks": 128,
-                 "windows": {"fast": 8, "mid": 24, "slow": 64, "signal": 64},
+                 "tokenValueZat": 10000, "feeZat": 1000,
+                 "windows": {"fast": 8, "mid": 24, "slow": 64},
                  "minFill": {"fast": 4, "mid": 16, "slow": 43},
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000},
                              {"class": "B", "minBlocks": 97, "maxBlocks": 144, "baseRatioBps": 40000},
@@ -79,10 +80,8 @@ static json statsOpen() {
 
 static json activationActive() {
     return json::parse(R"({
-      "status": "active", "lockInHeight": 129, "activateHeight": 193, "signalCount": 64, "window": 64,
-      "threshold": 48, "participationFloor": 39, "enforcementFloor": 32, "enforcementResume": 39,
-      "mintHalted": false, "enforcementSuspended": false, "enforcing": true, "valveTripped": false,
-      "sunset": false, "enforceUntilHeight": 0, "history": [{"height": 331, "signalCount": 64}]
+      "name": "Vault", "branchId": "6d5b7a31", "status": "active", "activationHeight": 103,
+      "attestorSetId": "5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", "claimDelay": 10, "height": 331
     })");
 }
 
@@ -94,8 +93,38 @@ static json positionActive() {
       "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 25125628141, "collateral": 251.25628141,
       "mintedCents": 100000, "mintHeight": 332, "refHeight": 329, "feePaidZat": 62814071, "closeHeight": null,
       "closingTxid": "", "burnedCents": 0, "unbacked": false, "claimable": false, "underwaterAt": 437800,
-      "voidReason": "", "canRedeem": false, "canClaim": false, "canSweep": false
+      "voidReason": "", "canRedeem": false, "canClaim": false,
+      "scriptPubKey": "045945440020755e755e755e"
     })");
+}
+
+// rpcversion 5: a vault under a claim (yed_listvaults "CLAIMING" row): the claimant's intent at the
+// claim's output 0 and the owner's residual at output 1, both releasable at height + CLAIM_DELAY (10)
+static const char* CLAIM_TXID = "c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1";
+static json claimingVault(int claimHeight = 405, bool residual = true) {
+    json v = positionActive();
+    v["status"] = "CLAIMING"; v["claimable"] = false;
+    v["intents"] = json::array({{{"txid", CLAIM_TXID}, {"vout", 0}, {"role", "claimant"}, {"height", claimHeight}, {"releaseHeight", claimHeight + 10}}});
+    if (residual)
+        v["intents"].push_back({{"txid", CLAIM_TXID}, {"vout", 1}, {"role", "residual"}, {"height", claimHeight}, {"releaseHeight", claimHeight + 10}});
+    return v;
+}
+
+// set_getinfo of the YED attestor set; `mine` makes one member this wallet's (current, live)
+static const char* MEMBER_KEY = "03b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8e9f0";
+static json attestorSetReply(bool mine, bool current = true, bool frozen = false) {
+    json s = json::parse(R"({
+      "seats": 15, "unlockthreshold": 1, "cancelthreshold": 1, "slashthreshold": 1, "open": true, "livenesswindow": 1000,
+      "maturity": 1, "members": 2, "active": 2, "current": 2, "dormant": false, "released": false,
+      "memberlist": [
+        {"key": "02aaaa0000000000000000000000000000000000000000000000000000000000aa", "status": "active", "current": true, "live": true,
+         "joinheight": 280, "lastact": 300, "bondoutpoint": "7b2c:0", "bondvalue": 10.0, "bondlocktime": 500, "bondfrozen": false, "wallet": false}
+      ]
+    })");
+    s["memberlist"].push_back({{"key", MEMBER_KEY}, {"status", "active"}, {"current", current}, {"live", true}, {"joinheight", 281},
+                               {"lastact", 320}, {"bondoutpoint", "7b2d:0"}, {"bondvalue", 10.0}, {"bondlocktime", 501},
+                               {"bondfrozen", frozen}, {"wallet", mine}});
+    return s;
 }
 
 static json claimableRow() {
@@ -249,13 +278,6 @@ static json redeemReply() {
     })");
 }
 
-static json sweepReply() {
-    return json::parse(R"({
-      "txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", "hex": "0400008085202f8901",
-      "collateralOut": 25125627141, "to": "smExampleTransparentTwin111111111111", "unbackedCents": 100000
-    })");
-}
-
 static json balanceReply(qint64 confirmed) {
     return json{{"confirmedCents", confirmed}, {"unconfirmedCents", 0}, {"height", 331}};
 }
@@ -300,16 +322,19 @@ struct Harness {
             if (isError) errorNotices << text;
         };
     }
-    // Every piece of copy the dialogs show must follow §8.1: never "trustless", never a federation.
+    // Every piece of copy the dialogs show must follow the trust statement: never "trustless", never
+    // a federation, and (rpcversion 5) never an enforcing pool, a pause or an abandonment.
     bool copyIsClean() const {
         for (const QString& t : confirms + notices)
-            if (t.contains("trustless", Qt::CaseInsensitive) || t.contains("federat", Qt::CaseInsensitive)) return false;
+            if (t.contains("trustless", Qt::CaseInsensitive) || t.contains("federat", Qt::CaseInsensitive) ||
+                t.contains("abandon", Qt::CaseInsensitive) || t.contains("pools that run the Yellowback module", Qt::CaseInsensitive) ||
+                t.contains("enforcing pool", Qt::CaseInsensitive)) return false;
         return true;
     }
     void feedActive(int height = 331, const json& positions = json(nullptr), const json& claimable = json(nullptr),
-                    qint64 balanceCents = 500000, bool abandoned = false) {
+                    qint64 balanceCents = 500000) {
         json info = infoActive();
-        info["height"] = height; info["chainHeight"] = height; info["abandoned"] = abandoned;
+        info["height"] = height; info["chainHeight"] = height;
         ctl.feed(info, statsOpen(), activationActive(), balanceReply(balanceCents), positions, claimable, json(nullptr));
         // the refresh an action triggers on success reads the same replies back
         rpc.results[YellowbackRpc::GETINFO]          = info;
@@ -319,6 +344,7 @@ struct Harness {
         rpc.results[YellowbackRpc::LISTPOSITIONS]    = positions.is_null() ? json::array() : positions;
         rpc.results[YellowbackRpc::LISTCLAIMABLE]    = claimable.is_null() ? json::array() : claimable;
         rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array();
+        rpc.results[YellowbackRpc::LISTVAULTS]       = json::array();
     }
     void selectRow(const char* table, int row) {
         auto t = tab.findChild<QTableView*>(table);
@@ -528,6 +554,7 @@ private slots:
         Settings::init();
         Settings::getInstance()->setHeadless(true);
         Settings::getInstance()->setYellowbackUnitCents(false);
+        QSettings().remove("yellowback/signedcancel");     // a previous run's signed cancels (cancelClaim keeps them)
     }
 
     // ── Structure ─────────────────────────────────────────────────────────────────────────
@@ -548,23 +575,23 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsFour() {
-        // hardening H-9.3 (H5-a): rpcversion 4 adds yed_claim's maxBurnCents
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 4);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 4);
+    void contractVersionIsFive() {
+        // the vault upgrade (upgrade plan §15.10): rpcversion 5 removes the enforcement machinery and the sweep
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 5);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 5);
     }
 
-    // The rpcversion 4 handshake: 4 is accepted, 3 (the v3 node before H3-c) and 5 are refused
-    // with both numbers named, and nothing is enabled until they match.
-    void handshakeAcceptsRpcVersionFourOnly() {
-        for (int v : { 3, 5 }) {
+    // The rpcversion 5 handshake: 5 is accepted, 4 (the hardening node before the vault upgrade)
+    // and 6 are refused with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionFiveOnly() {
+        for (int v : { 4, 6 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("version 4"));
+            QVERIFY(h.label("lblBanner").contains("version 5"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -572,13 +599,26 @@ private slots:
         h.feedActive();
         QVERIFY(h.ctl.isVersionOk());
         QVERIFY(h.ctl.isAvailable());
-        // onConnected over the transport: yed_getinfo answering 4 starts the refresh
+        // onConnected over the transport: yed_getinfo answering 5 starts the refresh, which reads
+        // the CLAIMING vaults and the attestor set too
         Harness c;
         json info = infoActive();
         c.rpc.results[YellowbackRpc::GETINFO] = info;
         c.ctl.onConnected();
         QVERIFY(c.ctl.isVersionOk());
         QVERIFY(c.rpc.count(YellowbackRpc::GETSTATS) >= 1);
+        QVERIFY(c.rpc.count(YellowbackRpc::LISTVAULTS) >= 1);
+        QCOMPARE(c.rpc.lastParams(YellowbackRpc::LISTVAULTS), json::array({"CLAIMING", 1000, 0}));
+        QVERIFY(c.rpc.count("set_getinfo") >= 1);
+        QCOMPARE(c.rpc.lastParams("set_getinfo"), json::array({"5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75"}));
+        QVERIFY(c.rpc.count("vault_getinfo") >= 1);
+        // a node without the yed_* commands (no upgrade or no attestor set): no conf repair is offered
+        Harness none;
+        none.rpc.errors[YellowbackRpc::GETINFO] = "Method not found";
+        none.ctl.onConnected();
+        QVERIFY(!none.ctl.isAvailable());
+        QVERIFY2(none.label("lblBanner").contains("-nuparams=6d5b7a31"), qPrintable(none.label("lblBanner")));
+        QVERIFY(!none.label("lblBanner").contains("experimentalfeatures"));
     }
 
     // ── Helpers and records ───────────────────────────────────────────────────────────────
@@ -639,9 +679,18 @@ private slots:
         QCOMPARE(p.lockHeight, 380);
         QCOMPARE(p.claimHeight, 404);
         QCOMPARE(p.closeHeight, -1);          // null
-        QCOMPARE(p.sweepBefore, -1);          // optional, absent
         QCOMPARE(p.underwaterAt, (qint64)437800);
-        QVERIFY(!p.canRedeem && !p.canClaim && !p.canSweep);
+        QVERIFY(!p.canRedeem && !p.canClaim);
+        QCOMPARE(p.scriptPubKey, QString("045945440020755e755e755e"));
+        QVERIFY(p.intents.isEmpty());          // optional, absent unless CLAIMING
+        QVERIFY(p.claimantIntent() == nullptr);
+        auto cl = YellowbackPosition::fromJson(claimingVault());
+        QCOMPARE(cl.status, QString("CLAIMING"));
+        QCOMPARE(cl.intents.size(), 2);
+        QVERIFY(cl.claimantIntent() != nullptr && cl.residualIntent() != nullptr);
+        QCOMPARE(cl.claimantIntent()->outpoint(), QString(CLAIM_TXID) % ":0");
+        QCOMPARE(cl.claimantIntent()->releaseHeight, 415);
+        QCOMPARE(cl.residualIntent()->vout, 1);
 
         auto c = YellowbackClaimable::fromJson(claimableRow());
         QCOMPARE(c.vault.right(2), QString(":0"));
@@ -662,7 +711,7 @@ private slots:
     }
 
     void recognisesErrorIdentifiers() {
-        QVERIFY(YellowbackController::isMethodNotFound("Method not found (Yellowback requires -experimentalfeatures -yellowback)"));
+        QVERIFY(YellowbackController::isMethodNotFound("Method not found"));
         QVERIFY(YellowbackController::isIndexUnhealthy("yellowback-unhealthy: storage: commit failed; restart with -reindex-yellowback"));
         QVERIFY(!YellowbackController::isIndexUnhealthy("vault-locked: tip 300 below lockHeight 380"));
     }
@@ -688,7 +737,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 4"));
+        QVERIFY(h.label("lblBanner").contains("version 5"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -710,119 +759,36 @@ private slots:
         QVERIFY(h.ctl.isAvailable());
         QVERIFY(!h.visible("lblBanner"));           // no warnings
         QVERIFY(h.visible("lblStatus"));
-        QVERIFY(h.label("lblStatus").contains("active since height 193"));
-        QVERIFY(h.label("lblStatus").contains("64/64"));
+        QVERIFY2(h.label("lblStatus").contains("consensus rules since height 103"), qPrintable(h.label("lblStatus")));
+        QVERIFY(h.label("lblStatus").contains("6d5b7a31"));
+        QVERIFY(h.label("lblStatus").contains("every full node checks them"));
         // The connected node is a pool with a fresh quote: an information line, not a warning
         QVERIFY(h.visible("lblNotes"));
         QVERIFY(h.label("lblNotes").contains("smQvTmAz2ExamplePayoutAddress1111111"));
         QVERIFY(h.label("lblNotes").contains("price quote"));
         QVERIFY(h.label("lblNotes").contains("eligible for enforcement fees"));
-        // Copy rule (§4.8): never "trustless", and enforcement is described, not guaranteed
+        // Copy rule (§4.8, upgrade plan §10): never "trustless", and no enforcing pool is described
         QVERIFY(!h.label("lblStatus").contains("trustless", Qt::CaseInsensitive));
+        QVERIFY(!h.label("lblStatus").contains("signal", Qt::CaseInsensitive));
     }
 
-    void bannerSignaling() {
+    // rpcversion 5: the upgrade scheduled but not yet reached
+    void bannerUpgradePending() {
         Harness h;
         json info = infoActive();
-        info["activation"] = json::parse(R"({"status": "signaling", "lockInHeight": 0, "activateHeight": 0, "signalCount": 40, "window": 64})");
-        info["enforcing"] = false;
-        json act = activationActive();
-        act["status"] = "signaling"; act["signalCount"] = 40; act["mintHalted"] = true;
+        info["upgrade"]["status"] = "pending"; info["upgrade"]["activationHeight"] = 500;
+        json act = activationActive(); act["status"] = "pending"; act["activationHeight"] = 500;
         h.feed(info, statsOpen(), act);
         QVERIFY(h.ctl.isAvailable());
-        QVERIFY(h.label("lblStatus").contains("signalling"));
-        QVERIFY(h.label("lblStatus").contains("40/64"));
-        QVERIFY(h.label("lblStatus").contains("needs 48"));
-        QVERIFY(!h.visible("lblBanner"));           // not enforcing before activation is not a warning
-    }
-
-    void bannerLockedIn() {
-        Harness h;
-        json info = infoActive();
-        info["activation"] = json::parse(R"({"status": "locked_in", "lockInHeight": 129, "activateHeight": 193, "signalCount": 60, "window": 64})");
-        h.feed(info, statsOpen(), json(nullptr));
-        QVERIFY(h.label("lblStatus").contains("locked in"));
-        QVERIFY(h.label("lblStatus").contains("193"));
-    }
-
-    void bannerEnforcementSuspended() {
-        Harness h;
-        json act = activationActive();
-        act["enforcementSuspended"] = true; act["mintHalted"] = true; act["signalCount"] = 20;
-        json stats = statsOpen();
-        stats["haltMask"] = json::array({"PARTICIPATION", "ENFORCEMENT"}); stats["mintingAllowed"] = false;
-        h.feed(infoActive(), stats, act);
-        QVERIFY(h.visible("lblBanner"));
-        QVERIFY(h.label("lblBanner").contains("Enforcement suspended"));
-        QVERIFY(h.label("lblBanner").contains("not policed"));
-        // The overview names the halt reasons
-        QVERIFY(h.label("lblMintStatus").contains("PARTICIPATION"));
-        QVERIFY(h.label("lblMintStatus").contains("ENFORCEMENT"));
-        QVERIFY(h.label("lblEnforcement").contains("suspended"));
-    }
-
-    void bannerParticipationHalt() {
-        Harness h;
-        json stats = statsOpen();
-        stats["haltMask"] = json::array({"PARTICIPATION"}); stats["mintingAllowed"] = false;
-        h.feed(infoActive(), stats, activationActive());
-        QVERIFY(h.label("lblBanner").contains("Participation halt"));
-        QVERIFY(!h.label("lblBanner").contains("Enforcement suspended"));
-        QVERIFY(h.label("lblMintStatus").contains("paused"));
-    }
-
-    void bannerValveTripped() {
-        Harness h;
-        json info = infoActive();
-        info["valveTripped"] = true; info["enforcing"] = false; info["rejectedBlocks"] = 1;
-        h.feed(info, statsOpen(), activationActive());
-        QVERIFY(h.label("lblBanner").contains("work valve tripped"));
-        QVERIFY(h.label("lblBanner").contains("Restart the node"));
-        QVERIFY(h.label("lblNotes").contains("rejected 1 block"));
-        QVERIFY(h.label("lblEnforcement").contains("valve tripped"));
-    }
-
-    void bannerSunset() {
-        Harness h;
-        json info = infoActive();
-        info["sunset"] = true; info["enforcing"] = false;
-        h.feed(info, statsOpen(), activationActive());
-        QVERIFY(h.label("lblBanner").contains("Enforcement sunset"));
-        QVERIFY(h.label("lblBanner").contains("upgrade"));
-        QVERIFY(h.label("lblEnforcement").contains("sunset"));
-    }
-
-    void bannerAbandoned() {
-        Harness h;
-        json info = infoActive();
-        info["abandoned"] = true; info["enforcing"] = false;
-        json stats = statsOpen();
-        stats["haltMask"] = json::array({"PARTICIPATION", "ENFORCEMENT"}); stats["mintingAllowed"] = false;
-        h.feed(info, stats, activationActive());
-        QVERIFY(h.ctl.isAbandoned());
-        QVERIFY(h.label("lblBanner").startsWith("Enforcement abandoned"));
-        QVERIFY(h.label("lblBanner").contains("Sweep"));
-        // W21: the span comes from the node's params.abandonBlocks (regtest/devnet 128 here) ...
-        QVERIFY2(h.label("lblBanner").contains("128 block"), qPrintable(h.label("lblBanner")));
-        info["params"]["abandonBlocks"] = 34560;                             // ... mainnet: ABANDON_BLOCKS = GRACE
-        h.feed(info, stats, activationActive());
-        QVERIFY2(h.label("lblBanner").contains("34560 block"), qPrintable(h.label("lblBanner")));
-        info["params"].erase("abandonBlocks");                               // ... and a node that does not send it
-        h.feed(info, stats, activationActive());
-        QVERIFY2(h.label("lblBanner").contains("about 30 days"), qPrintable(h.label("lblBanner")));
-        QVERIFY(!h.label("lblBanner").contains("two full windows"));
-        QVERIFY(!h.label("lblBanner").contains("Enforcement suspended"));   // abandonment supersedes
-        QVERIFY(h.label("lblEnforcement").contains("abandoned"));
-    }
-
-    void bannerSuppressedBlocksIsInformation() {
-        Harness h;
-        json info = infoActive();
-        info["suppressedBlocks"] = 2;
-        h.feed(info, statsOpen(), activationActive());
-        QVERIFY(!h.visible("lblBanner"));           // L11: not a warning
-        QVERIFY(h.label("lblNotes").contains("2 rule-breaking block"));
-        QVERIFY(h.label("lblNotes").contains("enforcement is still on"));
+        QVERIFY(!h.ctl.upgradeActive());
+        QVERIFY2(h.label("lblStatus").contains("activates at height 500"), qPrintable(h.label("lblStatus")));
+        QVERIFY(h.label("lblActivation").contains("activates at 500"));
+        QVERIFY(!h.visible("lblBanner"));
+        // the retired fields, should a node still send them, change nothing
+        info["abandoned"] = true; info["valveTripped"] = true; info["sunset"] = true; info["enforcing"] = false;
+        h.feed(info, statsOpen(), act);
+        QVERIFY(!h.visible("lblBanner"));
+        QVERIFY(!h.label("lblStatus").contains("abandon", Qt::CaseInsensitive));
     }
 
     // H10: the node reports how many of this wallet's outputs it holds locked, and whether the
@@ -848,19 +814,10 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
-    void bannerNotEnforcingNode() {
-        Harness h;
-        json info = infoActive();
-        info["enforcing"] = false;
-        h.feed(info, statsOpen(), activationActive());
-        QVERIFY(h.label("lblBanner").contains("not enforcing"));
-        QVERIFY(h.label("lblBanner").contains("pools that do enforce"));
-    }
-
     void bannerNoMinerLine() {
         Harness h;
         json info = infoActive();
-        info["miner"] = json::parse(R"({"payoutAddress": null, "signal": false, "quoteKind": "none", "quoteAgeSeconds": null, "registered": false, "eligible": false})");
+        info["miner"] = json::parse(R"({"payoutAddress": null, "quoteKind": "none", "quoteAgeSeconds": null, "registered": false, "eligible": false})");
         h.feed(info, statsOpen(), activationActive());
         QVERIFY(!h.visible("lblNotes"));
     }
@@ -879,9 +836,10 @@ private slots:
         QCOMPARE(h.label("lblSupply"), QString("$2,500.00 / ") % YellowbackFormat::zec(62500000000));
         QCOMPARE(h.label("lblVaults"), QString("3 / 1 / 2 / 0"));
         QCOMPARE(h.label("lblUnbacked"), QString("$0.00"));
-        QVERIFY(h.label("lblActivation").contains("active since 193"));
-        QVERIFY(h.label("lblEnforcement").contains("this node enforces"));
-        QVERIFY(h.label("lblEnforcement").contains("strict"));
+        QVERIFY2(h.label("lblActivation").contains("active since 103 (branch 6d5b7a31)"), qPrintable(h.label("lblActivation")));
+        QVERIFY(h.label("lblActivation").contains("attestor set 5e755e755e75"));
+        QVERIFY(h.label("lblActivation").contains("claim delay 10 blocks"));
+        QCOMPARE(h.label("lblEnforcement"), QString("consensus: every full node checks them"));
         QVERIFY(h.label("lblIndexHeight").startsWith("331"));
     }
 
@@ -920,7 +878,8 @@ private slots:
         Harness h;
         json stats = statsOpen();
         stats["supplyCapCents"] = 250000; stats["mintingAllowed"] = false;   // no halt bit, cap full
-        h.feed(infoActive(), stats, activationActive());
+        json old = infoActive(); old.erase("supplyCapReached");
+        h.feed(old, stats, activationActive());
         QVERIFY(!h.ctl.softSupplyCap());
         QVERIFY(!h.ctl.supplyCapReached());
         QVERIFY(h.label("lblMintStatus").contains("supply cap"));
@@ -930,20 +889,27 @@ private slots:
         QCOMPARE(h.ctl.mintBlocker(10000, "A"), QString("Minting is paused: the supply cap ($2,500.00) is reached with $2,500.00 in circulation."));
         // with mintableClasses on a W16 node but no supplyCapReached: still paused
         stats["mintableClasses"] = json::array();
-        h.feed(infoActive(), stats, activationActive());
+        h.feed(old, stats, activationActive());
         QVERIFY(h.ctl.mintBlocker(10000, "A").startsWith("Minting is paused: the supply cap"));
         // an amount over the cap is refused for every class while the cap has room
         json room = statsOpen();
         room["supplyCents"] = 240000; room["supplyCapCents"] = 250000;
-        h.feed(infoActive(), room, activationActive());
+        h.feed(old, room, activationActive());
         QCOMPARE(h.ctl.mintBlocker(20000, "A"), QString("Minting $200.00 would exceed the supply cap ($2,400.00 of $2,500.00 in circulation)."));
     }
 
     void overviewTrustCopy() {
         Harness h;
         QString trust = h.label("lblTrust");
-        QVERIFY(trust.startsWith("Yellowback is a miner-enforced, over-collateralised stablecoin overlay on Ycash."));
-        QVERIFY(trust.contains("a majority of hashpower that runs the module and follows it makes those rules hold"));
+        // upgrade plan §10, summarised: consensus rules, two-party pricing, the claim delay and cancel, no shielded pool
+        QVERIFY(trust.startsWith("Ycash Yellowback (YED) is an over-collateralised dollar on Ycash."));
+        QVERIFY(trust.contains("every Yellowback rule is a Ycash consensus rule that every full node checks"));
+        QVERIFY(trust.contains("no pool enforces it, and nothing can pause or abandon it"));
+        QVERIFY(trust.contains("a single signer is never a price"));
+        QVERIFY(trust.contains("any honest attestor can cancel a claim made at a wrong price"));
+        QVERIFY(trust.contains("Nothing in Yellowback touches the shielded pool"));
+        QVERIFY(!trust.contains("miner-enforced"));
+        QVERIFY(!trust.contains("hashpower that runs the module"));
         QVERIFY(!trust.contains("trustless", Qt::CaseInsensitive));
         QVERIFY(!trust.contains("federat", Qt::CaseInsensitive));
     }
@@ -961,17 +927,17 @@ private slots:
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::ClaimHeight), Qt::DisplayRole).toString().startsWith("404"));
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Claimable), Qt::DisplayRole).toString().startsWith("not before 404"));   // says when, not just no
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Unbacked), Qt::DisplayRole).toString(), QString("no"));
-        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::SweepBefore), Qt::DisplayRole).toString(), QString("-"));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::ClaimState), Qt::DisplayRole).toString(), QString("-"));
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Vault), Qt::DisplayRole).toString().right(2), QString(":0"));
 
         // Before the lock height: no action, the text says when
-        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(positionActive()), 331, false);
-        QVERIFY(!a.release && !a.redeem && !a.sweep);
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(positionActive()), 331);
+        QVERIFY(!a.release && !a.redeem);
         QVERIFY(a.text.contains("lock height 380"));
         // At the lock height: Redeem, and the burn is exactly the debt
         json past = positionActive(); past["canRedeem"] = true;
-        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(past), 380, false);
-        QVERIFY(a.redeem && !a.release && !a.sweep);
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(past), 380);
+        QVERIFY(a.redeem && !a.release && a.renew);
         QVERIFY(a.text.contains("burns $1,000.00"));
     }
 
@@ -1310,8 +1276,8 @@ private slots:
         h.feed(infoActive(), noPrice, activationActive());
         QVERIFY(!h.ctl.protocolPriceMicroUsd().has_value());
         QCOMPARE(st->getZECPrice(), 2.0);
-        // not activated: CoinGecko is the source (nothing was pushed since the fresh mark; simulate staleness by a new Settings state)
-        json inactive = activationActive(); inactive["status"] = "signalling";
+        // the vault upgrade not yet active: CoinGecko is the source (nothing was pushed since the fresh mark)
+        json inactive = activationActive(); inactive["status"] = "pending";
         h.feed(infoActive(), statsOpen(), inactive);
         QVERIFY(!h.ctl.protocolPriceMicroUsd().has_value());
     }
@@ -1338,17 +1304,18 @@ private slots:
         Harness h;
         json v = positionActive();
         v["status"] = "VOID"; v["voidReason"] = "bad-mint-collateral"; v["underwaterAt"] = nullptr;
-        v["sweepBefore"] = 404; v["canRedeem"] = true;
+        v["canRedeem"] = true;
         h.feed(infoActive(), statsOpen(), activationActive(), json::array({v}));
         auto m = h.ctl.positionsModel();
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::DisplayRole).toString(), QString("VOID (bad-mint-collateral)"));
-        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::SweepBefore), Qt::DisplayRole).toString().startsWith("404"));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::ClaimState), Qt::DisplayRole).toString(), QString("-"));
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::ToolTipRole).toString().contains("bad-mint-collateral"));
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::ToolTipRole).toString().contains("no burn, no fee"));
 
-        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(v), 380, false);
-        QVERIFY(a.release && !a.redeem && !a.sweep);
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(v), 380);
+        QVERIFY(a.release && !a.redeem && !a.renew);
         QVERIFY(a.text.contains("no YED burned and no fee paid"));
+        QVERIFY(a.text.contains("before the vault upgrade"));
         QVERIFY(a.text.contains("before height 404"));
 
         // Select the row: the page text follows and Release is offered (L14)
@@ -1357,44 +1324,307 @@ private slots:
         table->setCurrentIndex(table->model()->index(0, 0));   // through the view's status filter, not the source model
         QVERIFY(h.label("lblVaultAction").contains("no YED burned"));
         QVERIFY(h.button("btnRelease") != nullptr && h.button("btnRelease")->isEnabled() && !h.button("btnRelease")->isHidden());
-        QVERIFY(h.button("btnRedeem")->isHidden() && h.button("btnSweep")->isHidden());
+        QVERIFY(h.button("btnRedeem")->isHidden());
+        QVERIFY(h.button("btnSweep") == nullptr);           // rpcversion 5: the sweep is gone
         QVERIFY(h.button("btnWhyVoid")->isEnabled());
     }
 
-    void vaultsRenderAbandonedRow() {
+    // rpcversion 5 (U-23): a vault of ours under a claim. It is red, the Act-by and Claim-in-progress
+    // cells say when it releases, the page text says only an attestor can stop it, and nothing is offered.
+    void vaultsRenderClaimingRow() {
         Harness h;
-        json info = infoActive(); info["abandoned"] = true;
-        json v = positionActive(); v["sweepBefore"] = 404; v["canSweep"] = true; v["canRedeem"] = true;
-        h.feed(info, statsOpen(), activationActive(), json::array({v}));
+        h.feed(infoActive(), statsOpen(), activationActive(), json::array({claimingVault()}));
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr));
         auto m = h.ctl.positionsModel();
-        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::SweepBefore), Qt::DisplayRole).toString().startsWith("404"));
-        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::SweepBefore), Qt::ToolTipRole).toString().contains("abandoned"));
-
-        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(v), 400, true);
-        QVERIFY(a.sweep && a.redeem);
-        QVERIFY(a.text.contains("unbacked"));
-        QVERIFY(a.text.contains("before height 404"));
-
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::DisplayRole).toString(), QString("CLAIMING"));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::ClaimState), Qt::DisplayRole).toString(), QString("claimed at 405; releases at 415"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::ActBy), Qt::DisplayRole).toString().startsWith("BEING CLAIMED"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::ToolTipRole).toString().contains("cancel"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::BackgroundRole).isValid());
+        // the "open" filter keeps it
         auto table = h.tab.findChild<QTableView*>("tblPositions");
-        table->setCurrentIndex(table->model()->index(0, 0));   // through the view's status filter, not the source model
-        QVERIFY(h.button("btnSweep") != nullptr && h.button("btnSweep")->isEnabled() && !h.button("btnSweep")->isHidden());
-        QVERIFY(h.button("btnRedeem")->isEnabled());
-        QVERIFY(h.label("lblVaultAction").contains("Sweep"));
+        QCOMPARE(table->model()->rowCount(QModelIndex()), 1);
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(claimingVault()), 408);
+        QVERIFY(!a.release && !a.redeem && !a.renew);
+        QVERIFY2(a.text.contains("goes to the claimant at height 415"), qPrintable(a.text));
+        QVERIFY(a.text.contains("cancels the claim"));
+        QVERIFY(a.text.contains("residual"));
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(claimingVault()), 414);
+        QVERIFY(a.text.contains("may release the collateral now"));
+        // the banner warns while the claim can still be stopped, and not after
+        QString w = YellowbackController::deadlineWarning(YellowbackPosition::fromJson(claimingVault()), 408);
+        QVERIFY2(w.contains("is being claimed") && w.contains("height 415"), qPrintable(w));
+        QVERIFY(YellowbackController::deadlineWarning(YellowbackPosition::fromJson(claimingVault()), 414).isEmpty());
+        table->setCurrentIndex(table->model()->index(0, 0));
+        QVERIFY(h.button("btnRedeem")->isVisible() == false || !h.button("btnRedeem")->isEnabled());
+        QVERIFY(!h.button("btnRenew")->isEnabled());
+        QVERIFY(h.label("lblVaultAction").contains("being claimed"));
+    }
+
+    // rpcversion 5: the Pending claims page from yed_listvaults "CLAIMING": one row per intent,
+    // whose it is, when it releases; Release only where this wallet can; Cancel only on an attestor's node.
+    void pendingClaimsRender() {
+        Harness h;
+        h.feedActive(408);
+        // our own claim of somebody else's vault: its claim txid is a "claim" row of ours
+        json tx = txMint(); tx["type"] = "claim"; tx["txid"] = CLAIM_TXID; tx["burned"] = 100000; tx["height"] = 405;
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
+        h.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(false));
+        QCOMPARE(h.tab.page(YellowbackTab::PendingClaims), h.tab.findChild<QTabWidget*>("subTabs")->widget(YellowbackTab::PendingClaims));
+        QCOMPARE(h.tab.findChild<QTabWidget*>("subTabs")->tabText(YellowbackTab::PendingClaims), QString("Pending claims"));
+        auto m = h.ctl.pendingClaimsModel();
+        QCOMPARE(m->rowCount(QModelIndex()), 2);
+        QCOMPARE(m->data(m->index(0, YellowbackPendingClaimsModel::Role), Qt::DisplayRole).toString(), QString("claimant"));
+        QCOMPARE(m->data(m->index(0, YellowbackPendingClaimsModel::Whose), Qt::DisplayRole).toString(), QString("your claim"));
+        QCOMPARE(m->data(m->index(1, YellowbackPendingClaimsModel::Role), Qt::DisplayRole).toString(), QString("owner's residual"));
+        QCOMPARE(m->data(m->index(0, YellowbackPendingClaimsModel::Debt), Qt::DisplayRole).toString(), QString("$1,000.00"));
+        QCOMPARE(m->data(m->index(0, YellowbackPendingClaimsModel::Remaining), Qt::DisplayRole).toString(), QString("in 6 block(s), ~7 m"));
+        QVERIFY(m->data(m->index(0, YellowbackPendingClaimsModel::ReleaseHeight), Qt::DisplayRole).toString().startsWith("415"));
+        QCOMPARE(YellowbackPendingClaimsModel::remaining(h.ctl.pendingClaimsModel()->rowAt(0)->intent, 414), QString("releasable now"));
+        // not an attestor: no Cancel button; before release, no Release either
+        QVERIFY(!h.ctl.isAttestor());
+        QVERIFY(h.button("btnCancelClaim")->isHidden());
+        h.selectRow("tblPendingClaims", 0);
+        QVERIFY(!h.button("btnReleaseClaim")->isEnabled());
+        QVERIFY2(h.label("lblPendingAction").contains("releases at height 415"), qPrintable(h.label("lblPendingAction")));
+        QVERIFY(h.label("lblPendingAction").contains("It is your claim"));
+        // an attestor node: Cancel is offered on the claimant intent before it matures, never on the residual
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true));
+        QVERIFY(h.ctl.isAttestor());
+        h.selectRow("tblPendingClaims", 0);
+        QVERIFY(!h.button("btnCancelClaim")->isHidden() && h.button("btnCancelClaim")->isEnabled());
+        QVERIFY(h.label("lblPendingAction").contains("deadline: height 414"));
+        h.selectRow("tblPendingClaims", 1);
+        QVERIFY(!h.button("btnCancelClaim")->isEnabled());
+        // a frozen or immature member key is no attestor
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true, true, true));
+        QVERIFY(!h.ctl.isAttestor());
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true, false));
+        QVERIFY(!h.ctl.isAttestor());
+        // matured: Release on our claimant intent and on the residual (anyone), Cancel nowhere
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true));
+        h.feedActive(414);
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
+        h.ctl.feedUpgrade(json::array({claimingVault()}), json(nullptr));
+        h.selectRow("tblPendingClaims", 0);
+        QVERIFY(h.button("btnReleaseClaim")->isEnabled());
+        QVERIFY(!h.button("btnCancelClaim")->isEnabled());
+        h.selectRow("tblPendingClaims", 1);
+        QVERIFY(h.button("btnReleaseClaim")->isEnabled());
+        // somebody else's matured claim: only its claimant can release it
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array());
+        h.selectRow("tblPendingClaims", 0);
+        QVERIFY(!h.button("btnReleaseClaim")->isEnabled());
+        QVERIFY(h.label("lblPendingAction").contains("only the claimant's wallet can release it"));
+        // a non-CLAIMING row in the reply is ignored
+        h.ctl.feedUpgrade(json::array({positionActive()}), json(nullptr));
+        QCOMPARE(m->rowCount(QModelIndex()), 0);
+        QVERIFY(h.label("lblPendingAction").contains("No claim is pending"));
+    }
+
+    // vault_release: our claimant intent with no recipient (the node finds this wallet's script);
+    // the residual of somebody else's vault with the owner's P2PKH script from ownerKeyId
+    void releaseClaimRequestShapes() {
+        QCOMPARE(YellowbackController::p2pkhScriptForKeyId("1f2e3d4c5b6a79880706050403020100f1e2d3c4"),
+                 QString("76a914c4d3e2f1000102030405060788796a5b4c3d2e1f88ac"));      // CKeyID::GetHex is byte-reversed
+        QVERIFY(YellowbackController::p2pkhScriptForKeyId("xyz").isEmpty());
+        Harness h;
+        h.feedActive(414);
+        json tx = txMint(); tx["type"] = "claim"; tx["txid"] = CLAIM_TXID; tx["height"] = 405;
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
+        h.ctl.feedUpgrade(json::array({claimingVault()}), json(nullptr));
+        h.rpc.results[YellowbackRpc::LISTVAULTS] = json::array({claimingVault()});    // the refresh after the action reads them back
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({tx});
+        h.rpc.results["vault_release"] = "a11ce0000000000000000000000000000000000000000000000000000000000a";
+        h.tab.releaseClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.confirms[0].startsWith("Release claim intent " % QString(CLAIM_TXID) % ":0"), qPrintable(h.confirms[0]));
+        QVERIFY(h.confirms[0].contains("no attestor can cancel it any more"));
+        QCOMPARE(h.rpc.lastParams("vault_release"), json::array({std::string(CLAIM_TXID) + ":0"}));
+        QVERIFY(h.notices.last().startsWith("Release sent|txid a11ce"));
+        h.tab.releaseClaim(*h.ctl.pendingClaimsModel()->rowAt(1));
+        QCOMPARE(h.rpc.lastParams("vault_release"), json::array({std::string(CLAIM_TXID) + ":1", "76a914c4d3e2f1000102030405060788796a5b4c3d2e1f88ac"}));
+        QVERIFY(h.confirms.last().contains("to the vault owner"));
+        // before release height: nothing is sent
+        Harness early;
+        early.feedActive(410);
+        early.ctl.feedUpgrade(json::array({claimingVault()}), json(nullptr));
+        early.tab.releaseClaim(*early.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(early.rpc.count("vault_release"), 0);
+        QVERIFY(early.notices.last().contains("matures at height 415"));
+        // the node's refusal is shown verbatim
+        h.rpc.results.remove("vault_release");
+        h.rpc.errors["vault_release"] = "the intent matures at height 415";
+        h.tab.releaseClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY(h.errorNotices.last().startsWith("vault_release failed: the intent matures at height 415"));
+        QVERIFY(h.copyIsClean());
+    }
+
+    // The attestor's cancel of a wrong-price claim: the warning names the lost burn and the
+    // equivocation risk; build, sign, send through the primitive RPCs; the signed cancel is kept
+    // and a second attempt only re-sends it, never signs another.
+    void cancelClaimFlow() {
+        Harness h;
+        h.feedActive(408);
+        h.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(true));
+        h.rpc.results[YellowbackRpc::LISTVAULTS] = json::array({claimingVault()});    // the refresh after the action reads them back
+        h.rpc.results["set_getinfo"] = attestorSetReply(true);
+        const QString outpoint = QString(CLAIM_TXID) % ":0";
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        h.rpc.results["vault_buildcancel"] = json::parse(R"({"hex": "04deadbeef", "required": 1, "cancelsetid": "5e75", "deadline": 414})");
+        h.rpc.results["set_signcancel"]    = json::parse(R"({"hex": "04deadbeefsigned", "complete": true, "signatures": 1, "required": 1, "sighash": "00", "setsigs": []})");
+        h.rpc.results["vault_send"]        = "ca9ce10000000000000000000000000000000000000000000000000000000000";
+        // the residual intent cannot be cancelled
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(1));
+        QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
+        QVERIFY(h.errorNotices.last().contains("Only a claimant intent can be cancelled"));
+        // a declined warning sends nothing
+        h.answer = false;
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
+        const QString warning = h.confirms.last();
+        QVERIFY2(warning.contains("WARNING. Cancel only a claim made at a wrong price"), qPrintable(warning));
+        QVERIFY(warning.contains("burn of $1,000.00 of YED is NOT refunded"));
+        QVERIFY(warning.contains("provable equivocation"));
+        QVERIFY(warning.contains("freezes your bond"));
+        QVERIFY(warning.contains("must confirm by height 414"));
+        QVERIFY(warning.contains("1 signature(s) needed"));
+        // confirmed: build, sign, keep, send
+        h.answer = true;
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.rpc.lastParams("vault_buildcancel"), json::array({outpoint.toStdString()}));
+        QCOMPARE(h.rpc.lastParams("set_signcancel"), json::array({"04deadbeef"}));
+        QCOMPARE(h.rpc.lastParams("vault_send"), json::array({"04deadbeefsigned"}));
+        QCOMPARE(Settings::getInstance()->getYellowbackSignedCancel(outpoint), QString("04deadbeefsigned"));
+        QVERIFY2(h.notices.last().startsWith("Cancel sent|txid ca9ce1"), qPrintable(h.notices.last()));
+        QVERIFY(h.notices.last().contains("burn is not refunded"));
+        // a second cancel of the same intent re-sends the kept transaction and signs nothing
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.rpc.count("vault_buildcancel"), 1);
+        QCOMPARE(h.rpc.count("set_signcancel"), 1);
+        QCOMPARE(h.rpc.count("vault_send"), 2);
+        QVERIFY(h.confirms.last().contains("will not sign another one"));
+        h.selectRow("tblPendingClaims", 0);
+        QVERIFY(h.label("lblPendingAction").contains("already signed a cancel"));
+        // a set that needs more signatures: kept, put on the clipboard, nothing sent
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        h.rpc.results["set_signcancel"] = json::parse(R"({"hex": "04partly", "complete": false, "signatures": 1, "required": 2})");
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.rpc.count("vault_send"), 2);
+        QVERIFY(h.notices.last().startsWith("Cancel needs more signatures|"));
+        QVERIFY(h.notices.last().contains("1 of 2 signatures"));
+        QCOMPARE(Settings::getInstance()->getYellowbackSignedCancel(outpoint), QString("04partly"));
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        // a wallet that is no attestor, or a matured intent: refused before any RPC
+        Harness plain;
+        plain.feedActive(408);
+        plain.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(false));
+        plain.tab.cancelClaim(*plain.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(plain.rpc.count("vault_buildcancel"), 0);
+        QVERIFY(plain.errorNotices.last().contains("no current member key"));
+        Harness late;
+        late.feedActive(414);
+        late.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(true));
+        late.tab.cancelClaim(*late.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(late.rpc.count("vault_buildcancel"), 0);
+        QVERIFY(late.errorNotices.last().contains("can no longer be cancelled"));
+        QVERIFY(h.copyIsClean());
+    }
+
+    // A claim of ours that the attestor set cancelled: the vault it closed is gone (re-created
+    // under the cancel's txid), so yed_getvault answers vault-not-found; the page says the burn is lost.
+    void cancelledClaimsAreShown() {
+        Harness h;
+        h.feedActive(420);
+        json tx = txMint(); tx["type"] = "claim"; tx["txid"] = CLAIM_TXID; tx["burned"] = 100000; tx["height"] = 405;
+        json released = tx; released["txid"] = "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2";
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({tx, released}));
+        json info = txInfoClaim(); info["closedVaults"] = json::array({{{"txid", "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}, {"vout", 0}}});
+        // one fake reply per method: both claims read the same vault; first it is gone (cancelled)
+        h.rpc.results[YellowbackRpc::GETTXINFO] = info;
+        h.rpc.errors[YellowbackRpc::GETVAULT] = "vault-not-found: 6a1f…";
+        h.ctl.refreshClaimOutcomes();
+        auto outcomes = h.ctl.claimOutcomes();
+        QCOMPARE(outcomes.size(), 2);
+        QCOMPARE(outcomes[0].outcome, QString("cancelled"));
+        QVERIFY(h.visible("lblCancelledClaims"));
+        QVERIFY2(h.label("lblCancelledClaims").contains("was cancelled by the attestor set"), qPrintable(h.label("lblCancelledClaims")));
+        QVERIFY(h.label("lblCancelledClaims").contains("$1,000.00 of YED it burned are not refunded"));
+        QVERIFY(h.label("lblCancelledClaims").contains("more collateralised"));
+        // a released claim reads CLAIMED, a pending one CLAIMING; neither is listed as cancelled
+        QCOMPARE(YellowbackTab::describeCancelledClaims({}), QString());
+        Harness r;
+        r.feedActive(420);
+        r.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({released}));
+        r.rpc.results[YellowbackRpc::GETTXINFO] = info;
+        json claimedVault = positionActive(); claimedVault["status"] = "CLAIMED";
+        r.rpc.results[YellowbackRpc::GETVAULT] = claimedVault;
+        r.ctl.refreshClaimOutcomes();
+        QCOMPARE(r.ctl.claimOutcomes().value(0).outcome, QString("released"));
+        QVERIFY(!r.visible("lblCancelledClaims"));
+        // the node types the owner's view of a release "redeem" with nothing burned: labelled for what it is
+        QCOMPARE(YellowbackFormat::rowLabel("redeem", "", 0), QString("Claim released"));
+        QCOMPARE(YellowbackFormat::rowLabel("redeem", "owner", 100000), QString("Redeem"));
+        QCOMPARE(YellowbackFormat::typeLabel("claim_cancel"), QString("Claim cancelled"));
+    }
+
+    // P4-b: this wallet's membership of the YED attestor set, and the heartbeat
+    void membershipAndHeartbeat() {
+        Harness h;
+        h.feedActive(330);
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(false));
+        QVERIFY2(h.label("lblMembership").contains("YED attestor set 5e755e755e755e75"), qPrintable(h.label("lblMembership")));
+        QVERIFY(h.label("lblMembership").contains("2 member(s), 2 current"));
+        QVERIFY(h.label("lblMembership").contains("not an attestor"));
+        QVERIFY(!h.button("btnHeartbeat")->isEnabled());
+        h.tab.heartbeatMember(QString());
+        QVERIFY(h.errorNotices.last().contains("no member key"));
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true));
+        h.rpc.results["set_getinfo"] = attestorSetReply(true);
+        QVERIFY(h.label("lblMembership").contains("Your member 03b1c2d3e4f50617"));
+        QVERIFY2(h.label("lblMembership").contains("current, live (last act at 320)"), qPrintable(h.label("lblMembership")));
+        QVERIFY(h.label("lblMembership").contains("dormant from height 1321"));
+        QVERIFY(h.label("lblMembership").contains("Pending claims page"));
+        QVERIFY(h.button("btnHeartbeat")->isEnabled());
+        h.rpc.results["set_heartbeat"] = json::parse(R"({"txid": "beefbeef", "memberkey": "03b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8e9f0"})");
+        h.button("btnHeartbeat")->click();
+        QCOMPARE(h.rpc.lastParams("set_heartbeat"), json::array({"5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", MEMBER_KEY}));
+        QVERIFY(h.confirms.last().contains("stays live for the next 1000 blocks"));
+        QVERIFY(h.notices.last().startsWith("Heartbeat sent|txid beefbeef"));
+        // dormant and frozen are said so
+        json dormant = attestorSetReply(true); dormant["memberlist"][1]["live"] = false;
+        h.ctl.feedUpgrade(json(nullptr), dormant);
+        QVERIFY(h.label("lblMembership").contains("current but DORMANT"));
+        json frozen = attestorSetReply(true, true, true);
+        h.ctl.feedUpgrade(json(nullptr), frozen);
+        QVERIFY(h.label("lblMembership").contains("bond frozen"));
+        QVERIFY(!h.button("btnHeartbeat")->isEnabled());
+        // the Attestors table shows the set's lastAct and bondFrozen per record
+        json row = attestorRow(); row["lastAct"] = 281; row["bondFrozen"] = true;
+        h.ctl.feedAttest(json(nullptr), json::array({row}), json(nullptr));
+        auto m = h.ctl.attestorsModel();
+        QCOMPARE(m->data(m->index(0, YellowbackAttestorsModel::LastAct), Qt::DisplayRole).toString(), QString("281"));
+        QCOMPARE(m->data(m->index(0, YellowbackAttestorsModel::BondFrozen), Qt::DisplayRole).toString(), QString("FROZEN"));
+        h.feedActive(600);
+        h.ctl.feedAttest(json(nullptr), json::array({row}), json(nullptr));
+        h.selectRow("tblAttestors", 0);
+        QVERIFY(!h.button("btnWithdraw")->isEnabled());          // past the locktime, but frozen
+        QVERIFY(h.label("lblAttestorAction").contains("FROZEN"));
     }
 
     void vaultsRenderClosedRows() {
         json closed = positionActive();
         closed["status"] = "CLOSED"; closed["closeHeight"] = 390; closed["closingTxid"] = "9e8d"; closed["burnedCents"] = 100000;
-        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(closed), 400, false);
-        QVERIFY(!a.release && !a.redeem && !a.sweep);
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(closed), 400);
+        QVERIFY(!a.release && !a.redeem && !a.renew);
         QVERIFY(a.text.contains("burning $1,000.00"));
 
         json swept = closed; swept["burnedCents"] = 0; swept["unbacked"] = true;
-        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(swept), 400, false);
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(swept), 400);
         QVERIFY(a.text.contains("unbacked"));
 
         json claimed = closed; claimed["status"] = "CLAIMED";
-        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(claimed), 400, false);
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(claimed), 400);
         QVERIFY(a.text.contains("Claimed by someone else"));
 
         Harness h;
@@ -1431,7 +1661,7 @@ private slots:
     void transactionTypesParse() {
         QCOMPARE(YellowbackFormat::typeLabel("claim"), QString("Claim"));
         QCOMPARE(YellowbackFormat::typeLabel("claimed"), QString("Vault claimed"));
-        QCOMPARE(YellowbackFormat::typeLabel("sweep"), QString("Sweep"));
+        QCOMPARE(YellowbackFormat::typeLabel("claim_release"), QString("Claim released"));
         json e = txMint(); e["height"] = -1; e["confirmations"] = 0; e["verdict"] = "expired"; e["expired"] = true;
         QVERIFY(YellowbackTx::fromJson(e).expired);
     }
@@ -1620,14 +1850,13 @@ private slots:
     void mintBadLockAndUnsatisfiable() {
         QVERIFY(YellowbackController::explainError("mint-bad-lock: lockBlocks 47 is in no term class").contains("no enabled term class"));
         QVERIFY(YellowbackController::explainError("mint-unsatisfiable: the required collateral exceeds MAX_MONEY").contains("maximum amount of YEC"));
-        QVERIFY(YellowbackController::explainError("mintpol-participation: x").contains("60 %"));
         QVERIFY(YellowbackController::explainError("mintpol-cap: x").contains("supply cap"));
         QCOMPARE(YellowbackController::explainError("mintpol-cap: x"), QString("Minting is paused: the supply cap is reached."));   // before W20
         const QString w20 = YellowbackController::explainError("mintpol-cap: supply cap headroom is 0 cents; above the cap only a term class whose minimum ratio is at least 500 % can mint (class A)");
         QVERIFY2(w20.contains("above the supply cap") && w20.contains("class the node names") && !w20.contains("paused"), qPrintable(w20));
         QVERIFY(YellowbackController::explainError("mintpol-divergence: x").contains("diverge"));
         QVERIFY(YellowbackController::explainError("mintpol-global-ratio: x").contains("collateral ratio"));
-        QVERIFY(YellowbackController::explainError("mintpol-not-active: x").contains("activation"));
+        QVERIFY(YellowbackController::explainError("mintpol-not-active: x").contains("vault upgrade"));
         QVERIFY(YellowbackController::explainError("something else entirely").isEmpty());
     }
 
@@ -1813,7 +2042,7 @@ private slots:
         Harness h;
         json p = positionActive();
         p["status"] = "VOID"; p["voidReason"] = "mint-ratio-below-minimum"; p["mintedCents"] = 0;
-        p["sweepBefore"] = 404; p["canRedeem"] = true; p["underwaterAt"] = nullptr;
+        p["canRedeem"] = true; p["underwaterAt"] = nullptr;
         h.feedActive(381, json::array({p}), json(nullptr), 0);
         json r = redeemReply(); r["burnedCents"] = 0; r["feeZat"] = 0; r["payee"] = nullptr; r["collateralOut"] = 25125628141;
         h.rpc.results[YellowbackRpc::REDEEM] = r;
@@ -1831,7 +2060,6 @@ private slots:
         // the Vaults page offers Release for that row
         h.selectRow("tblPositions", 0);
         QVERIFY(h.button("btnRelease")->isEnabled() && !h.button("btnRelease")->isHidden());
-        QVERIFY(h.button("btnSweep")->isHidden());
         QVERIFY(h.copyIsClean());
     }
 
@@ -1846,16 +2074,26 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Claim vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY(h.confirms[0].contains("Enforcement fee: " % YellowbackFormat::zec(62814070)));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070)));
-        QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24812185931)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
-        QVERIFY2(h.confirms[0].contains("burning at most $1,000.99 of YED"), qPrintable(h.confirms[0]));               // the burn cap sent (H-9.3)
+        QVERIFY2(h.confirms[0].contains("Fees from your own YEC: the enforcement fee " % YellowbackFormat::zec(62814070)), qPrintable(h.confirms[0]));
+        // rpcversion 5 (U-23): the claim intent carries the whole collateral less the residual (0 here)
+        QVERIFY(h.confirms[0].contains("Claim intent: about " % YellowbackFormat::zec(25125628141)));
+        QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24874371860)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
+        QVERIFY2(h.confirms[0].contains("at most $1,000.99"), qPrintable(h.confirms[0]));                               // the burn cap sent (H-9.3)
         QVERIFY(h.confirms[0].contains("$0.4000 per YEC"));
+        QVERIFY(h.confirms[0].contains("waits in a claim intent for 10 blocks"));
+        QVERIFY(h.confirms[0].contains("does NOT refund the $1,000.00 of YED you burn"));
         // yed_claim <vaultTxid> [to] [bundleHex] [wait]: default destination, pool bundle, wait = false
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24812185931, 100099}));   // minOutZat = youGet - 1 % (F-1); maxBurnCents = debt + 99 (H-9.3)
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24874371860, 100099}));   // minOutZat = intent - 1 % (F-1); maxBurnCents = debt + 99 (H-9.3)
         QVERIFY(h.notices[0].startsWith("Claim sent|"));
         QVERIFY(h.notices[0].contains("YED burned: $1,000.00"));
         QVERIFY(h.notices[0].contains("smQvTmAz2ExamplePayoutAddress1111111"));
+        QVERIFY2(h.notices[0].contains("Release it on the Pending claims page"), qPrintable(h.notices[0]));
+        // D-U1: a Sapling destination is refused before any RPC
+        const int claimsBefore = h.rpc.count(YellowbackRpc::CLAIM);
+        h.tab.claimVault(YellowbackClaimable::fromJson(claimableRow()), "ys1examplesaplingaddress");
+        QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), claimsBefore);
+        QVERIFY(h.errorNotices.last().contains("must be a transparent address"));
+        QVERIFY(YellowbackController::explainError("bad-address: a claim pays a transparent key").contains("transparent address"));
         // the Claim button follows the selection
         QVERIFY(!h.button("btnClaim")->isEnabled());
         h.selectRow("tblClaimable", 0);
@@ -1883,51 +2121,6 @@ private slots:
         QVERIFY2(h.errorNotices[3].contains("The price moved"), qPrintable(h.errorNotices[3]));
     }
 
-    // ── Sweep dialog (L10) ────────────────────────────────────────────────────────────────
-
-    void sweepCarriesTheAcknowledgement() {
-        Harness h;
-        json p = positionActive(); p["canSweep"] = true; p["sweepBefore"] = 404;
-        h.feedActive(390, json::array({p}), json(nullptr), 500000, true);
-        h.rpc.results[YellowbackRpc::SWEEP] = sweepReply();
-        h.tab.sweepVault(YellowbackPosition::fromJson(p));
-
-        QCOMPARE(h.confirms.size(), 1);
-        QVERIFY(h.confirms[0].contains(YellowbackRpc::SWEEP_ACKNOWLEDGEMENT));   // verbatim
-        QVERIFY(h.confirms[0].contains("no YED burned and no fee paid"));
-        QVERIFY(h.confirms[0].contains("$1,000.00 of YED minted against this vault stay in circulation unbacked"));
-        QVERIFY(h.confirms[0].contains("before height 404"));
-        // yed_sweep <vaultTxid> "I understand this leaves YED unbacked"
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SWEEP),
-                 json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "I understand this leaves YED unbacked"}));
-        QVERIFY(h.notices[0].startsWith("Sweep sent|"));
-        QVERIFY(h.notices[0].contains("YED now unbacked: $1,000.00"));
-        QVERIFY(h.notices[0].contains(YellowbackFormat::zec(25125627141) % " to smExampleTransparentTwin111111111111"));
-        QVERIFY(h.notices[0].contains("clipboard"));
-        h.selectRow("tblPositions", 0);
-        QVERIFY(h.button("btnSweep")->isEnabled() && !h.button("btnSweep")->isHidden());
-        QVERIFY(h.button("btnRedeem")->isEnabled());   // past lockHeight: Redeem is still offered
-        QVERIFY(h.copyIsClean());
-    }
-
-    void sweepErrors() {
-        Harness h;
-        json p = positionActive(); p["canSweep"] = true;
-        h.feedActive(390, json::array({p}), json(nullptr), 500000, true);
-        h.rpc.errors[YellowbackRpc::SWEEP] = "sweep-not-abandoned: enforcement is on";
-        h.tab.sweepVault(YellowbackPosition::fromJson(p));
-        QVERIFY(h.errorNotices[0].contains("yed_sweep failed: sweep-not-abandoned"));
-        QVERIFY(h.errorNotices[0].contains("Redeem instead"));
-        h.rpc.errors[YellowbackRpc::SWEEP] = "sweep-acknowledgement-missing: second argument";
-        h.tab.sweepVault(YellowbackPosition::fromJson(p));
-        QVERIFY(h.errorNotices[1].contains("exact acknowledgement"));
-        h.rpc.errors[YellowbackRpc::SWEEP] = "Method not found (yed_sweep)";
-        h.tab.sweepVault(YellowbackPosition::fromJson(p));
-        QVERIFY(h.errorNotices[2].contains("does not offer this command"));
-        QVERIFY(h.copyIsClean());
-    }
-
-    // No action is reachable while the tab is unavailable
     void actionsNeedAvailability() {
         Harness h;
         json info = infoActive(); info["healthy"] = false; info["unhealthyReason"] = "storage";
@@ -1938,13 +2131,19 @@ private slots:
         h.tab.doMint();
         h.tab.redeemVault(YellowbackPosition::fromJson(p));
         h.tab.claimVault(YellowbackClaimable::fromJson(claimableRow()));
-        h.tab.sweepVault(YellowbackPosition::fromJson(p));
+        h.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(true));
+        h.tab.releaseClaim(*h.ctl.pendingClaimsModel()->rowAt(1));
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        h.tab.heartbeatMember(MEMBER_KEY);
         QVERIFY(h.rpc.calls.isEmpty());
         QVERIFY(h.confirms.isEmpty());
         QVERIFY(!h.button("btnMint")->isEnabled());
         QVERIFY(!h.button("btnRedeem")->isEnabled());
         QVERIFY(!h.button("btnClaim")->isEnabled());
         QVERIFY(!h.button("btnStart")->isEnabled());
+        QVERIFY(!h.button("btnReleaseClaim")->isEnabled());
+        QVERIFY(!h.button("btnCancelClaim")->isEnabled());
+        QVERIFY(!h.button("btnHeartbeat")->isEnabled());
     }
 
     // ── Devnet end-to-end (N28): mint → send → redeem against a running devnet ────────────
@@ -2160,7 +2359,7 @@ private slots:
         QVERIFY(pos.noticed && !pos.canNotice);
         QCOMPARE(pos.noticeHeight, 338);
         QCOMPARE(pos.emergencyOpenAt, 342);
-        auto a = YellowbackTab::vaultActions(pos, 339, false);
+        auto a = YellowbackTab::vaultActions(pos, 339);
         QVERIFY2(a.text.contains("A claim notice stands against it (confirmed at height 338)"), qPrintable(a.text));
         QVERIFY(a.text.contains("from reference height 342"));
         // The contract's plain row: no notice
@@ -2176,7 +2375,7 @@ private slots:
         h.feed(infoActive(), statsOpen(), activationActive(), json::array({p}));
         auto m = h.ctl.positionsModel();
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Notice), Qt::DisplayRole).toString(), QString("notice possible"));
-        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, false);
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331);
         QVERIFY2(a.text.contains("a claim notice could be posted"), qPrintable(a.text));
         QVERIFY(!a.text.contains("trustless", Qt::CaseInsensitive));
     }
@@ -2321,16 +2520,20 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.confirms[0].contains("Claim path: emergency clause (b)"), qPrintable(h.confirms[0]));
         QVERIFY(h.confirms[0].contains("height 338"));
-        QVERIFY2(h.confirms[0].contains("Residual: " % YellowbackFormat::zec(250000000) % " of YEC goes back to the vault owner"), qPrintable(h.confirms[0]));
-        QVERIFY(h.confirms[0].contains("Attestation fee: " % YellowbackFormat::zec(15703517)));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070 - 15703517 - 250000000)));   // what the claimant gets
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24549139449, 100099}));   // (25125628141 - 62814070 - 15703517 - 250000000) - 1 %
+        QVERIFY2(h.confirms[0].contains("Residual: " % YellowbackFormat::zec(250000000) % " of YEC goes to the vault owner in its own intent"), qPrintable(h.confirms[0]));
+        QVERIFY(h.confirms[0].contains("Attestation fee: " % YellowbackFormat::zec(15703517) % " of YEC from your own YEC"));
+        QVERIFY(h.confirms[0].contains("and the attestation fee " % YellowbackFormat::zec(15703517)));
+        // U-23: the claim intent is the collateral less the residual; the fees are the claimant's own YEC
+        QVERIFY(h.confirms[0].contains("Claim intent: about " % YellowbackFormat::zec(25125628141 - 250000000)));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24626871860, 100099}));   // (25125628141 - 250000000) - 1 %
         QVERIFY2(h.label("lblClaimHint").startsWith("Preparing price proof (1 block)"), qPrintable(h.label("lblClaimHint")));
         QTRY_COMPARE_WITH_TIMEOUT(h.notices.size(), 1, 2000);
         QVERIFY(h.notices[0].startsWith("Claim sent|"));
         QVERIFY2(h.notices[0].contains("YED burned: $1,000.00"), qPrintable(h.notices[0]));
         QVERIFY2(h.notices[0].contains("claim path: emergency clause (b)"), qPrintable(h.notices[0]));
-        QVERIFY2(h.notices[0].contains("residual returned to the vault owner: " % YellowbackFormat::zec(250000000)), qPrintable(h.notices[0]));
+        QVERIFY2(h.notices[0].contains("residual intent for the vault owner: " % YellowbackFormat::zec(250000000)), qPrintable(h.notices[0]));
+        QVERIFY2(h.notices[0].contains("claim intent 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d:0"), qPrintable(h.notices[0]));
+        QVERIFY2(h.notices[0].contains("from height 342 on"), qPrintable(h.notices[0]));   // txInfoMint height 332 + CLAIM_DELAY 10
         // A row the node could build no bundle for says so before the user tries
         row["claimPath"] = ""; row["residualZat"] = 0;
         QString none = YellowbackTab::describeClaimPath(YellowbackClaimable::fromJson(row));
@@ -2503,8 +2706,6 @@ private slots:
           "bondZat": 1000000000, "bondLocktime": 721, "flags": {"tier": 1, "pool": true}, "maturesAt": 529})");
         h.rpc.results[YellowbackRpc::WITHDRAWBOND] = json::parse(R"({"txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d",
           "seq": 1, "bondZat": 1000000000, "bondOut": 999990000, "to": "smExampleTransparentTwin111111111111"})");
-        h.rpc.results[YellowbackRpc::REVIVE] = json::parse(R"({"txid": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d",
-          "seq": 5, "citedHeight": 518, "priceMicroUsd": 1985000, "hex": "0500"})");
         h.rpc.results[YellowbackRpc::REPORTEQUIVOCATION] = json::parse(R"({"txid": "", "carrierTxid": "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c",
           "pending": true, "seq": 4, "citedHeight": 329, "priceA": 1985000, "priceB": 2185000})");
         h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array();   // the equivocation row appears only after the report
@@ -2512,27 +2713,32 @@ private slots:
         h.rpc.results[YellowbackRpc::GETTXINFO] = eqInfo;
         Settings::getInstance()->setYellowbackBackupPending(false);
 
-        // Register: the dialog states the bond, the lock and the one-hot-key-one-node warning
-        h.tab.registerAttestor("10", 200, 1, true);
+        // Register (P4-b: a join to the YED attestor set): the dialog states the bond, the lock, the
+        // one key that is member, hot, bond and fee key (D-U4), liveness, and the one-key-one-node warning
+        h.tab.registerAttestor("10", 200);
         QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.confirms[0].startsWith("Join the YED attestor set with this wallet."), qPrintable(h.confirms[0]));
         QVERIFY2(h.confirms[0].contains("Bond: 10.00000000 of YEC, locked in a bond output until height 721 (200 blocks"), qPrintable(h.confirms[0]));
-        QVERIFY(h.confirms[0].contains("Source tier: mixed. Pool operator: yes."));
-        QVERIFY(h.confirms[0].contains("eligible for bundles 8 blocks after"));      // params.attest.bondMaturity
-        QVERIFY(h.confirms[0].contains("Run the yellowback-attest agent on this node only. One hot key on two nodes defeats"));
+        QVERIFY(h.confirms[0].contains("join act to the set 5e755e755e755e75"));
+        QVERIFY(h.confirms[0].contains("at least 8 blocks after the join confirms"));      // params.attest.bondMaturity
+        QVERIFY(h.confirms[0].contains("member key, the hot key the agent signs prices with, the bond key and the fee key at once"));
+        QVERIFY(h.confirms[0].contains("no heartbeat within the set's liveness window is dormant"));
+        QVERIFY(h.confirms[0].contains("Run the yellowback-attest agent on this node only. One key on two nodes defeats"));
         QVERIFY(h.confirms[0].contains("Back up wallet.dat"));
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"10", 200, 5}));   // the bond as a decimal string (F-8); flags: tier 1 | pool bit
-        h.tab.registerAttestor("0.12345678", 200, 2, false);
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"0.12345678", 200, 2}));   // sent as typed, no double rounding
+        QVERIFY(!h.confirms[0].contains("Source tier"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"10", 200}));   // the bond as a decimal string (F-8); no flags since P4-b
+        h.tab.registerAttestor("0.12345678", 200);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"0.12345678", 200}));   // sent as typed, no double rounding
         QVERIFY(h.confirms.last().contains("Bond: 0.12345678 of YEC"));
-        QCOMPARE(YellowbackController::attestorFlags(2, false), 2);
-        QVERIFY(h.notices.last().startsWith("Registration sent|"));
+        QVERIFY(h.notices.last().startsWith("Join sent|"));
         QVERIFY(h.notices.last().contains("smExampleBondKeyAddr11111111111111111"));
         QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
 
         // Withdraw: offered on the selected row once bondLocktime has passed
         h.selectRow("tblAttestors", 0);
         QVERIFY(h.button("btnWithdraw")->isEnabled());
-        QVERIFY(!h.button("btnRevive")->isEnabled());
+        QVERIFY(h.button("btnRevive") == nullptr);                       // P4-b: revival is a heartbeat
+        QVERIFY(!h.button("btnHeartbeat")->isEnabled());                 // this wallet is no member (no set_getinfo yet)
         QVERIFY(h.label("lblAttestorAction").contains("past its locktime (500)"));
         h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
         QVERIFY(h.confirms.last().startsWith("Withdraw the bond of attestor 1."));
@@ -2548,14 +2754,9 @@ private slots:
         QCOMPARE(h.rpc.count(YellowbackRpc::WITHDRAWBOND), before);
         QVERIFY(h.notices.last().contains("locked until height 600"));
 
-        // Revive: the DORMANT row, with a price
+        // A DORMANT row: a heartbeat by its member key revives it
         h.selectRow("tblAttestors", 1);
-        QVERIFY(h.button("btnRevive")->isEnabled());
-        QVERIFY(h.label("lblAttestorAction").contains("DORMANT"));
-        h.tab.reviveAttestor(YellowbackAttestor::fromJson(dormant), 1985000);
-        QVERIFY2(h.confirms.last().startsWith("Revive attestor 5 with an attestation of $1.9850 per YEC for reference height 518"), qPrintable(h.confirms.last()));
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REVIVE), json::array({5, 1985000}));
-        QVERIFY(h.notices.last().startsWith("Revival sent|"));
+        QVERIFY(h.label("lblAttestorAction").contains("DORMANT: a heartbeat"));
 
         // Report equivocation: two 148-character hexes, wait = false, then the carrier follow-up
         const QString hexA = QString(148, 'a'), hexB = QString(146, 'b') % "01";
@@ -2577,15 +2778,15 @@ private slots:
         QVERIFY2(h.notices.last().contains("attestor 4, cited height 329, prices $1.9850 and $2.1850"), qPrintable(h.notices.last()));
 
         // The refusals explain themselves
-        h.rpc.errors[YellowbackRpc::REVIVE] = "not-dormant: status ELIGIBLE";
-        h.tab.reviveAttestor(YellowbackAttestor::fromJson(dormant), 1985000);
-        QVERIFY(h.errorNotices.last().contains("Only a DORMANT attestor"));
         h.rpc.errors[YellowbackRpc::WITHDRAWBOND] = "attest-key-not-held: bond key";
         h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
         QVERIFY(h.errorNotices.last().contains("does not hold the key"));
         h.rpc.errors[YellowbackRpc::REGISTERATTESTOR] = "bond-below-min: 9 < 10";
-        h.tab.registerAttestor("9", 200, 0, false);
+        h.tab.registerAttestor("9", 200);
         QVERIFY(h.errorNotices.last().contains("below the minimum"));
+        h.rpc.errors[YellowbackRpc::REGISTERATTESTOR] = "register-needs-admission: the set is not open; partly signed hex 0400";
+        h.tab.registerAttestor("10", 200);
+        QVERIFY(h.errorNotices.last().contains("needs admission signatures"));
         QVERIFY(h.copyIsClean());
     }
 
@@ -2659,19 +2860,17 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
-    // H-9.2: dates on every ACTIVE vault; renew and redeem from lockHeight; no renew under abandonment.
+    // H-9.2: dates on every ACTIVE vault; renew and redeem from lockHeight (rpcversion 5: no abandonment to stop renew).
     void vaultActionsOfferRenewFromLockHeight() {
         YellowbackPosition p = YellowbackPosition::fromJson(positionActive());
-        auto before = YellowbackTab::vaultActions(p, 379, false);
+        auto before = YellowbackTab::vaultActions(p, 379);
         QVERIFY(!before.redeem && !before.renew);
         QVERIFY2(before.text.contains("redeemable or renewable from lock height 380 (~"), qPrintable(before.text));
         QVERIFY(before.text.contains("claim height 404 (~"));
-        auto at = YellowbackTab::vaultActions(p, 380, false);
+        auto at = YellowbackTab::vaultActions(p, 380);
         QVERIFY(at.redeem && at.renew);
         QVERIFY(at.text.contains("Renew redeems it and mints $1,000.00 again"));
         QVERIFY(at.text.contains("Claim height 404 (~"));
-        auto abandoned = YellowbackTab::vaultActions(p, 380, true);
-        QVERIFY(abandoned.sweep && abandoned.redeem && !abandoned.renew);
 
         Harness h;
         json row = positionActive(); row["canRedeem"] = true;
@@ -2941,7 +3140,7 @@ private slots:
         // Mint $100 for the shortest class-A lock (48 blocks on regtest)
         h.mintAmount("100");
         auto tier = h.tab.findChild<QComboBox*>("cmbTier");
-        QVERIFY(tier != nullptr && tier->count() == 3);
+        QVERIFY(tier != nullptr && tier->count() >= 1);
         tier->setCurrentIndex(0);
         QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { dev.rpc("generate", json::array({1})); }), "node 0's attestation pool did not become fresh");
         h.tab.doMint();
@@ -3031,8 +3230,8 @@ private slots:
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
         // Blocks come from the pools (nodes 2-4, round-robin), as `yellowback-devnet mine` does:
-        // node 0's own blocks carry no tag, and a run of them halts minting (NO_PRICE,
-        // PARTICIPATION) before the renewal's mint leg. Wait for node 0 to have the block.
+        // node 0's own blocks carry no tag, and a run of them halts minting (NO_PRICE) before the
+        // renewal's mint leg. Wait for node 0 to have the block.
         int pool = 0;
         auto mineOne = [&]() {
             const int before = dev.rpc("getblockcount").get<int>();
@@ -3046,7 +3245,8 @@ private slots:
         h.ctl.setPendingPollMs(250);
         h.ctl.onConnected();
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
-        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)4);
+        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)5);
+        QVERIFY2(h.ctl.upgradeActive(), "the devnet's vault upgrade is not active");
         QVERIFY(YellowbackJson::has(h.ctl.info(), YellowbackRpc::Info::MINT_REQUIRES_ARMED));
         QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
         const qint64 yedBefore = h.ctl.confirmedCents();
@@ -3089,7 +3289,7 @@ private slots:
         h.ctl.refresh(true);
         for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
             if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
-        auto acts = YellowbackTab::vaultActions(vault, h.ctl.height(), h.ctl.isAbandoned());
+        auto acts = YellowbackTab::vaultActions(vault, h.ctl.height());
         QVERIFY(acts.renew && acts.redeem);
         QVERIFY2(h.ctl.mintBlocker(vault.mintedCents, h.ctl.classForLock(h.ctl.renewLockBlocks(vault)).name).isEmpty(),
                  qPrintable(h.ctl.mintBlocker(vault.mintedCents)));
@@ -3137,50 +3337,47 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
-    // ── Devnet claim and sweep (N28, L10, L13) ───────────────────────────────────────────
-    // The whole schedule is the test's own: it crashes the pools' quotes for a full slow window
-    // so pClaim = max(pMid, pSlow) falls (the sequence of ycash-dd/qa/rpc-tests/yellowback_claim.py),
-    // claims the underwater vault through the Claim page, then mines untagged blocks from node 0
-    // until yed_getinfo.abandoned and sweeps the second vault through the Vaults page.  Every
-    // Yellowback action goes through the tab's own code path; only mining and the pools' quotes
-    // (other people's machines on a real network) are driven directly.
-    void devnetClaimAndSweep() {
+    // ── Devnet claims under the vault upgrade (rpcversion 5, U-23, U-24) ───────────────────
+    // Two vaults are minted at the devnet's $50 and the market crashes for a full slow window.
+    // Vault R is claimed through the Claim page and, after CLAIM_DELAY, released through the
+    // Pending claims page: CLAIMED. Vault C is claimed the same way and then cancelled by an
+    // attestor's wallet (node 5, a current member of the YED attestor set) through its own
+    // Pending claims page before it matures: the vault is ACTIVE again under the cancel's txid,
+    // the claimant's burn is lost, and the claimant's page says so. Every Yellowback action goes
+    // through the tab's own code path; only mining and the market (other people's machines on a
+    // real network) are driven directly.
+    void devnetClaimReleaseAndCancel() {
         QString dir = qEnvironmentVariable("YELLOWBACK_DEVNET_DIR");
         if (dir.isEmpty())
             QSKIP("YELLOWBACK_DEVNET_DIR is unset: the devnet case needs a running node");
         DevnetTransport dev;
         QString why;
         if (!dev.attach(dir, &why)) QFAIL(qPrintable(why));
-        QString probe;
-        dev.post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_sweep"}, {"params", json::array()}}, &probe);
-        QVERIFY2(!YellowbackController::isMethodNotFound(probe), "the node has no yed_sweep");
-        dev.post({{"jsonrpc", "1.0"}, {"id", "t"}, {"method", "yed_claim"}, {"params", json::array()}}, &probe);
-        QVERIFY2(!YellowbackController::isMethodNotFound(probe), "the node has no yed_claim");
+        // node 5 runs an automated attestor: its wallet holds a member key of the YED attestor set
+        DevnetTransport att;
+        if (!att.attachNode(dir, 5, &att.request, &why)) QFAIL(qPrintable(why));
+        att.devnetDir = dir;
 
         Harness h;
         h.ctl.setTransport(dev.transport());
+        h.ctl.setPendingPollMs(250);
         h.ctl.onConnected();
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
+        QVERIFY2(h.ctl.upgradeActive(), "the devnet's vault upgrade is not active");
+        const int delay = h.ctl.claimDelay();
+        QVERIFY2(delay > 0, "the node reports no claimDelay");
 
-        const int pools[3] = {2, 3, 4};                 // the devnet's signalling, quoting pools
+        const int pools[3] = {2, 3, 4};                 // the devnet's quoting pools
         auto height = [&]() { json r = dev.rpc("getblockcount"); return r.is_number() ? r.get<int>() : -1; };
         // One block at a time, round-robin, waiting for node 0 to see each: the pools are peers,
         // and two of them generating from the same height would fork the devnet.
+        int turn = 0;
         auto minePools = [&](int n) {
             for (int i = 0; i < n; i++) {
                 int want = height() + 1;
-                dev.rpcOn(pools[i % 3], "generate", json::array({1}));
+                dev.rpcOn(pools[turn++ % 3], "generate", json::array({1}));
                 for (int w = 0; w < 400 && height() < want; w++) QTest::qWait(25);
             }
-        };
-        // A transaction node 0 broadcast has to reach the pool that will mine it
-        auto waitForTx = [&](const QString& txid) {
-            for (int w = 0; w < 400; w++) {
-                json m = dev.rpcOn(pools[0], "getrawmempool");
-                if (m.is_array()) for (const auto& t : m) if (QString::fromStdString(t.get<std::string>()) == txid) return true;
-                QTest::qWait(25);
-            }
-            return false;
         };
         auto positionOf = [&](const QString& txid) {
             YellowbackPosition p;
@@ -3191,13 +3388,16 @@ private slots:
                                [](const QString& e) { qWarning("yed_getvault: %s", qPrintable(e)); });
             return p;
         };
+        auto pendingRow = [&](YellowbackController& c, const QString& vaultTxid) -> const YellowbackPendingClaim* {
+            for (int i = 0; i < c.pendingClaimsModel()->rowCount(QModelIndex()); i++) {
+                const YellowbackPendingClaim* r = c.pendingClaimsModel()->rowAt(i);
+                if (r != nullptr && r->vault.txid == vaultTxid && r->intent.role == YellowbackRpc::PositionIntent::ROLE_CLAIMANT) return r;
+            }
+            return nullptr;
+        };
 
-        // Two vaults at the devnet's $50: S is swept, C is claimed.  A previous case may have
-        // mined untagged blocks (devnetEndToEnd mines to a lock height on node 0), which pushes
-        // the trailing signal count under the mint floor: let the pools signal it back up.
+        // Two vaults; let the price windows refill first if an earlier case left them short
         for (int i = 0; i < 96 && !h.ctl.mintBlocker(10000).isEmpty(); i++) { minePools(1); h.ctl.refresh(true); }
-        // MINTPOL-1 is read at the mint's reference height, REF_LAG blocks behind the tip, so the
-        // tip being allowed again is not yet enough: carry the recovery back past it.
         minePools(h.ctl.refLag() + 1);
         h.ctl.refresh(true);
         QVERIFY2(h.ctl.mintBlocker(10000).isEmpty(), qPrintable(h.ctl.mintBlocker(10000)));
@@ -3208,114 +3408,147 @@ private slots:
         for (int i = 0; i < 2; i++) {
             h.errorNotices.clear();
             h.mintAmount("100");
-            tier->setCurrentIndex(0);                   // the shortest class-A lock (48 blocks on regtest)
+            tier->setCurrentIndex(0);                   // the shortest class-A lock
             const int noticesBefore = h.notices.size();
             QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
             h.tab.doMint();
             QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-            // v3 two-step (W7): the carrier now, the mint once a pool block confirms it
             QVERIFY2(dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); },
                                       [&]() { minePools(1); }),
                      qPrintable("no mint result; status: " % h.label("lblMintPageStatus")));
             QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
             QVERIFY2(h.notices.last().startsWith("Mint sent|"), qPrintable(h.notices.last()));
-            QString txid = noticeTxid(h.notices.last());
+            const QString txid = noticeTxid(h.notices.last());
             QVERIFY2(txid.size() == 64, qPrintable(h.notices.last()));
             minted << txid;
-            QVERIFY2(waitForTx(txid) || dev.confirmed(txid),
-                     "the mint did not reach the pool's mempool");
-            minePools(1);
+            if (!dev.confirmed(txid)) minePools(1);
             QVERIFY2(dev.settle(txid), "node 0 did not digest the mint's block");
             h.ctl.refresh(true);
         }
-        const QString sweepTxid = minted[0], claimTxid = minted[1];
-        YellowbackPosition vaultS = positionOf(sweepTxid), vaultC = positionOf(claimTxid);
-        QCOMPARE(vaultS.status, QString("ACTIVE"));
-        QCOMPARE(vaultC.status, QString("ACTIVE"));
+        const QString releaseTxid = minted[0], cancelTxid = minted[1];
+        QCOMPARE(positionOf(releaseTxid).status, QString("ACTIVE"));
+        QCOMPARE(positionOf(cancelTxid).status, QString("ACTIVE"));
+        QVERIFY2(!positionOf(releaseTxid).scriptPubKey.isEmpty(), "the vault row carries no scriptPubKey (rpcversion 5)");
         QCOMPARE(h.ctl.confirmedCents(), yedBefore + 20000);
 
-        // Past the lock height, so the only reason a sweep can be refused is that enforcement
-        // has not been abandoned.
-        if (height() < vaultS.lockHeight) minePools(vaultS.lockHeight - height());
-        h.ctl.refresh(true);
-        QVERIFY(!h.ctl.isAbandoned());
-        h.errorNotices.clear();
-        h.tab.sweepVault(positionOf(sweepTxid));
-        QVERIFY(!h.errorNotices.isEmpty());
-        QVERIFY2(h.errorNotices.last().contains("sweep-not-abandoned"), qPrintable(h.errorNotices.last()));
-
-        // Crash the quote on all three pools and publish it for a full slow window: pClaim is
-        // max(pMid, pSlow) and each window needs two-thirds of its 64 blocks to carry a quote.
+        // Crash the market for a full slow window: pClaim = max(pMid, pSlow) falls
         auto pClaimNow = [&]() { return YellowbackJson::toInt(h.ctl.stats(), YellowbackRpc::Stats::P_CLAIM, 0); };
         const qint64 before = pClaimNow();
         QVERIFY(dev.setMarketPrice("0.01"));
         minePools(64);
         h.ctl.refresh(true);
         QVERIFY2(pClaimNow() < before, qPrintable(QString("pClaim did not fall: %1 -> %2").arg(before).arg(pClaimNow())));
+        const int claimHeight = std::max(positionOf(releaseTxid).claimHeight, positionOf(cancelTxid).claimHeight);
+        if (height() < claimHeight) minePools(claimHeight - height());
+        QVERIFY(dev.settle());
 
-        // Claim C through the Claim page once it is past its claim height and underwater.
-        vaultC = positionOf(claimTxid);
-        if (height() < vaultC.claimHeight) minePools(vaultC.claimHeight - height());
+        // Claim one vault through the Claim page: two-step; the vault goes CLAIMING
+        auto claim = [&](const QString& vaultTxid) -> QString {
+            const YellowbackClaimable* row = nullptr;
+            for (int t = 0; t < 20 && row == nullptr; t++) {
+                if (t > 0) minePools(1);
+                if (!dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); })) { qWarning("node 0's attestation pool did not become fresh"); return QString(); }
+                h.ctl.refresh(true);
+                for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
+                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid) row = h.ctl.claimableModel()->rowAt(i);
+            }
+            if (row == nullptr) { qWarning("vault %s is not in yed_listclaimable", qPrintable(vaultTxid)); return QString(); }
+            h.errorNotices.clear();
+            const int noticesBefore = h.notices.size();
+            h.tab.claimVault(*row);
+            if (!h.errorNotices.isEmpty()) { qWarning("%s", qPrintable(h.errorNotices.join("\n"))); return QString(); }
+            if (!h.confirms.last().contains(QString("waits in a claim intent for %1 blocks").arg(delay))) { qWarning("%s", qPrintable(h.confirms.last())); return QString(); }
+            if (!dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); }, [&]() { minePools(1); })) return QString();
+            if (!h.errorNotices.isEmpty() || !h.notices.last().startsWith("Claim sent|")) { qWarning("%s", qPrintable(h.errorNotices.join("\n") % h.notices.last())); return QString(); }
+            qInfo("claim result:\n%s", qPrintable(h.notices.last()));
+            return noticeTxid(h.notices.last());
+        };
+
+        // 1. Claim R, wait out CLAIM_DELAY, release it through the Pending claims page
+        const QString claimR = claim(releaseTxid);
+        QVERIFY2(claimR.size() == 64, "the claim of vault R did not complete");
+        QVERIFY(dev.settle(claimR));
         h.ctl.refresh(true);
-        QVERIFY2(h.ctl.claimableModel()->rowCount(QModelIndex()) > 0, "no vault is claimable after the crash");
-        const YellowbackClaimable* row = nullptr;
-        for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
-            if (h.ctl.claimableModel()->rowAt(i)->vault.section(':', 0, 0) == claimTxid) row = h.ctl.claimableModel()->rowAt(i);
-        QVERIFY2(row != nullptr, "the minted vault is not in yed_listclaimable");
-        QCOMPARE(row->mintedCents, (qint64)10000);
+        YellowbackPosition r = positionOf(releaseTxid);
+        QCOMPARE(r.status, QString("CLAIMING"));
+        QVERIFY(r.claimantIntent() != nullptr);
+        QCOMPARE(r.claimantIntent()->txid, claimR);
+        QCOMPARE(r.claimantIntent()->releaseHeight, r.claimantIntent()->height + delay);
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);          // the claim burned $100 of our YED
+        const YellowbackPendingClaim* pr = pendingRow(h.ctl, releaseTxid);
+        QVERIFY2(pr != nullptr, "the claim is not on the Pending claims page");
+        QVERIFY(pr->mineClaim);
+        h.tab.releaseClaim(*pr);                                       // too early: refused locally
+        QVERIFY2(h.notices.last().contains("matures at height"), qPrintable(h.notices.last()));
+        const int releaseAt = r.claimantIntent()->releaseHeight;
+        if (height() + 1 < releaseAt) minePools(releaseAt - 1 - height());
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);
+        pr = pendingRow(h.ctl, releaseTxid);
+        QVERIFY(pr != nullptr);
         h.errorNotices.clear();
-        int noticesBefore = h.notices.size();
-        QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
-        h.tab.claimVault(*row);
+        h.tab.releaseClaim(*pr);
         QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        // Two-step, as the mint
-        QVERIFY2(dev.awaitTwoStep([&]() { return h.notices.size() > noticesBefore || !h.errorNotices.isEmpty(); },
-                                  [&]() { minePools(1); }),
-                 qPrintable("no claim result; hint: " % h.label("lblClaimHint") % "; last dialog: " % (h.confirms.isEmpty() ? QString() : h.confirms.last())));
-        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QCOMPARE(h.notices.size(), noticesBefore + 1);
-        QVERIFY2(h.notices.last().startsWith("Claim sent|"), qPrintable(h.notices.last()));
-        QVERIFY2(h.notices.last().contains("YED burned: $100.00"), qPrintable(h.notices.last()));
-        const QString claimTx = noticeTxid(h.notices.last());
-        QVERIFY(waitForTx(claimTx) || dev.confirmed(claimTx));
+        QVERIFY2(h.notices.last().startsWith("Release sent|"), qPrintable(h.notices.last()));
+        const QString releaseTx = noticeTxid(h.notices.last());
         minePools(1);
-        QVERIFY(dev.settle(claimTx));
+        QVERIFY(dev.settle(releaseTx));
         h.ctl.refresh(true);
-        QCOMPARE(positionOf(claimTxid).status, QString("CLAIMED"));
-        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);      // the claim burned $100 of our YED
+        QCOMPARE(positionOf(releaseTxid).status, QString("CLAIMED"));
+        QVERIFY(pendingRow(h.ctl, releaseTxid) == nullptr);
 
-        // Abandonment (L10/L12): node 0 is not a pool, so its blocks neither tag nor signal.
-        // Once the trailing signal count is under the floor haltMask.ENFORCEMENT is set, and
-        // ABANDON_BLOCKS (128 on regtest) consecutive such tips is abandonment.
-        const int abandonBlocks = (int)YellowbackJson::toInt(h.ctl.params(), YellowbackRpc::Params::ABANDON_BLOCKS, 128);
-        for (int i = 0; i < 3 * abandonBlocks && !h.ctl.isAbandoned(); i += 8) {
-            dev.rpc("generate", json::array({8}));
-            h.ctl.refresh(true);
-        }
-        QVERIFY2(h.ctl.isAbandoned(), "the devnet did not reach abandonment within three abandonment windows");
-
-        // Sweep S through the Vaults page: no burn, no fee, the YED left unbacked.
-        vaultS = positionOf(sweepTxid);
-        QCOMPARE(vaultS.status, QString("ACTIVE"));
-        QVERIFY(vaultS.canSweep);
-        QCOMPARE(vaultS.sweepBefore, vaultS.claimHeight);
-        h.errorNotices.clear();
-        noticesBefore = h.notices.size();
-        h.tab.sweepVault(vaultS);
-        QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
-        QCOMPARE(h.notices.size(), noticesBefore + 1);
-        QVERIFY(h.notices.last().startsWith("Sweep sent|"));
-        QVERIFY2(h.notices.last().contains("YED now unbacked: $100.00"), qPrintable(h.notices.last()));
-        const QString sweptTx = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
-        dev.rpc("generate", json::array({1}));
-        QVERIFY(dev.settle(sweptTx));
+        // 2. Claim C, then cancel it from the attestor's wallet before it matures
+        const QString claimC = claim(cancelTxid);
+        QVERIFY2(claimC.size() == 64, "the claim of vault C did not complete");
+        QVERIFY(dev.settle(claimC));
         h.ctl.refresh(true);
-        YellowbackPosition swept = positionOf(sweepTxid);
-        QCOMPARE(swept.status, QString("CLOSED"));
-        QVERIFY(swept.unbacked);
-        QCOMPARE(swept.burnedCents, (qint64)0);
+        QCOMPARE(positionOf(cancelTxid).status, QString("CLAIMING"));
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore);                   // both claims burned $100 each
+
+        Harness a;
+        a.ctl.setTransport(att.transport());
+        a.ctl.onConnected();
+        QVERIFY2(a.ctl.isAvailable(), qPrintable(a.ctl.unavailableReason()));
+        QTRY_VERIFY_WITH_TIMEOUT(!a.ctl.attestorSet().empty(), 5000);
+        QVERIFY2(a.ctl.isAttestor(), qPrintable("node 5 is not a current member: " % a.label("lblMembership")));
+        QVERIFY(a.label("lblMembership").contains("Your member"));
+        QVERIFY(!a.button("btnCancelClaim")->isHidden());
+        const YellowbackPendingClaim* pc = pendingRow(a.ctl, cancelTxid);
+        QVERIFY2(pc != nullptr, "the attestor's Pending claims page does not list the claim");
+        QVERIFY(!pc->mineClaim);
+        QVERIFY2(height() + 1 < pc->intent.releaseHeight, "the claim matured before the attestor could cancel it");
+        a.tab.cancelClaim(*pc);
+        QVERIFY2(a.errorNotices.isEmpty(), qPrintable(a.errorNotices.join("\n")));
+        QVERIFY(a.confirms.last().contains("NOT refunded"));
+        QVERIFY2(a.notices.last().startsWith("Cancel sent|"), qPrintable(a.notices.last()));
+        const QString cancelTx = noticeTxid(a.notices.last());
+        QCOMPARE(cancelTx.size(), 64);
+        qInfo("cancel result:\n%s", qPrintable(a.notices.last()));
+        minePools(1);
+        QVERIFY(dev.settle());
+        h.ctl.refresh(true);
+        // The vault is the same position again, ACTIVE at the cancel's output 0; the old outpoint is gone
+        YellowbackPosition reopened;
+        h.ctl.getVault(cancelTx, [&](const json& v) { reopened = YellowbackPosition::fromJson(v); },
+                       [](const QString& e) { qWarning("yed_getvault: %s", qPrintable(e)); });
+        QCOMPARE(reopened.status, QString("ACTIVE"));
+        QCOMPARE(reopened.mintedCents, (qint64)10000);
+        QString gone;
+        h.ctl.getVault(cancelTxid, [](const json&) {}, [&](const QString& e) { gone = e; });
+        QVERIFY2(gone.startsWith("vault-not-found"), qPrintable(gone));
+        QVERIFY(pendingRow(h.ctl, cancelTxid) == nullptr);
+        // The claimant's page names the cancelled claim and the lost burn; its YED stays burned
+        h.ctl.refreshClaimOutcomes();
+        QTRY_VERIFY_WITH_TIMEOUT(h.visible("lblCancelledClaims"), 5000);
+        QVERIFY2(h.label("lblCancelledClaims").contains("was cancelled by the attestor set"), qPrintable(h.label("lblCancelledClaims")));
+        QVERIFY(h.label("lblCancelledClaims").contains("$100.00 of YED it burned are not refunded"));
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore);
+        // The attestor never signs a second cancel of that intent
+        QVERIFY(!Settings::getInstance()->getYellowbackSignedCancel(claimC % ":0").isEmpty());
         QVERIFY(h.copyIsClean());
+        QVERIFY(a.copyIsClean());
         QVERIFY(dev.setMarketPrice("50"));          // the devnet's price, for the next case
+        minePools(1);
     }
 
     // ── Devnet v3 (A5-b): an attested mint, a claim notice and the emergency claim ────────

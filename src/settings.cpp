@@ -173,6 +173,14 @@ void Settings::setYellowbackBackupPending(bool pending) {
     QSettings().setValue("yellowback/backuppending", pending);
 }
 
+QString Settings::getYellowbackSignedCancel(const QString& intentOutpoint) {
+    return QSettings().value("yellowback/signedcancel/" % QString(intentOutpoint).replace(':', '_'), QString()).toString();
+}
+
+void Settings::setYellowbackSignedCancel(const QString& intentOutpoint, const QString& hex) {
+    QSettings().setValue("yellowback/signedcancel/" % QString(intentOutpoint).replace(':', '_'), hex);
+}
+
 int Settings::getYellowbackRpcVersion() {
     return YellowbackRpc::RPC_VERSION;
 }

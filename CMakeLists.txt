@@ -126,6 +126,7 @@ set(APP_HEADERS
     src/nodecompat.h
     src/nodedatacheck.h
     src/yellowbackrpc.h
+    src/vaultrpc.h
     src/yellowbackcontroller.h
     src/yellowbackmodels.h
     src/yellowbacktab.h

@@ -118,9 +118,6 @@ public:
 
     void showTxError(const QString& error);
 
-    // Yellowback: offer to append experimentalfeatures=1 / yellowback=1 to an existing ycash.conf
-    bool offerYellowbackConfRepair();
-
     // Batch method. Note: Because of the template, it has to be in the header file. 
     template<class T>
     void doBatchRPC(const QList<T>& payloads,

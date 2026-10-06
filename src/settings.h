@@ -86,6 +86,11 @@ public:
     void        setYellowbackAdvanced(bool advanced);
     bool        getYellowbackBackupPending();           // wallet.dat backup nag after a mint
     void        setYellowbackBackupPending(bool pending);
+    // rpcversion 5: the cancel this wallet signed for a claim intent ("txid:vout" -> signed hex).
+    // A second, different signed cancel of one intent is a provable equivocation (the member is
+    // ejected and its bond frozen), so a signed cancel is kept and only ever re-sent.
+    QString     getYellowbackSignedCancel(const QString& intentOutpoint);
+    void        setYellowbackSignedCancel(const QString& intentOutpoint, const QString& hex);
     static int  getYellowbackRpcVersion();              // the rpcversion this build understands
     // v3: the attestation subscriber's transport (yellowback-attest subscribe), plan §4.8 Settings row.
     QString     getYellowbackTransportKind();           // "dir" | "iroh"

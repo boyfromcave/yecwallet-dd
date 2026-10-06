@@ -15,6 +15,10 @@ script asserts:
      `constexpr const char*` constant in it that is not marked `// value` is a key of the JSON
      object the marker names (`[]` selects the example row of a list result). The marker
      `errors` checks the Errors namespace against the JSON's error identifiers.
+  4. A constant marked `// optional` names a field the contract text marks **optional** and its
+     example omits (rpcversion 5: `yed_getvault.intents` while CLAIMING); it is not looked up. A
+     namespace marked `// contract: optional <command>.<path>` holds the keys of such an absent
+     object; its constants are not looked up either, but the command must exist.
 
 Exit code 0 when everything matches; 1 with one line per finding otherwise. No dependencies
 beyond the standard library, so the CI job runs it with the platform's python3 and a developer
@@ -84,6 +88,14 @@ def main():
         nm = RE_NAMESPACE.match(line)
         if nm and nm.group(1) != "YellowbackRpc":
             name, marker = nm.group(1), nm.group(2)
+            if marker == "optional":
+                # `// contract: optional yed_x.path`: an object the example omits; the command must exist
+                rest = line.split("optional", 1)[1].strip().split()
+                command = rest[0].split(".")[0] if rest else ""
+                if command not in contract:
+                    findings.append("%s:%d namespace %s: optional object of unknown command %r" % (HEADER, lineno, name, command))
+                namespace = (name, marker, None)
+                continue
             if marker is None:
                 namespace = (name, None, None)
             else:
@@ -104,7 +116,7 @@ def main():
             if name != "RpcErrors":
                 findings.append("%s:%d namespace %s has no `// contract:` marker" % (HEADER, lineno, name))
             continue
-        if re.search(r"//\s*value\b", rest):
+        if re.search(r"//\s*(value|optional)\b", rest):
             continue
         if obj is None:
             continue

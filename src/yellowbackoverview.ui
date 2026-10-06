@@ -19,9 +19,9 @@
         <item row="3" column="1"><widget class="QLabel" name="lblNetwork"><property name="text"><string>-</string></property></widget></item>
         <item row="4" column="0"><widget class="QLabel" name="l5"><property name="text"><string>Index height</string></property></widget></item>
         <item row="4" column="1"><widget class="QLabel" name="lblIndexHeight"><property name="text"><string>-</string></property></widget></item>
-        <item row="5" column="0"><widget class="QLabel" name="l6"><property name="text"><string>Activation</string></property></widget></item>
+        <item row="5" column="0"><widget class="QLabel" name="l6"><property name="text"><string>Vault upgrade</string></property></widget></item>
         <item row="5" column="1"><widget class="QLabel" name="lblActivation"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
-        <item row="6" column="0"><widget class="QLabel" name="l7"><property name="text"><string>Enforcement</string></property></widget></item>
+        <item row="6" column="0"><widget class="QLabel" name="l7"><property name="text"><string>Rules</string></property></widget></item>
         <item row="6" column="1"><widget class="QLabel" name="lblEnforcement"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property></widget></item>
        </layout>
       </widget>
@@ -47,7 +47,7 @@
         <item row="7" column="0"><widget class="QLabel" name="s8"><property name="text"><string>Vaults (active / void / closed / claimed)</string></property></widget></item>
         <item row="7" column="1"><widget class="QLabel" name="lblVaults"><property name="text"><string>-</string></property></widget></item>
         <item row="8" column="0"><widget class="QLabel" name="s9"><property name="text"><string>Unbacked YED</string></property></widget></item>
-        <item row="8" column="1"><widget class="QLabel" name="lblUnbacked"><property name="text"><string>-</string></property><property name="toolTip"><string>YED minted against vaults that were later emptied without their burn (only possible while enforcement is paused or abandoned).</string></property></widget></item>
+        <item row="8" column="1"><widget class="QLabel" name="lblUnbacked"><property name="text"><string>-</string></property><property name="toolTip"><string>YED minted against vaults that were emptied without their burn. Only the overlay before the vault upgrade could produce this; under the upgrade such a spend is an invalid transaction.</string></property></widget></item>
         <item row="9" column="0"><widget class="QLabel" name="s10"><property name="text"><string>Pool prices (mint / claim)</string></property></widget></item>
         <item row="9" column="1"><widget class="QLabel" name="lblPoolPrices"><property name="text"><string>-</string></property><property name="toolTip"><string>The pool cross-section bounds at the index tip: the medians of the quotes pools publish in their blocks. Once the attestation layer is armed, each mint or claim combines them with the attestors' prices and uses the more conservative of the two.</string></property></widget></item>
         <item row="10" column="0"><widget class="QLabel" name="s11"><property name="text"><string>Attestation</string></property></widget></item>
@@ -69,7 +69,7 @@
    <item>
     <widget class="QLabel" name="lblTrust">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Yellowback is a miner-enforced, over-collateralised stablecoin overlay on Ycash. Every Ycash node enforces that collateral cannot leave a vault before its lock height and that only the minter's key can spend it before the claim height. The rest — collateral released only against the burn of the vault's debt — is enforced by the mining pools that run the Yellowback module: a majority of hashpower that runs the module and follows it makes those rules hold; a majority that does not could release collateral without burns or move the price, as it could already reorganise the chain. Prices are medians of the quotes pools publish in their own blocks. YED is transparent: balances and transfers are visible on the chain; it is not a shielded asset.</string></property>
+     <property name="text"><string>Ycash Yellowback (YED) is an over-collateralised dollar on Ycash. Since the vault upgrade every Yellowback rule is a Ycash consensus rule that every full node checks: no pool enforces it, and nothing can pause or abandon it. YED is minted only at a price that both the mining pools' quotes and a majority of bonded attestors support; neither can mint against a price it sets alone, and a single signer is never a price. Collateral stays locked for the vault's term and returns to the owner who redeems before the claim height (the lock height plus a grace period of about 30 days); after it, anyone may close an underwater vault by burning its debt in YED, after a delay during which any honest attestor can cancel a claim made at a wrong price. Nothing in Yellowback touches the shielded pool. YED is transparent: balances and transfers are visible on the chain; it is not a shielded asset.</string></property>
     </widget>
    </item>
   </layout>

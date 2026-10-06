@@ -58,12 +58,34 @@ QStringList YellowbackJson::strings(const json& j, const char* key) {
 
 // ── Records ───────────────────────────────────────────────────────────────────────────────
 
+YellowbackIntent YellowbackIntent::fromJson(const json& j) {
+    using namespace YellowbackRpc::PositionIntent;
+    YellowbackIntent i;
+    i.txid          = YellowbackJson::toStr (j, TXID);
+    i.vout          = (int)YellowbackJson::toInt(j, VOUT);
+    i.role          = YellowbackJson::toStr (j, ROLE);
+    i.height        = (int)YellowbackJson::toInt(j, HEIGHT);
+    i.releaseHeight = (int)YellowbackJson::toInt(j, RELEASE_HEIGHT);
+    return i;
+}
+
+const YellowbackIntent* YellowbackPosition::claimantIntent() const {
+    for (const auto& i : intents) if (i.role == YellowbackRpc::PositionIntent::ROLE_CLAIMANT) return &i;
+    return nullptr;
+}
+
+const YellowbackIntent* YellowbackPosition::residualIntent() const {
+    for (const auto& i : intents) if (i.role == YellowbackRpc::PositionIntent::ROLE_RESIDUAL) return &i;
+    return nullptr;
+}
+
 YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     using namespace YellowbackRpc::Position;
     YellowbackPosition p;
     p.txid          = YellowbackJson::toStr (j, TXID);
     p.vout          = (int)YellowbackJson::toInt(j, VOUT);
     p.status        = YellowbackJson::toStr (j, STATUS);
+    p.ownerPubKey   = YellowbackJson::toStr (j, OWNER_PUBKEY);
     p.ownerAddress  = YellowbackJson::toStr (j, OWNER_ADDRESS);
     p.ownerKeyId    = YellowbackJson::toStr (j, OWNER_KEY_ID);
     p.termClass     = YellowbackJson::toStr (j, TERM_CLASS);
@@ -81,10 +103,11 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.claimable     = YellowbackJson::toBool(j, CLAIMABLE);
     p.underwaterAt  = YellowbackJson::toInt (j, UNDERWATER_AT, -1);
     p.voidReason    = YellowbackJson::toStr (j, VOID_REASON);
-    p.sweepBefore   = (int)YellowbackJson::toInt(j, SWEEP_BEFORE, -1);
+    p.scriptPubKey  = YellowbackJson::toStr (j, SCRIPT_PUBKEY);
+    if (j.is_object() && j.find(INTENTS) != j.end() && j[INTENTS].is_array())
+        for (auto& it : j[INTENTS]) p.intents.append(YellowbackIntent::fromJson(it));
     p.canRedeem     = YellowbackJson::toBool(j, CAN_REDEEM);
     p.canClaim      = YellowbackJson::toBool(j, CAN_CLAIM);
-    p.canSweep      = YellowbackJson::toBool(j, CAN_SWEEP);
     p.noticed       = YellowbackJson::toBool(j, NOTICED);
     p.noticeHeight  = (int)YellowbackJson::toInt(j, NOTICE_HEIGHT, -1);
     p.emergencyOpenAt = (int)YellowbackJson::toInt(j, EMERGENCY_OPEN_AT, -1);
@@ -115,6 +138,8 @@ YellowbackAttestor YellowbackAttestor::fromJson(const json& j) {
     a.pool            = YellowbackJson::toBool(flags, YellowbackRpc::AttestorFlags::POOL);
     a.lastBundleHeight = (int)YellowbackJson::toInt(j, LAST_BUNDLE_HEIGHT, -1);
     a.poolFresh       = YellowbackJson::toBool(j, POOL_FRESH);
+    a.lastAct         = (int)YellowbackJson::toInt(j, LAST_ACT, -1);
+    a.bondFrozen      = YellowbackJson::toBool(j, BOND_FROZEN);
     return a;
 }
 
@@ -212,7 +237,9 @@ QString YellowbackFormat::typeLabel(const QString& type) {
     if (type == TYPE_REDEEM)  return QObject::tr("Redeem");
     if (type == TYPE_CLAIM)   return QObject::tr("Claim");
     if (type == TYPE_CLAIMED) return QObject::tr("Vault claimed");
-    if (type == TYPE_SWEEP)   return QObject::tr("Sweep");
+    if (type == TYPE_CLAIM_RELEASE) return QObject::tr("Claim released");
+    if (type == TYPE_CLAIM_CANCEL)  return QObject::tr("Claim cancelled");
+    if (type == TYPE_SET_ACT) return QObject::tr("Attestor set act");
     if (type == TYPE_NOTICE)  return QObject::tr("Claim notice");
     if (type == TYPE_NOTICED) return QObject::tr("Vault noticed");
     if (type == TYPE_REGISTER)return QObject::tr("Attestor registration");
@@ -221,22 +248,24 @@ QString YellowbackFormat::typeLabel(const QString& type) {
     return type;
 }
 
+QString YellowbackFormat::rowLabel(const QString& type, const QString& path, qint64 burned) {
+    using namespace YellowbackRpc::Transaction;
+    if (type == TYPE_REDEEM && burned == 0 && path.isEmpty()) return QObject::tr("Claim released");
+    return typeLabel(type);
+}
+
 // One sentence per haltMask name (§3.6, MINTPOL-1). The name itself stays in the text so a
 // user can match it to the node's mintpol-* error identifiers.
 QString YellowbackFormat::haltReason(const QString& name) {
     using namespace YellowbackRpc::Stats;
     if (name == HALT_NOT_ACTIVE)
-        return QObject::tr("NOT_ACTIVE: Yellowback has not activated on this chain yet (pools are still signalling).");
+        return QObject::tr("NOT_ACTIVE: the vault upgrade has not activated at the reference height yet.");
     if (name == HALT_NO_PRICE)
         return QObject::tr("NO_PRICE: the mint price is undefined because too few recent blocks carry a price quote.");
-    if (name == HALT_PARTICIPATION)
-        return QObject::tr("PARTICIPATION: fewer than 60 % of recent blocks signal enforcement; minting pauses until 75 % do.");
     if (name == HALT_GLOBAL_RATIO)
         return QObject::tr("GLOBAL_RATIO: the system-wide collateral ratio is below its floor; only a term class whose minimum ratio reaches the recapitalisation floor can mint until it recovers.");
     if (name == HALT_DIVERGENCE)
         return QObject::tr("DIVERGENCE: the fast and slow price medians disagree by more than the allowed band.");
-    if (name == HALT_ENFORCEMENT)
-        return QObject::tr("ENFORCEMENT: fewer than half of recent blocks signal, so block rejection is suspended.");
     return name;
 }
 
@@ -247,8 +276,8 @@ QString YellowbackFormat::voidReason(const QString& verdict) {
         return QObject::tr("The mint was confirmed while the attestation layer was not ARMED, on a network that requires it for every mint "
                            "(mint-halted-unarmed), so it created no YED. The collateral stays yours: "
                            "release it at the lock height (Release, no burn, no fee).");
-    return QObject::tr("The mint failed the rule \"%1\" and created no YED. The collateral stays yours: "
-                       "release it at the lock height (Release, no burn, no fee).").arg(verdict);
+    return QObject::tr("The mint failed the rule \"%1\" and created no YED (it was recorded before the vault upgrade; since then such a mint is an invalid transaction). "
+                       "The collateral stays yours: release it at the lock height (Release, no burn, no fee).").arg(verdict);
 }
 
 QString YellowbackFormat::sourceTier(int tier) {
@@ -265,7 +294,7 @@ QString YellowbackFormat::sourceTier(int tier) {
 YellowbackPositionsModel::YellowbackPositionsModel(QObject* parent) : QAbstractTableModel(parent) {
     headers << tr("Status") << tr("Act by") << tr("Minted") << tr("Collateral") << tr("Ratio (market)") << tr("Class")
             << tr("Lock height (est. date)") << tr("Claim height (est. date)")
-            << tr("Claimable") << tr("Underwater below") << tr("Unbacked") << tr("Sweep before") << tr("Notice") << tr("Vault");
+            << tr("Claimable") << tr("Underwater below") << tr("Unbacked") << tr("Claim in progress") << tr("Notice") << tr("Vault");
     modeldata = new QList<YellowbackPosition>();
 }
 
@@ -289,6 +318,13 @@ QString YellowbackPositionsModel::actBy(const YellowbackPosition& p, int current
         if (currentHeight < p.claimHeight) return QObject::tr("RELEASE NOW: open to anyone in %1").arg(YellowbackFormat::blocksAndDuration(p.claimHeight - currentHeight));
         return QObject::tr("open to anyone: release at once");
     }
+    if (p.status == STATUS_CLAIMING) {
+        const YellowbackIntent* c = p.claimantIntent();
+        if (c == nullptr) return QObject::tr("being claimed");
+        return currentHeight < c->releaseHeight
+            ? QObject::tr("BEING CLAIMED: the claim releases in %1 unless an attestor cancels it").arg(YellowbackFormat::blocksAndDuration(c->releaseHeight - currentHeight))
+            : QObject::tr("claimed: the claimant may release the collateral now");
+    }
     if (p.status != STATUS_ACTIVE) return QString("-");
     if (currentHeight < p.lockHeight) return QObject::tr("locked; redeemable in %1").arg(YellowbackFormat::blocksAndDuration(p.lockHeight - currentHeight));
     if (currentHeight < p.claimHeight) return QObject::tr("REDEEMABLE: claim path opens in %1").arg(YellowbackFormat::blocksAndDuration(p.claimHeight - currentHeight));
@@ -303,7 +339,7 @@ bool YellowbackPositionsFilter::filterAcceptsRow(int sourceRow, const QModelInde
     const YellowbackPosition* p = src->positionAt(sourceRow);
     if (p == nullptr) return true;                                  // the "Loading..." row
     if (statusFilter.isEmpty()) return true;
-    if (statusFilter == "open") return p->status == STATUS_ACTIVE || p->status == STATUS_VOID;
+    if (statusFilter == "open") return p->status == STATUS_ACTIVE || p->status == STATUS_VOID || p->status == STATUS_CLAIMING;
     return p->status == statusFilter;
     Q_UNUSED(sourceParent);
 }
@@ -377,6 +413,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             if (currentHeight > 0 && currentHeight >= p.lockHeight)              return QBrush(QColor(255, 232, 190));
         }
         if (p.status == STATUS_VOID && currentHeight > 0 && currentHeight >= p.lockHeight) return QBrush(QColor(255, 232, 190));
+        if (p.status == STATUS_CLAIMING) return QBrush(QColor(255, 210, 210));
         return QVariant();
     }
 
@@ -389,8 +426,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             if (r >= 0 && r < 15000)      { b.setColor(QColor(200, 100, 0)); return b; }
         }
         if (index.column() == ActBy && p.status == STATUS_ACTIVE && currentHeight > 0 && currentHeight >= p.lockHeight) { b.setColor(Qt::red); return b; }
-        if (p.status == STATUS_VOID)                              b.setColor(Qt::red);
-        else if (p.sweepBefore > 0 && p.status == STATUS_ACTIVE)  b.setColor(QColor(200, 100, 0));
+        if (p.status == STATUS_VOID || p.status == STATUS_CLAIMING) b.setColor(Qt::red);
         else if (p.status == STATUS_CLOSED || p.status == STATUS_CLAIMED) b.setColor(Qt::gray);
         else return QVariant();
         return b;
@@ -423,7 +459,11 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 return p.underwaterAt >= 0 ? tr("no (claim price above %1)").arg(YellowbackFormat::price(p.underwaterAt)) : tr("no");
             }
             case Unbacked:     return p.unbacked ? tr("yes") : tr("no");
-            case SweepBefore:  return p.sweepBefore > 0 ? YellowbackFormat::heightWithEstimate(p.sweepBefore, currentHeight) : QString("-");
+            case ClaimState: {
+                const YellowbackIntent* c = p.claimantIntent();
+                if (p.status != STATUS_CLAIMING || c == nullptr) return QString("-");
+                return tr("claimed at %1; releases at %2").arg(c->height).arg(c->releaseHeight);
+            }
             case Notice:
                 if (p.noticed)   return p.emergencyOpenAt >= 0
                                      ? tr("noticed, emergency claim from %1").arg(p.emergencyOpenAt)
@@ -465,21 +505,22 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 if (p.status == STATUS_CLAIMED)
                     return tr("Claimed at height %1 by %2: the vault was underwater past its claim height and someone burned %3 of YED to take the collateral.")
                               .arg(p.closeHeight).arg(p.closingTxid).arg(YellowbackFormat::cents(p.burnedCents));
+                if (p.status == STATUS_CLAIMING)
+                    return tr("Being claimed: someone burned %1 of YED and moved the collateral into a claim intent. "
+                              "It is released to them after the claim delay unless a member of the attestor set cancels it as a wrong-price claim, "
+                              "which returns the collateral to this vault (ACTIVE again).").arg(YellowbackFormat::cents(p.mintedCents));
                 return tr("Active: %1 of YED are backed by this vault. Releasing the collateral burns exactly that debt and pays an enforcement fee to a quoting pool.")
                           .arg(YellowbackFormat::cents(p.mintedCents));
             case Claimable:
                 return p.underwaterAt >= 0
                     ? tr("Past the claim height, anyone may burn the vault's debt and take its collateral once the claim price falls below %1 per YEC.")
                           .arg(YellowbackFormat::price(p.underwaterAt))
-                    : tr("A VOID vault carries no debt and can never be claimed for one; its claim path is open to anyone after the claim height (see Sweep before).");
+                    : tr("A VOID vault (recorded before the vault upgrade) carries no debt and can never be claimed for one. Release its collateral.");
             case Unbacked:
-                return tr("\"yes\" means this vault was closed without burning its debt (a sweep under abandonment); the YED minted against it are no longer backed.");
-            case SweepBefore:
-                if (p.status == STATUS_VOID)
-                    return tr("After height %1 this vault's claim path can be spent by anyone. Release the collateral before then.").arg(p.sweepBefore);
-                if (p.sweepBefore > 0)
-                    return tr("Enforcement has been abandoned: after height %1 the claim path is open to anyone and nobody polices the burn. Sweep the collateral before then or lose it to whoever claims first.").arg(p.sweepBefore);
-                return tr("Not applicable while enforcement holds.");
+                return tr("\"yes\" means this vault was closed without burning its debt; the YED minted against it are no longer backed. No rule can produce such a close since the vault upgrade.");
+            case ClaimState:
+                return tr("A claim moves the collateral into a claim intent. After the claim delay the claimant releases it and the vault is CLAIMED; "
+                          "before then any member of the YED attestor set may cancel a claim made at a wrong price, and the vault is ACTIVE again.");
             case Notice:
                 if (p.noticed)
                     return tr("A claim notice against this vault confirmed at height %1: someone judged it under the emergency ratio by one price source. "
@@ -491,7 +532,8 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             case LockHeight:
                 return tr("Term class %1. Before the lock height the collateral cannot leave the vault; that is enforced by every Ycash node. Dates are estimates at 75 seconds per block.").arg(p.termClass);
             case ClaimHeight:
-                return tr("Lock height plus the grace period. After it, the vault's claim path opens: anyone who burns the debt can take the collateral if the vault is underwater.");
+                return tr("Lock height plus the grace period. After it, the vault's claim path opens: anyone who burns the debt can claim the collateral if the vault is underwater; "
+                          "the claim is released to them after the claim delay unless an attestor cancels it.");
             case Vault:
                 return QString(p.vaultName() % "\n" % tr("Owner: ") % p.ownerAddress % "\n" % tr("Owner key: ") % p.ownerKeyId %
                                "\n" % tr("Minted at height %1 (reference height %2), enforcement fee paid %3")
@@ -575,7 +617,7 @@ QVariant YellowbackClaimableModel::data(const QModelIndex& index, int role) cons
             case Burn:
                 return tr("A claim must burn exactly the vault's debt (its minted YED) from your own YED.");
             case Fee:
-                return tr("The enforcement fee, paid from the collateral to a pool that published a price quote recently; you receive the rest.");
+                return tr("The enforcement fee, paid from your own YEC (not from the collateral) to a pool that published a price quote recently.");
             case UnderwaterAt:
                 return tr("The claim price below which this vault is underwater. It is claimable while the current claim price is below it.");
             default:
@@ -598,7 +640,8 @@ QVariant YellowbackClaimableModel::headerData(int section, Qt::Orientation orien
 
 YellowbackAttestorsModel::YellowbackAttestorsModel(QObject* parent) : QAbstractTableModel(parent) {
     headers << tr("Seq") << tr("Status") << tr("Seated") << tr("Bond (lock height)") << tr("Weight")
-            << tr("Seated since") << tr("Founding") << tr("Sources") << tr("Last bundle") << tr("In pool");
+            << tr("Seated since") << tr("Founding") << tr("Sources") << tr("Last bundle") << tr("In pool")
+            << tr("Last act") << tr("Bond frozen");
     modeldata = new QList<YellowbackAttestor>();
 }
 
@@ -642,6 +685,7 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
 
     if (role == Qt::ForegroundRole) {
         QBrush b;
+        if (a.bondFrozen && index.column() == BondFrozen)                { b.setColor(Qt::red); return b; }
         if (a.status == STATUS_EJECTED || a.status == STATUS_WITHDRAWN) b.setColor(Qt::gray);
         else if (a.status == STATUS_DORMANT)                            b.setColor(QColor(200, 100, 0));
         else if (a.pinned)                                              b.setColor(Qt::red);
@@ -666,6 +710,8 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
             case Sources:     return QString(YellowbackFormat::sourceTier(a.tier) % (a.pool ? tr(", pool") : QString()));
             case LastBundle:  return a.lastBundleHeight >= 0 ? QString::number(a.lastBundleHeight) : QString("-");
             case PoolFresh:   return a.poolFresh ? tr("fresh") : tr("no");
+            case LastAct:     return a.lastAct >= 0 ? QString::number(a.lastAct) : QString("-");
+            case BondFrozen:  return a.bondFrozen ? tr("FROZEN") : tr("no");
         }
     }
 
@@ -677,10 +723,10 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
                                tr("Bond address: ") % a.bondAddress % "\n" %
                                tr("Fee address: ") % a.bondKeyAddress);
             case Status:
-                if (a.status == STATUS_PENDING)   return tr("Registered; the bond has not matured yet (since height %1).").arg(a.statusHeight);
-                if (a.status == STATUS_ELIGIBLE)  return tr("May be seated and selected for bundles (since height %1).").arg(a.statusHeight);
-                if (a.status == STATUS_DORMANT)   return tr("Missed too many bundles and is set aside until revived (since height %1).").arg(a.statusHeight);
-                if (a.status == STATUS_EJECTED)   return tr("Ejected for equivocation at height %1; the bond is forfeit.").arg(a.statusHeight);
+                if (a.status == STATUS_PENDING)   return tr("Joined the attestor set; the bond has not matured yet (since height %1).").arg(a.statusHeight);
+                if (a.status == STATUS_ELIGIBLE)  return tr("A current member of the attestor set: may be seated, selected for bundles and cancel wrong-price claims (since height %1).").arg(a.statusHeight);
+                if (a.status == STATUS_DORMANT)   return tr("No heartbeat within the set's liveness window (or too many missed bundles): set aside until its next heartbeat (since height %1).").arg(a.statusHeight);
+                if (a.status == STATUS_EJECTED)   return tr("Ejected for equivocation at height %1; the bond is frozen and forfeit.").arg(a.statusHeight);
                 if (a.status == STATUS_WITHDRAWN) return tr("The bond was withdrawn at height %1.").arg(a.statusHeight);
                 return a.status;
             case Seated:
@@ -699,6 +745,12 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
                 return tr("The newest block whose price bundle carried this attestor's attestation.");
             case PoolFresh:
                 return tr("Whether this node's own attestation pool holds a fresh attestation from this attestor (the subscriber keeps the pool filled).");
+            case LastAct:
+                return tr("The attestor set's last act for this member: its join plus maturity, or its last heartbeat. Signing prices is not an act; "
+                          "a member with no heartbeat within the set's liveness window is dormant.");
+            case BondFrozen:
+                return a.bondFrozen ? tr("The set froze this bond (a removal with burn, or an equivocation): it can never be withdrawn, and the key never seats again.")
+                                    : tr("The bond is not frozen.");
         }
     }
 
@@ -706,6 +758,86 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
 }
 
 QVariant YellowbackAttestorsModel::headerData(int section, Qt::Orientation orientation, int role) const {
+    if (role == Qt::DisplayRole && orientation == Qt::Horizontal && section < headers.size())
+        return headers.at(section);
+    return QVariant();
+}
+
+// ── Pending claims model (rpcversion 5) ───────────────────────────────────────────────────
+
+YellowbackPendingClaimsModel::YellowbackPendingClaimsModel(QObject* parent) : QAbstractTableModel(parent) {
+    headers << tr("Vault") << tr("Intent") << tr("Whose") << tr("Debt burned") << tr("Collateral")
+            << tr("Claimed at") << tr("Releases at") << tr("Release");
+    modeldata = new QList<YellowbackPendingClaim>();
+}
+
+YellowbackPendingClaimsModel::~YellowbackPendingClaimsModel() {
+    delete modeldata;
+}
+
+void YellowbackPendingClaimsModel::setNewData(const QList<YellowbackPendingClaim>& rows, int height) {
+    loading = false;
+    beginResetModel();
+    *modeldata = rows;
+    currentHeight = height;
+    endResetModel();
+}
+
+const YellowbackPendingClaim* YellowbackPendingClaimsModel::rowAt(int row) const {
+    if (row < 0 || row >= modeldata->size()) return nullptr;
+    return &modeldata->at(row);
+}
+
+QString YellowbackPendingClaimsModel::remaining(const YellowbackIntent& i, int height) {
+    // vault_release confirms at releaseHeight at the earliest: the next block is height + 1
+    if (height + 1 >= i.releaseHeight) return tr("releasable now");
+    return tr("in %1").arg(YellowbackFormat::blocksAndDuration(i.releaseHeight - height - 1));
+}
+
+int YellowbackPendingClaimsModel::rowCount(const QModelIndex&) const {
+    if (loading) return 1;
+    return modeldata->size();
+}
+
+int YellowbackPendingClaimsModel::columnCount(const QModelIndex&) const {
+    return headers.size();
+}
+
+QVariant YellowbackPendingClaimsModel::data(const QModelIndex& index, int role) const {
+    using namespace YellowbackRpc::PositionIntent;
+    if (loading) {
+        if (role == Qt::DisplayRole && index.column() == 0) return tr("Loading...");
+        return QVariant();
+    }
+    if (index.row() >= modeldata->size()) return QVariant();
+    const auto& c = modeldata->at(index.row());
+    if (role == Qt::TextAlignmentRole && (index.column() == Debt || index.column() == Collateral))
+        return QVariant(Qt::AlignRight | Qt::AlignVCenter);
+    if (role == Qt::DisplayRole) {
+        switch (index.column()) {
+            case Vault:         return c.vault.vaultName();
+            case Role:          return c.intent.role == ROLE_RESIDUAL ? tr("owner's residual") : tr("claimant");
+            case Whose:         return c.mineClaim ? tr("your claim") : c.mineVault ? tr("your vault") : tr("someone else's");
+            case Debt:          return YellowbackFormat::cents(c.vault.mintedCents);
+            case Collateral:    return YellowbackFormat::zec(c.vault.collateralZat);
+            case ClaimHeight:   return QString::number(c.intent.height);
+            case ReleaseHeight: return YellowbackFormat::heightWithEstimate(c.intent.releaseHeight, currentHeight);
+            case Remaining:     return remaining(c.intent, currentHeight);
+        }
+    }
+    if (role == Qt::ToolTipRole) {
+        if (c.intent.role == ROLE_RESIDUAL)
+            return tr("The owner's residual (RED-5): the collateral above what the claimant receives. Anyone may release it to the owner after the claim delay; it cannot be cancelled.");
+        return tr("Intent %1: released to the claimant from height %2 on. Until then any member of the YED attestor set may cancel it as a wrong-price claim; "
+                  "the collateral then returns to the vault and the claim's burn is not refunded.").arg(c.intent.outpoint()).arg(c.intent.releaseHeight);
+    }
+    return QVariant();
+}
+
+QVariant YellowbackPendingClaimsModel::headerData(int section, Qt::Orientation orientation, int role) const {
+    if (role == Qt::FontRole && orientation == Qt::Horizontal) {
+        QFont f; f.setBold(true); return f;
+    }
     if (role == Qt::DisplayRole && orientation == Qt::Horizontal && section < headers.size())
         return headers.at(section);
     return QVariant();
@@ -772,7 +904,7 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
     if (role == Qt::DisplayRole) {
         switch (index.column()) {
             case Type: {
-                QString s = YellowbackFormat::typeLabel(t.type);
+                QString s = YellowbackFormat::rowLabel(t.type, t.path, t.burned);
                 // A send whose every output came back to this wallet: the balance did not move, and
                 // "Sent $0.00" read as a fault on the owner's first walk-through
                 if (t.type == TYPE_SEND && t.amountCents == 0 && t.yedOut > 0) s = tr("self-transfer");
@@ -797,6 +929,8 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
         if (t.expired)
             return tr("This transaction was never mined and has passed its expiry height. "
                       "It has no effect; any YED it would have moved is still yours.");
+        if (YellowbackFormat::rowLabel(t.type, t.path, t.burned) != YellowbackFormat::typeLabel(t.type))
+            return tr("A claim intent of a vault of yours was released after the claim delay: the vault is CLAIMED.");
         if (t.type == TYPE_BURN)
             return tr("A Yellowback output was spent as plain YEC. The Yellowback index treats the token as "
                       "destroyed (burned); only its YEC carrier value moved.");

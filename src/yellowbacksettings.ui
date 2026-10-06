@@ -12,10 +12,7 @@
     <widget class="QLabel" name="lblConfHint">
      <property name="wordWrap"><bool>true</bool></property>
      <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
-     <property name="text"><string>The node needs both of these lines in its ycash.conf:
-
-experimentalfeatures=1
-yellowback=1</string></property>
+     <property name="text"><string>No ycash.conf line enables Yellowback: since the vault upgrade its rules are consensus wherever the upgrade and the network's YED attestor set are configured, and the wallet finds it by asking the node (yed_getinfo). On regtest the node needs -nuparams=6d5b7a31:&lt;height&gt; and -yellowbackattestorset=&lt;setid&gt;.</string></property>
     </widget>
    </item>
    <item>

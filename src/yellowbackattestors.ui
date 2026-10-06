@@ -12,9 +12,17 @@
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="lblMembership">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string notr="true">QLabel { background-color: #f4f4ec; color: #3a3a1f; border: 1px solid #d8d8b9; padding: 6px; }</string></property>
+     <property name="text"><string>-</string></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="lblAttestorsIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Attestors are bonded price reporters. Once the layer is armed, every mint and claim carries a bundle of their signed attestations next to the pool quotes, and the price used is the one both sources signed off on. Registering, withdrawing a bond and reviving are done here through your own node; the signing itself is the yellowback-attest agent's job beside that node.</string></property>
+     <property name="text"><string>Attestors are bonded price reporters and the members of the YED attestor set, a signer set of the Ycash vault primitive. Once the layer is armed, every mint and claim carries a bundle of their signed attestations next to the pool quotes, and the price used is the one both sources signed off on. A current member may also cancel a claim made at a wrong price before it is released (Pending claims page). Joining the set, the heartbeat that keeps a member live, and withdrawing a bond are done here through your own node; signing prices is the yellowback-attest agent's job beside that node.</string></property>
     </widget>
    </item>
    <item>
@@ -41,7 +49,7 @@
      <item><widget class="QPushButton" name="btnRegister"><property name="text"><string>Register as attestor…</string></property></widget></item>
      <item><widget class="QPushButton" name="btnReport"><property name="text"><string>Report equivocation…</string></property></widget></item>
      <item><spacer name="attSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
-     <item><widget class="QPushButton" name="btnRevive"><property name="text"><string>Revive…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnHeartbeat"><property name="text"><string>Heartbeat…</string></property></widget></item>
      <item><widget class="QPushButton" name="btnWithdraw"><property name="text"><string>Withdraw bond…</string></property></widget></item>
     </layout>
    </item>

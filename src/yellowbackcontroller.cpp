@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include "yellowbackrpc.h"
+#include "vaultrpc.h"
 #include "controller.h"
 #include "connection.h"
 #include "mainwindow.h"
@@ -32,6 +33,7 @@ YellowbackController::YellowbackController(MainWindow* main, Controller* rpc) : 
     claimable    = new YellowbackClaimableModel(this);
     transactions = new YellowbackTxModel(this);
     attestors    = new YellowbackAttestorsModel(this);
+    pendingClaims = new YellowbackPendingClaimsModel(this);
 
     reason = tr("Not connected to ycashd yet.");
 }
@@ -129,15 +131,11 @@ void YellowbackController::onConnected() {
         },
         [=, this](const QString& e) {
             if (isMethodNotFound(e)) {
-                setAvailability(false, tr("the connected ycashd has no Yellowback RPCs (%1). Add 'experimentalfeatures=1' and 'yellowback=1' to its ycash.conf and restart it.").arg(e));
-                if (!confRepairOffered) {
-                    confRepairOffered = true;
-                    auto conn = connection();
-                    if (conn != nullptr && conn->offerYellowbackConfRepair()) {
-                        QMessageBox::information(main, tr("ycash.conf updated"),
-                            tr("The two lines were added. Restart ycashd (or YecWallet, if it runs the embedded node) to enable Yellowback."));
-                    }
-                }
+                // rpcversion 5 (U-22): the yed_* commands exist only where the vault upgrade and the
+                // network's YED attestor set are both configured; no conf flag enables them
+                setAvailability(false, tr("the connected ycashd has no Yellowback RPCs (%1). Yellowback runs where the vault upgrade "
+                                          "and the network's YED attestor set are configured; this network has none yet "
+                                          "(on regtest: -nuparams=6d5b7a31:<height> -yellowbackattestorset=<setid>).").arg(e));
             } else {
                 setAvailability(false, tr("yed_getinfo failed: %1").arg(e));
             }
@@ -155,7 +153,7 @@ void YellowbackController::applyInfo(const json& info) {
 
     if (!enabled) {
         versionOk = false;
-        setAvailability(false, tr("Yellowback is not enabled on this ycashd. Add 'experimentalfeatures=1' and 'yellowback=1' to ycash.conf and restart it."));
+        setAvailability(false, tr("Yellowback is not enabled on this ycashd: the vault upgrade or the network's YED attestor set is not configured."));
         emit infoUpdated();
         return;
     }
@@ -210,6 +208,10 @@ void YellowbackController::refresh(bool force) {
                 refreshPrice();
                 refreshAttestors();
                 refreshSelection();
+                refreshPendingClaims();
+                refreshAttestorSet();
+                refreshVaultInfo();
+                refreshClaimOutcomes();
             }
         },
         [=, this](const QString& e) {
@@ -234,6 +236,200 @@ void YellowbackController::feedAttest(const json& price, const json& attestorsAr
     if (!price.is_null())        applyPrice(price);
     if (!attestorsArr.is_null()) applyAttestors(attestorsArr);
     if (!selection.is_null())    applySelection(selection);
+}
+
+void YellowbackController::feedUpgrade(const json& claimingVaults, const json& attestorSet, const json& vaultInfo) {
+    if (!vaultInfo.is_null())      vaultInfoJson = vaultInfo.is_object() ? vaultInfo : json::object();
+    if (!claimingVaults.is_null()) applyClaimingVaults(claimingVaults);
+    if (!attestorSet.is_null())    applyAttestorSet(attestorSet);
+}
+
+// ── rpcversion 5: the vault upgrade, the attestor set, pending claims ─────────────────────
+
+const json& YellowbackController::upgrade() const {
+    return YellowbackJson::obj(infoJson, YellowbackRpc::Info::UPGRADE);
+}
+
+bool YellowbackController::upgradeActive() const {
+    return YellowbackJson::toStr(upgrade(), YellowbackRpc::Upgrade::STATUS) == YellowbackRpc::Upgrade::STATUS_ACTIVE;
+}
+
+QString YellowbackController::attestorSetId() const {
+    QString id = YellowbackJson::toStr(paramsJson, YellowbackRpc::Params::ATTESTOR_SET_ID);
+    return id.isEmpty() ? YellowbackJson::toStr(upgrade(), YellowbackRpc::Upgrade::ATTESTOR_SET_ID) : id;
+}
+
+int YellowbackController::claimDelay() const {
+    const qint64 d = YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::CLAIM_DELAY, -1);
+    return (int)(d >= 0 ? d : YellowbackJson::toInt(upgrade(), YellowbackRpc::Upgrade::CLAIM_DELAY, 0));
+}
+
+YellowbackSetMember YellowbackSetMember::fromJson(const json& j) {
+    using namespace VaultRpc::Member;
+    YellowbackSetMember m;
+    m.key          = YellowbackJson::toStr (j, KEY);
+    m.status       = YellowbackJson::toStr (j, STATUS);
+    m.current      = YellowbackJson::toBool(j, CURRENT);
+    m.live         = YellowbackJson::toBool(j, LIVE);
+    m.joinHeight   = (int)YellowbackJson::toInt(j, JOIN_HEIGHT);
+    m.lastAct      = (int)YellowbackJson::toInt(j, LAST_ACT);
+    // bondvalue is YEC (decimal) like every Ycash amount (vault-rpc.md, Conventions)
+    m.bondValue    = j.is_object() && j.find(BOND_VALUE) != j.end() && j[BOND_VALUE].is_number()
+                         ? (qint64)std::llround(j[BOND_VALUE].get<double>() * 100000000.0) : 0;
+    m.bondLocktime = (int)YellowbackJson::toInt(j, BOND_LOCKTIME);
+    m.bondFrozen   = YellowbackJson::toBool(j, BOND_FROZEN);
+    m.wallet       = YellowbackJson::toBool(j, WALLET);
+    return m;
+}
+
+QString YellowbackSetMember::describe(int height, int livenessWindow) const {
+    if (status != VaultRpc::Member::STATUS_ACTIVE)
+        return bondFrozen ? QObject::tr("%1, bond frozen").arg(status) : status;
+    if (!current) return QObject::tr("joined at %1, not yet current (maturing)").arg(joinHeight);
+    QString s = live ? QObject::tr("current, live (last act at %1)").arg(lastAct)
+                     : QObject::tr("current but DORMANT: no act since height %1, beyond the %2-block liveness window").arg(lastAct).arg(livenessWindow);
+    if (live && livenessWindow > 0 && height > 0)
+        s += QObject::tr("; dormant from height %1 without a heartbeat").arg(lastAct + livenessWindow + 1);
+    if (bondFrozen) s += QObject::tr("; bond frozen");
+    return s;
+}
+
+QList<YellowbackSetMember> YellowbackController::setMembers() const {
+    QList<YellowbackSetMember> out;
+    if (setJson.is_object() && setJson.find(VaultRpc::Set::MEMBER_LIST) != setJson.end() && setJson[VaultRpc::Set::MEMBER_LIST].is_array())
+        for (auto& m : setJson[VaultRpc::Set::MEMBER_LIST]) out.append(YellowbackSetMember::fromJson(m));
+    return out;
+}
+
+QList<YellowbackSetMember> YellowbackController::walletMembers() const {
+    QList<YellowbackSetMember> out;
+    for (const auto& m : setMembers()) if (m.wallet) out.append(m);
+    return out;
+}
+
+bool YellowbackController::isAttestor() const {
+    for (const auto& m : walletMembers())
+        if (m.status == VaultRpc::Member::STATUS_ACTIVE && m.current && !m.bondFrozen) return true;
+    return false;
+}
+
+int YellowbackController::setLivenessWindow() const {
+    return (int)YellowbackJson::toInt(setJson, VaultRpc::Set::LIVENESS_WINDOW, 0);
+}
+
+int YellowbackController::setCancelThreshold() const {
+    return (int)YellowbackJson::toInt(setJson, VaultRpc::Set::CANCEL_THRESHOLD, 1);
+}
+
+QString YellowbackController::p2pkhScriptForKeyId(const QString& keyIdHex) {
+    static const QRegularExpression hex40("^[0-9a-fA-F]{40}$");
+    if (!hex40.match(keyIdHex).hasMatch()) return QString();
+    QString internal;
+    for (int i = 38; i >= 0; i -= 2) internal += keyIdHex.mid(i, 2);    // uint160::GetHex prints the bytes reversed
+    return "76a914" % internal.toLower() % "88ac";
+}
+
+void YellowbackController::applyClaimingVaults(const json& arr) {
+    claimingJson = arr.is_array() ? arr : json::array();
+    rebuildPendingClaims();
+}
+
+void YellowbackController::rebuildPendingClaims() {
+    using namespace YellowbackRpc;
+    QSet<QString> myClaims, myVaults;
+    for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
+        const YellowbackTx* t = transactions->txAt(i);
+        if (t != nullptr && t->type == Transaction::TYPE_CLAIM) myClaims.insert(t->txid);
+    }
+    for (int i = 0; ; i++) {
+        const YellowbackPosition* p = positions->positionAt(i);
+        if (p == nullptr) break;
+        myVaults.insert(p->txid);
+    }
+    QList<YellowbackPendingClaim> rows;
+    for (auto& v : claimingJson) {
+        YellowbackPosition vault = YellowbackPosition::fromJson(v);
+        if (vault.status != Position::STATUS_CLAIMING) continue;
+        for (const auto& in : vault.intents) {
+            YellowbackPendingClaim c;
+            c.vault = vault;
+            c.intent = in;
+            c.mineClaim = myClaims.contains(in.txid);
+            c.mineVault = myVaults.contains(vault.txid);
+            rows.append(c);
+        }
+    }
+    pendingClaims->setNewData(rows, indexHeight);
+    emit pendingClaimsUpdated();
+}
+
+void YellowbackController::applyAttestorSet(const json& s) {
+    setJson = s.is_object() ? s : json::object();
+    emit attestorSetUpdated();
+}
+
+void YellowbackController::refreshPendingClaims() {
+    call(YellowbackRpc::LISTVAULTS, json::array({YellowbackRpc::Position::STATUS_CLAIMING, 1000, 0}),
+        [=, this](const json& arr) { applyClaimingVaults(arr); },
+        [=, this](const QString& e) { log("yed_listvaults: " + e); });
+}
+
+void YellowbackController::refreshAttestorSet() {
+    const QString id = attestorSetId();
+    if (id.isEmpty()) return;
+    call(VaultRpc::SET_GETINFO, json::array({id.toStdString()}),
+        [=, this](const json& s) { applyAttestorSet(s); },
+        [=, this](const QString& e) { log("set_getinfo: " + e); });
+}
+
+void YellowbackController::refreshVaultInfo() {
+    call(VaultRpc::VAULT_GETINFO, json(nullptr),
+        [=, this](const json& v) { vaultInfoJson = v.is_object() ? v : json::object(); emit infoUpdated(); },
+        [=, this](const QString& e) { log("vault_getinfo: " + e); });
+}
+
+// The claimant intent is output 0 of the claim (yed_claim); the claim closed exactly one vault
+// (yed_gettxinfo.closedVaults). That vault is CLAIMING until the intent is spent: CLAIMED after a
+// release, and erased after an attestor cancel, which re-creates it at the cancel's output 0 under
+// a new txid (U-23, U-24), so yed_getvault answers vault-not-found for the old one.
+void YellowbackController::refreshClaimOutcomes() {
+    using namespace YellowbackRpc;
+    for (int i = 0; i < transactions->rowCount(QModelIndex()); i++) {
+        const YellowbackTx* t = transactions->txAt(i);
+        if (t == nullptr || t->type != Transaction::TYPE_CLAIM || t->expired || t->height <= 0) continue;
+        const QString claimTxid = t->txid;
+        if (outcomes.contains(claimTxid) && (outcomes[claimTxid].outcome == "released" || outcomes[claimTxid].outcome == "cancelled")) continue;
+        YellowbackClaimOutcome base;
+        base.claimTxid = claimTxid;
+        base.burnedCents = t->burned;
+        base.height = t->height;
+        call(GETTXINFO, json::array({claimTxid.toStdString()}),
+            [=, this](const json& info) {
+                QString vaultTxid;
+                if (info.is_object() && info.find(TxInfo::CLOSED_VAULTS) != info.end() && info[TxInfo::CLOSED_VAULTS].is_array() &&
+                    !info[TxInfo::CLOSED_VAULTS].empty())
+                    vaultTxid = YellowbackJson::toStr(info[TxInfo::CLOSED_VAULTS][0], "txid");
+                if (vaultTxid.isEmpty()) return;
+                call(GETVAULT, json::array({vaultTxid.toStdString()}),
+                    [=, this](const json& v) {
+                        YellowbackClaimOutcome o = base;
+                        o.vaultTxid = vaultTxid;
+                        const QString st = YellowbackJson::toStr(v, Position::STATUS);
+                        o.outcome = st == Position::STATUS_CLAIMED ? "released" : st == Position::STATUS_CLAIMING ? "pending" : st;
+                        outcomes[claimTxid] = o;
+                        emit claimOutcomesUpdated();
+                    },
+                    [=, this](const QString& e) {
+                        if (!e.startsWith(Errors::VAULT_NOT_FOUND)) { log("yed_getvault: " + e); return; }
+                        YellowbackClaimOutcome o = base;
+                        o.vaultTxid = vaultTxid;
+                        o.outcome = "cancelled";
+                        outcomes[claimTxid] = o;
+                        emit claimOutcomesUpdated();
+                    });
+            },
+            [=, this](const QString& e) { log("yed_gettxinfo: " + e); });
+    }
 }
 
 void YellowbackController::applyPrice(const json& p) {
@@ -336,8 +532,10 @@ QString YellowbackController::describeDivergenceError(const QString& errorMessag
 
 std::optional<qint64> YellowbackController::protocolPriceMicroUsd() const {
     using namespace YellowbackRpc;
-    if (!available || statsJson.empty() || activationJson.empty()) return std::nullopt;
-    if (YellowbackJson::toStr(activationJson, Activation::STATUS) != Activation::STATUS_ACTIVE) return std::nullopt;
+    if (!available || statsJson.empty()) return std::nullopt;
+    // rpcversion 5: yed_getactivation is the vault upgrade, the same object as yed_getinfo.upgrade
+    const json& up = activationJson.empty() ? upgrade() : activationJson;
+    if (YellowbackJson::toStr(up, ActivationInfo::STATUS) != Upgrade::STATUS_ACTIVE) return std::nullopt;
     if (YellowbackJson::isNull(statsJson, Stats::P_FAST)) return std::nullopt;
     const qint64 p = YellowbackJson::toInt(statsJson, Stats::P_FAST);
     return p > 0 ? std::optional<qint64>(p) : std::nullopt;
@@ -375,6 +573,7 @@ void YellowbackController::applyPositions(const json& arr) {
     positions->setPrices(YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_FAST) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_FAST),
                          YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM));
     positions->setNewData(list, indexHeight);
+    rebuildPendingClaims();
     emit positionsUpdated();
 }
 
@@ -391,6 +590,7 @@ void YellowbackController::applyTransactions(const json& arr) {
     if (arr.is_array())
         for (auto& it : arr) list.append(YellowbackTx::fromJson(it));
     transactions->setNewData(list, indexHeight);
+    rebuildPendingClaims();
     emit transactionsUpdated();
 }
 
@@ -432,16 +632,15 @@ void YellowbackController::refreshTransactions() {
 
 // ── Status banner ─────────────────────────────────────────────────────────────────────────
 
-bool YellowbackController::isAbandoned() const { return YellowbackJson::toBool(infoJson, YellowbackRpc::Info::ABANDONED); }
-bool YellowbackController::isEnforcing() const { return YellowbackJson::toBool(infoJson, YellowbackRpc::Info::ENFORCING); }
-
 YellowbackStatus YellowbackController::status() const {
     return describeStatus(available, reason, infoJson, statsJson, activationJson);
 }
 
-// Plan §4.8, banner row. Every line is derived from contract fields only; the wording of what
-// enforcement means follows §8.1: a majority of hashpower that runs the module makes the rules
-// hold — a description of who enforces, never a guarantee.
+// Plan §4.8, banner row, under the vault upgrade (rpcversion 5). Every line is derived from
+// contract fields only. The wording follows the upgrade plan's trust statement (§10): the
+// Yellowback rules are consensus rules every full node checks; there is no enforcing pool, no
+// pause and no abandonment to describe, so the activation, valve, sunset and abandonment lines of
+// rpcversion 4 are gone with the fields they read.
 YellowbackStatus YellowbackController::describeStatus(bool available, const QString& reason,
                                                       const json& info, const json& stats, const json& activation) {
     using namespace YellowbackRpc;
@@ -452,81 +651,24 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
         st.headline = tr("Yellowback unavailable: %1").arg(reason);
         return st;
     }
+    Q_UNUSED(stats);
 
-    const json& act = YellowbackJson::obj(info, Info::ACTIVATION);
-    QString   status  = YellowbackJson::toStr(act, Activation::STATUS);
-    qint64    sigCount = YellowbackJson::toInt(act, Activation::SIGNAL_COUNT);
-    qint64    window  = YellowbackJson::toInt(act, Activation::WINDOW);
-    bool      enforcing   = YellowbackJson::toBool(info, Info::ENFORCING);
-    bool      valve       = YellowbackJson::toBool(info, Info::VALVE_TRIPPED);
-    bool      sunset      = YellowbackJson::toBool(info, Info::SUNSET);
-    bool      abandoned   = YellowbackJson::toBool(info, Info::ABANDONED);
-    qint64    suppressed  = YellowbackJson::toInt(info, Info::SUPPRESSED_BLOCKS);
-    qint64    rejected    = YellowbackJson::toInt(info, Info::REJECTED_BLOCKS);
-    QStringList halts     = YellowbackJson::strings(stats, Stats::HALT_MASK);
-    // yed_getactivation carries the suspension flag and the thresholds; yed_getstats.haltMask
-    // carries ENFORCEMENT. Either source is enough: the first to answer wins, both agree.
-    bool suspended = YellowbackJson::toBool(activation, ActivationInfo::ENFORCEMENT_SUSPENDED) ||
-                     halts.contains(Stats::HALT_ENFORCEMENT);
-    bool participationHalt = halts.contains(Stats::HALT_PARTICIPATION) ||
-                             (status == Activation::STATUS_ACTIVE && YellowbackJson::toBool(activation, ActivationInfo::MINT_HALTED));
-    qint64 threshold = YellowbackJson::toInt(activation, ActivationInfo::THRESHOLD, -1);
+    const json& up = activation.is_object() && !activation.empty() ? activation : YellowbackJson::obj(info, Info::UPGRADE);
+    const QString status = YellowbackJson::toStr(up, Upgrade::STATUS);
+    const qint64  at     = YellowbackJson::toInt(up, Upgrade::ACTIVATION_HEIGHT, -1);
+    const QString branch = YellowbackJson::toStr(up, Upgrade::BRANCH_ID, "6d5b7a31");
+    if (status == Upgrade::STATUS_ACTIVE)
+        st.headline = tr("Yellowback rules are Ycash consensus rules since height %1 (the vault upgrade, branch %2): every full node checks them.")
+                          .arg(at).arg(branch);
+    else if (status == Upgrade::STATUS_PENDING)
+        st.headline = tr("The vault upgrade (branch %1) activates at height %2; Yellowback starts there.").arg(branch).arg(at);
+    else
+        st.headline = tr("Vault upgrade status: %1.").arg(status.isEmpty() ? tr("unknown") : status);
 
-    // Headline: activation state
-    QString signalText = window > 0 ? tr("%1/%2 of recent blocks signalling").arg(sigCount).arg(window) : QString();
-    if (status == Activation::STATUS_SIGNALING) {
-        st.headline = tr("Yellowback is signalling: %1%2. Minting opens only after activation.")
-            .arg(signalText.isEmpty() ? tr("waiting for pool signals") : signalText)
-            .arg(threshold > 0 ? tr(" (needs %1)").arg(threshold) : QString());
-    } else if (status == Activation::STATUS_LOCKED_IN) {
-        st.headline = tr("Yellowback is locked in; it activates at height %1.")
-            .arg(YellowbackJson::toInt(act, Activation::ACTIVATE_HEIGHT));
-    } else if (status == Activation::STATUS_ACTIVE) {
-        st.headline = tr("Yellowback is active since height %1; %2.")
-            .arg(YellowbackJson::toInt(act, Activation::ACTIVATE_HEIGHT))
-            .arg(signalText.isEmpty() ? tr("enforced by the pools that run the module") : signalText);
-    } else {
-        st.headline = tr("Yellowback activation state: %1.").arg(status.isEmpty() ? tr("unknown") : status);
-    }
-
-    // Warnings, most severe first
-    if (abandoned)
-    {
-        // W21: ABANDON_BLOCKS (= GRACE, ~30 days on mainnet) from the node's own params, so regtest
-        // and devnet (128 blocks) read right too; "about 30 days" when the node does not send it.
-        const qint64 ab = YellowbackJson::toInt(YellowbackJson::obj(info, YellowbackRpc::Info::PARAMS), YellowbackRpc::Params::ABANDON_BLOCKS, 0);
-        const QString span = ab > 0 ? YellowbackFormat::blocksAndDuration((int)ab) : tr("about 30 days");
-        st.warnings << tr("Enforcement abandoned: fewer than half of blocks have signalled for %1. "
-                          "Nobody polices vault spends; after its claim height any vault can be emptied by anyone. "
-                          "Sweep your collateral before then (see Vaults).").arg(span);
-    }
-    if (valve)
-        st.warnings << tr("This node's work valve tripped: it rejected a block the rest of the network built on, "
-                          "so it stopped enforcing and rejoined the network's chain. Restart the node to re-arm it, "
-                          "after checking why the network did not follow (yed_getblockverdict).");
-    if (sunset)
-        st.warnings << tr("Enforcement sunset: this node's release enforces only until a fixed height, which has passed. "
-                          "It keeps accounting but rejects nothing; upgrade the node.");
-    if (suspended && !abandoned)
-        st.warnings << tr("Enforcement suspended: fewer than half of recent blocks signal, so block rejection is paused "
-                          "and vault spends are not policed until 60 % signal again. Minting is paused too.");
-    else if (participationHalt)
-        st.warnings << tr("Participation halt: fewer than 60 % of recent blocks signal enforcement, so minting is paused "
-                          "until 75 % do. Existing YED stays redeemable.");
-    if (status == Activation::STATUS_ACTIVE && !enforcing && !valve && !sunset)
-        st.warnings << tr("This node is not enforcing (yellowbackenforce=0 or the index is unhealthy). "
-                          "It still accounts and quotes; the network's rules depend on the pools that do enforce.");
-
-    // Information lines
-    if (suppressed > 0)
-        st.notes << tr("%1 rule-breaking block(s) were accepted because the network had already built on them "
-                       "(catch-up after an outage); enforcement is still on.").arg(suppressed);
-    if (rejected > 0)
-        st.notes << tr("This node has rejected %1 block(s) for vault-spend rule violations.").arg(rejected);
     // H10: the node's own report of the coin locks that keep an ordinary send from burning YED
     if (!YellowbackJson::toBool(info, Info::PROTECTED_BY_INDEX, true))
         st.warnings << tr("This node is not holding your YED outputs locked, so an ordinary YEC send could spend one and burn the YED it carries. "
-                          "Check that the node runs with yellowback enabled.");
+                          "Check that the node's Yellowback index is healthy.");
     else if (YellowbackJson::toInt(info, Info::LOCKED_OUTPUTS) > 0)
         st.notes << tr("%1 of this wallet's outputs carry YED and are locked by the node, so an ordinary YEC send cannot spend them "
                        "(yed_unlockcoin releases one deliberately).").arg(YellowbackJson::toInt(info, Info::LOCKED_OUTPUTS));
@@ -538,11 +680,8 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
         QString line = tr("This node mines with payout %1: ").arg(YellowbackJson::toStr(miner, Miner::PAYOUT_ADDRESS));
         if (kind == Miner::KIND_QUOTE)
             line += tr("next tag carries a price quote (%1 s old)").arg(YellowbackJson::toInt(miner, Miner::QUOTE_AGE_SECONDS));
-        else if (kind == Miner::KIND_SIGNAL)
-            line += tr("next tag signals without a quote (no fresh quote from the agent)");
         else
-            line += tr("next block carries no tag");
-        line += YellowbackJson::toBool(miner, Miner::SIGNAL) ? tr("; signalling") : tr("; not signalling");
+            line += tr("next block carries no price quote");
         line += YellowbackJson::toBool(miner, Miner::ELIGIBLE) ? tr("; eligible for enforcement fees") : tr("; not eligible for enforcement fees");
         st.notes << line;
     }
@@ -881,8 +1020,8 @@ void YellowbackController::sweepCarriers(OkFn ok, ErrFn err) {
     call(YellowbackRpc::SWEEPCARRIERS, json(nullptr), ok, err);
 }
 
-void YellowbackController::registerAttestor(const QString& bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::REGISTERATTESTOR, json::array({bondYec.toStdString(), lockBlocks, flags}), ok, err);
+void YellowbackController::registerAttestor(const QString& bondYec, int lockBlocks, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::REGISTERATTESTOR, json::array({bondYec.toStdString(), lockBlocks}), ok, err);
 }
 
 void YellowbackController::withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err) {
@@ -890,8 +1029,30 @@ void YellowbackController::withdrawBond(int seq, const QString& to, OkFn ok, Err
     else              call(YellowbackRpc::WITHDRAWBOND, json::array({seq, to.toStdString()}), ok, err);
 }
 
-void YellowbackController::revive(int seq, qint64 priceMicroUsd, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::REVIVE, json::array({seq, priceMicroUsd}), ok, err);
+void YellowbackController::heartbeat(const QString& memberKey, OkFn ok, ErrFn err) {
+    const QString id = attestorSetId();
+    if (id.isEmpty()) { if (err) err(tr("the node reports no YED attestor set")); return; }
+    json params = json::array({id.toStdString()});
+    if (!memberKey.isEmpty()) params.push_back(memberKey.toStdString());
+    call(VaultRpc::SET_HEARTBEAT, params, ok, err);
+}
+
+void YellowbackController::releaseIntent(const QString& outpoint, const QString& recipientScript, OkFn ok, ErrFn err) {
+    json params = json::array({outpoint.toStdString()});
+    if (!recipientScript.isEmpty()) params.push_back(recipientScript.toStdString());
+    call(VaultRpc::VAULT_RELEASE, params, ok, err);
+}
+
+void YellowbackController::buildCancel(const QString& outpoint, OkFn ok, ErrFn err) {
+    call(VaultRpc::VAULT_BUILDCANCEL, json::array({outpoint.toStdString()}), ok, err);
+}
+
+void YellowbackController::signCancel(const QString& hex, OkFn ok, ErrFn err) {
+    call(VaultRpc::SET_SIGNCANCEL, json::array({hex.toStdString()}), ok, err);
+}
+
+void YellowbackController::sendVaultTx(const QString& hex, OkFn ok, ErrFn err) {
+    call(VaultRpc::VAULT_SEND, json::array({hex.toStdString()}), ok, err);
 }
 
 void YellowbackController::reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err) {
@@ -1000,12 +1161,6 @@ void YellowbackController::awaitPending(const QString& type, const QString& carr
     };
     QObject::connect(timer, &QTimer::timeout, this, poll);
     timer->start();
-}
-
-void YellowbackController::sweep(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
-    json params = json::array({vaultTxid.toStdString(), YellowbackRpc::SWEEP_ACKNOWLEDGEMENT});
-    if (!to.isEmpty()) params.push_back(to.toStdString());
-    call(YellowbackRpc::SWEEP, params, ok, err);
 }
 
 void YellowbackController::getTxInfo(const QString& txid, OkFn ok, ErrFn err) {
@@ -1165,7 +1320,9 @@ QStringList YellowbackController::checkClaimable(const json& params, int indexHe
     const qint64 af = attestFeeZatFor(params, fee);
     if (c.attestFeeZat != 0 && c.attestFeeZat != af)
         bad << tr("the attestation fee is %1 where AFEE-1 gives %2").arg(YellowbackFormat::zec(c.attestFeeZat)).arg(YellowbackFormat::zec(af));
-    if (c.residualZat < 0 || c.collateralZat - fee - c.attestFeeZat - c.residualZat <= 0)
+    // rpcversion 5 (U-23, finding 33): the claimant intent carries the collateral less the RED-5
+    // residual; the fees come from the claimant's own YEC, not from the collateral
+    if (c.residualZat < 0 || c.collateralZat - c.residualZat <= 0)
         bad << tr("the residual %1 leaves nothing of the collateral %2 for the claimant").arg(YellowbackFormat::zec(c.residualZat)).arg(YellowbackFormat::zec(c.collateralZat));
     if (indexHeight < c.claimHeight)
         bad << tr("the claim height %1 is not reached (the chain is at %2)").arg(c.claimHeight).arg(indexHeight);
@@ -1187,6 +1344,14 @@ QStringList YellowbackController::checkVaultHeights(const json& params, const Ye
 
 QString YellowbackController::deadlineWarning(const YellowbackPosition& p, int height) {
     using namespace YellowbackRpc::Position;
+    if (height > 0 && p.status == STATUS_CLAIMING) {
+        // rpcversion 5: an own vault under a claim intent; it is the attestors' to stop, not the owner's
+        const YellowbackIntent* c = p.claimantIntent();
+        if (c != nullptr && height + 1 < c->releaseHeight)
+            return tr("Vault %1 is being claimed (claim at height %2): its collateral goes to the claimant at height %3 unless a member of the attestor set cancels the claim as made at a wrong price.")
+                .arg(p.txid.left(12) % "…").arg(c->height).arg(c->releaseHeight);
+        return QString();
+    }
     if (height <= 0 || (p.status != STATUS_ACTIVE && p.status != STATUS_VOID)) return QString();
     if (height < p.claimHeight - BLOCKS_PER_DAY) return QString();
     const QString vault = p.txid.left(12) % "…";
@@ -1228,7 +1393,7 @@ QString YellowbackController::explainError(const QString& e) {
     using namespace YellowbackRpc;
     auto is = [&](const char* id) { return e.startsWith(id, Qt::CaseInsensitive); };
     if (isMethodNotFound(e))
-        return tr("The connected node does not offer this command. It needs a ycashd release with this Yellowback RPC, started with experimentalfeatures=1 and yellowback=1.");
+        return tr("The connected node does not offer this command. It needs a ycashd release with the vault upgrade and this Yellowback RPC, on a network whose YED attestor set is configured.");
     if (is(Errors::INDEX_UNHEALTHY))
         return tr("The node's Yellowback index is unhealthy; restart ycashd with -reindex-yellowback.");
     if (is(Errors::CHANGE_FLOOR))
@@ -1245,20 +1410,14 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("This wallet does not hold the owner key of that vault.");
     if (is(Errors::VAULT_NOT_FOUND))
         return tr("The node's index knows no vault by that txid.");
-    if (is(Errors::SWEEP_NOT_ABANDONED))
-        return tr("The chain does not show abandonment: enforcement is on, or has been suspended for fewer than the abandonment window of blocks. Redeem instead.");
-    if (is(Errors::SWEEP_ACKNOWLEDGEMENT_MISSING))
-        return tr("The node did not receive the exact acknowledgement a sweep requires.");
     if (is(Errors::CLAIM_NOT_YET))
         return tr("The vault's claim height has not been reached.");
     if (is(Errors::CLAIM_NOT_UNDERWATER))
-        return tr("At the claim price the vault is not underwater, so a claim would be refused by the enforcing pools.");
+        return tr("At the claim price the vault is not underwater, so the claim would be an invalid transaction under the Yellowback consensus rules.");
     if (is(Errors::MINTPOL_NOT_ACTIVE))
-        return tr("Yellowback is not active at the reference height: minting waits for activation.");
+        return tr("The vault upgrade is not active at the reference height: minting waits for it.");
     if (is(Errors::MINTPOL_NO_PRICE))
         return tr("No mint price is defined at the reference height: too few recent blocks carry a price quote.");
-    if (is(Errors::MINTPOL_PARTICIPATION))
-        return tr("Minting is paused: fewer than 60 % of recent blocks signal Yellowback enforcement.");
     if (is(Errors::MINTPOL_GLOBAL_RATIO))
         return tr("Minting is paused: the network's overall collateral ratio is too low.");
     if (is(Errors::MINTPOL_DIVERGENCE))
@@ -1283,7 +1442,14 @@ QString YellowbackController::explainError(const QString& e) {
     if (is(Errors::CLAIM_OUT_BELOW_MIN))
         return tr("The price moved: at the node's reference height the claim would pay out less YEC than the amount you confirmed, so nothing was sent. Re-check the claimable list and confirm again.");
     if (is(Errors::MEMPOOL_CHECK_FAILED))
-        return tr("The node's own pre-check of the enforcement rules refused the transaction, so nothing was signed or sent.");
+        return tr("The node's own check of the Yellowback consensus rules refused the transaction (it would be invalid), so nothing was signed or sent.");
+    if (is(Errors::BAD_ADDRESS))
+        return tr("A claim pays a claim intent, whose recipient must be a transparent address; claim to a transparent address and shield the YEC afterwards.");
+    if (is(RpcErrors::REGISTER_NEEDS_ADMISSION))
+        return tr("The attestor set is not open: the join was signed by the new member key only and needs admission signatures from current members. "
+                  "The node's message carries the partly signed transaction for set_signact and set_sendact.");
+    if (is(RpcErrors::NO_ATTESTOR_SET))
+        return tr("This network has no YED attestor set configured.");
     // v3
     if (is(Errors::BUNDLE_INSUFFICIENT))
         return tr("Too few of the selected attestors have a fresh attestation in this node's pool. The subscriber fills the pool (Settings); nothing was sent.");
@@ -1305,14 +1471,12 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("The bond's locktime has not passed; the bond cannot be withdrawn before it (every Ycash node enforces that lock).");
     if (is(Errors::BOND_SPENT))
         return tr("The bond has already been withdrawn.");
-    if (is(Errors::NOT_DORMANT))
-        return tr("Only a DORMANT attestor can be revived.");
     if (is(Errors::NOT_EQUIVOCATION))
         return tr("The two attestations are not an equivocation: they must be the same attestor, the same cited height, different prices, both validly signed over this chain's block hash.");
     if (is(Errors::ATTEST_KEY_NOT_HELD))
-        return tr("This wallet does not hold the key this attestor action needs (the hot key for a revival, the bond key for a withdrawal).");
+        return tr("This wallet does not hold the key this attestor action needs (the member key: since P4-b it is the hot key and the bond key at once).");
     if (is(Errors::ATTEST_UNKNOWN_SEQ))
-        return tr("The node knows no attestor with that sequence number (a registration counts once its transaction confirms).");
+        return tr("The node knows no attestor with that sequence number (a join counts once its transaction confirms).");
     if (is(Errors::ATTEST_MALFORMED))
         return tr("An attestation is 74 bytes (148 characters of hex).");
     if (is(Errors::ATTEST_RANGE))

@@ -9,13 +9,25 @@
 
 using json = nlohmann::json;
 
-// One row of yed_listpositions (= yed_getvault + canRedeem/canClaim/canSweep; plan §4.5).
+// rpcversion 5: one claim intent of a CLAIMING vault (yed_getvault.intents).
+struct YellowbackIntent {
+    QString txid;               // the claim transaction
+    int     vout            = 0;
+    QString role;               // claimant | residual
+    int     height          = 0;   // the claim's height
+    int     releaseHeight   = 0;   // height + CLAIM_DELAY: vault_release from here on; an attestor cancel before it
+    QString outpoint() const { return txid % ":" % QString::number(vout); }
+    static YellowbackIntent fromJson(const json& j);
+};
+
+// One row of yed_listpositions (= yed_getvault + canRedeem/canClaim/canNotice; plan §4.5).
 // Amounts are integer cents / zatoshi as the node reports them; rendering happens in the
 // model's data(). A nullable or optional height is -1 when absent.
 struct YellowbackPosition {
     QString txid;
     int     vout            = 0;
-    QString status;             // ACTIVE | VOID | CLOSED | CLAIMED
+    QString status;             // ACTIVE | CLAIMING | CLOSED | CLAIMED (| VOID, indexed before the upgrade)
+    QString ownerPubKey;
     QString ownerAddress;
     QString ownerKeyId;
     QString termClass;          // A | B | C
@@ -29,14 +41,14 @@ struct YellowbackPosition {
     int     closeHeight     = -1;      // null until CLOSED/CLAIMED
     QString closingTxid;               // "" until CLOSED/CLAIMED
     qint64  burnedCents     = 0;
-    bool    unbacked        = false;   // closed without its burn (a sweep)
+    bool    unbacked        = false;   // closed without its burn (no rule produces one since the upgrade)
     bool    claimable       = false;
     qint64  underwaterAt    = -1;      // µUSD; null (-1) for VOID
     QString voidReason;                // "" unless VOID
-    int     sweepBefore     = -1;      // optional: present on VOID, and on ACTIVE under abandonment
+    QString scriptPubKey;              // rpcversion 5: the vault's V template (hex)
+    QList<YellowbackIntent> intents;   // rpcversion 5: present while CLAIMING
     bool    canRedeem       = false;   // ACTIVE or VOID at or past lockHeight (VOID: the Release, L14)
     bool    canClaim        = false;
-    bool    canSweep        = false;
     bool    noticed         = false;   // v3: a claim notice stands against this vault (NOT-1)
     int     noticeHeight    = -1;      // v3: null (-1) unless noticed
     int     emergencyOpenAt = -1;      // v3: the first reference height an emergency claim may cite; null (-1) unless noticed
@@ -44,6 +56,9 @@ struct YellowbackPosition {
 
     static YellowbackPosition fromJson(const json& j);
     QString vaultName() const { return txid % ":" % QString::number(vout); }
+    /** The claimant intent while CLAIMING; nullptr otherwise. */
+    const YellowbackIntent* claimantIntent() const;
+    const YellowbackIntent* residualIntent() const;
 };
 
 // One row of yed_listclaimable (plan §4.5).
@@ -89,6 +104,8 @@ struct YellowbackAttestor {
     bool    pool            = false;   // flags.pool: operates a mining pool
     int     lastBundleHeight = -1;     // null when none
     bool    poolFresh       = false;   // this node's pool holds a fresh attestation of this seq
+    int     lastAct         = -1;      // P4-b: the set's lastAct for the member; -1 when absent
+    bool    bondFrozen      = false;   // P4-b: the set froze the bond
 
     static YellowbackAttestor fromJson(const json& j);
 };
@@ -98,7 +115,7 @@ struct YellowbackTx {
     QString txid;
     int     height          = 0;
     int     confirmations   = 0;
-    QString type;               // mint | send | receive | burn | redeem | claim | claimed | sweep
+    QString type;               // mint | send | receive | burn | redeem | claim | claimed
     QString verdict;
     QString path;               // owner | claim | ""
     qint64  yedIn           = 0;
@@ -139,6 +156,10 @@ namespace YellowbackFormat {
     QString blocksAndDuration(int blocks);            // "48 block(s), ~1 h 0 m" at 75 s per block
     QDateTime estimateDate(int height, int currentHeight);
     QString typeLabel(const QString& type);
+    /** The Transactions view's label for a row: typeLabel, except that a "redeem" row with no YED
+     *  burned and the empty path is the release of a claim intent that closed an own vault (the
+     *  node's yed_listtransactions types it "redeem"; both node lines, rpcversion 5). */
+    QString rowLabel(const QString& type, const QString& path, qint64 burned);
     QString haltReason(const QString& name);               // haltMask name -> sentence
     QString voidReason(const QString& verdict);            // MINT verdict -> sentence
     QString sourceTier(int tier);                          // v3 flags.tier -> "exchange APIs" | "mixed" | "aggregator"
@@ -162,7 +183,7 @@ public:
         Claimable,       // yes, or why not and when: before the claim height / notice standing / needs a lower claim price
         UnderwaterBelow, // the claim price below which the vault can be claimed (yed_getvault.underwaterAt)
         Unbacked,
-        SweepBefore,
+        ClaimState,      // rpcversion 5: "claimed, releases at h" while CLAIMING; "-" otherwise
         Notice,          // v3: "noticed, emergency claim from <h>" | "notice possible" | "-"
         Vault,
         ColumnCount
@@ -193,12 +214,12 @@ private:
     bool                    loading       = true;
 };
 
-/** The Positions table's status filter: "open" (ACTIVE and VOID, the default -- the rows an owner
- *  can still act on), or one status, or every row. */
+/** The Positions table's status filter: "open" (ACTIVE, CLAIMING and VOID, the default -- the rows
+ *  an owner can still act on or watch), or one status, or every row. */
 class YellowbackPositionsFilter : public QSortFilterProxyModel {
 public:
     explicit YellowbackPositionsFilter(QObject* parent = nullptr) : QSortFilterProxyModel(parent) {}
-    /** "" = every row; "open" = ACTIVE or VOID; else exactly that status. */
+    /** "" = every row; "open" = ACTIVE, CLAIMING or VOID; else exactly that status. */
     void setStatusFilter(const QString& filter) { statusFilter = filter; invalidateFilter(); }
     QString status() const { return statusFilter; }
 protected:
@@ -257,6 +278,8 @@ public:
         Sources,         // source tier and pool flag
         LastBundle,      // lastBundleHeight
         PoolFresh,
+        LastAct,         // P4-b: the set's lastAct (join + maturity, or the last heartbeat)
+        BondFrozen,      // P4-b
         ColumnCount
     };
 
@@ -273,6 +296,51 @@ private:
     QList<QString>          headers;
     int                     currentHeight = 0;
     bool                    loading       = true;
+};
+
+// rpcversion 5: the Pending claims page. One row per claim intent of a CLAIMING vault (from
+// yed_listvaults "CLAIMING"): the claimant's intent is released after CLAIM_DELAY to the claimant,
+// or cancelled before then by the YED attestor set (the vault is ACTIVE again, the burn is not
+// refunded, U-24); the owner's residual intent is released only.
+struct YellowbackPendingClaim {
+    YellowbackPosition vault;   // the CLAIMING vault (yed_getvault row)
+    YellowbackIntent   intent;
+    bool               mineClaim = false;   // this wallet made the claim (its claim txid is in yed_listtransactions)
+    bool               mineVault = false;   // this wallet owns the vault (it is in yed_listpositions)
+};
+
+class YellowbackPendingClaimsModel : public QAbstractTableModel {
+public:
+    YellowbackPendingClaimsModel(QObject* parent);
+    ~YellowbackPendingClaimsModel();
+
+    enum Column {
+        Vault = 0,
+        Role,            // claimant | owner's residual
+        Whose,           // your claim | your vault | someone else's
+        Debt,            // the YED the claim burned
+        Collateral,
+        ClaimHeight,     // the height of the claim
+        ReleaseHeight,
+        Remaining,       // "releasable now" | "n block(s)"
+        ColumnCount
+    };
+
+    void setNewData(const QList<YellowbackPendingClaim>& rows, int currentHeight);
+    const YellowbackPendingClaim* rowAt(int row) const;
+    /** "releasable now" from releaseHeight on, else "in n block(s) (~t)". */
+    static QString remaining(const YellowbackIntent& i, int currentHeight);
+
+    int      rowCount(const QModelIndex& parent) const override;
+    int      columnCount(const QModelIndex& parent) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+
+private:
+    QList<YellowbackPendingClaim>* modeldata = nullptr;
+    QList<QString>   headers;
+    int              currentHeight = 0;
+    bool             loading       = true;
 };
 
 // Yellowback transactions table, pattern of src/txtablemodel.h.

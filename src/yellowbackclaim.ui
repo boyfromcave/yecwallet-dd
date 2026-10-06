@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblClaimIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Vaults past their claim height whose collateral is worth less than their debt at the claim price. Anyone may claim one by burning its debt in YED from their own balance; the enforcement fee is paid from the collateral and the claimant receives the rest. The claim path needs nobody's key; the burn is enforced by the pools running the Yellowback module.</string></property>
+     <property name="text"><string>Vaults past their claim height whose collateral is worth less than their debt at the claim price. Anyone may claim one by burning its debt in YED from their own balance; the fees are paid from the claimant's own YEC. A claim moves the collateral (less the owner's residual) into a claim intent: after the claim delay the claimant releases it on the Pending claims page, and until then any member of the attestor set may cancel a claim made at a wrong price, in which case the burn is lost. Every full node checks these rules; the claim path needs nobody's key.</string></property>
     </widget>
    </item>
    <item>
