@@ -242,6 +242,11 @@ QString YellowbackFormat::haltReason(const QString& name) {
 
 QString YellowbackFormat::voidReason(const QString& verdict) {
     if (verdict.isEmpty()) return QString();
+    // hardening H-1: the one VOID reason a wallet following the Mint page should never see
+    if (verdict.startsWith("mint-halted-unarmed"))
+        return QObject::tr("The mint was confirmed while the attestation layer was not ARMED, on a network that requires it for every mint "
+                           "(mint-halted-unarmed), so it created no YED. The collateral stays yours: "
+                           "release it at the lock height (Release, no burn, no fee).");
     return QObject::tr("The mint failed the rule \"%1\" and created no YED. The collateral stays yours: "
                        "release it at the lock height (Release, no burn, no fee).").arg(verdict);
 }

@@ -2624,6 +2624,303 @@ private slots:
         QVERIFY(h.label("lblMintPageStatus").startsWith("mint did not complete"));
     }
 
+    // ── Hardening H5-a: H-9.2 deadlines and renew, H-9.3 plausibility, H-1/H-5 messaging ──
+
+    // H-9.2: the persistent warning starts at claimHeight − 1 day (1,152 blocks at 75 s) and
+    // stays until the vault is closed; a VOID vault is told to release, a closed one nothing.
+    void deadlineWarningFromClaimHeightLessOneDay() {
+        YellowbackPosition p = YellowbackPosition::fromJson(positionActive());
+        p.lockHeight = 10000; p.claimHeight = 10000 + 34560;
+        QCOMPARE(YellowbackController::BLOCKS_PER_DAY, 1152);
+        QVERIFY(YellowbackController::deadlineWarning(p, p.claimHeight - 1153).isEmpty());
+        const QString w = YellowbackController::deadlineWarning(p, p.claimHeight - 1152);
+        QVERIFY2(w.contains("reaches its claim height 44560"), qPrintable(w));
+        QVERIFY(w.contains("redeem or renew it before then"));
+        QVERIFY(w.contains("1152 block(s)"));
+        QVERIFY(w.contains("(~"));                                            // the date
+        QVERIFY(YellowbackController::deadlineWarning(p, p.claimHeight).contains("past its claim height 44560"));
+        QVERIFY(YellowbackController::deadlineWarning(p, 0).isEmpty());
+        YellowbackPosition v = p; v.status = "VOID";
+        QVERIFY(YellowbackController::deadlineWarning(v, p.claimHeight - 10).contains("release its collateral before then"));
+        YellowbackPosition c = p; c.status = "CLOSED";
+        QVERIFY(YellowbackController::deadlineWarning(c, p.claimHeight - 10).isEmpty());
+
+        // The banner carries it above every page (regtest: GRACE 24, so 381 is inside the day)
+        Harness h;
+        h.feedActive(381, json::array({positionActive()}));
+        QCOMPARE(h.ctl.deadlineWarnings().size(), 1);
+        QVERIFY(h.visible("lblBanner"));
+        QVERIFY2(h.label("lblBanner").contains("Vault 6a1f2b3c4d5e… reaches its claim height 404"), qPrintable(h.label("lblBanner")));
+        // a vault far from its claim height: no warning, no banner
+        json far = positionActive(); far["lockHeight"] = 5000; far["claimHeight"] = 5024;
+        h.feedActive(381, json::array({far}));
+        QVERIFY(h.ctl.deadlineWarnings().isEmpty());
+        QVERIFY(!h.visible("lblBanner"));
+        QVERIFY(h.copyIsClean());
+    }
+
+    // H-9.2: dates on every ACTIVE vault; renew and redeem from lockHeight; no renew under abandonment.
+    void vaultActionsOfferRenewFromLockHeight() {
+        YellowbackPosition p = YellowbackPosition::fromJson(positionActive());
+        auto before = YellowbackTab::vaultActions(p, 379, false);
+        QVERIFY(!before.redeem && !before.renew);
+        QVERIFY2(before.text.contains("redeemable or renewable from lock height 380 (~"), qPrintable(before.text));
+        QVERIFY(before.text.contains("claim height 404 (~"));
+        auto at = YellowbackTab::vaultActions(p, 380, false);
+        QVERIFY(at.redeem && at.renew);
+        QVERIFY(at.text.contains("Renew redeems it and mints $1,000.00 again"));
+        QVERIFY(at.text.contains("Claim height 404 (~"));
+        auto abandoned = YellowbackTab::vaultActions(p, 380, true);
+        QVERIFY(abandoned.sweep && abandoned.redeem && !abandoned.renew);
+
+        Harness h;
+        json row = positionActive(); row["canRedeem"] = true;
+        h.feedActive(381, json::array({row}));
+        h.selectRow("tblPositions", 0);
+        QVERIFY(!h.button("btnRenew")->isHidden());
+        QVERIFY(h.button("btnRenew")->isEnabled());
+        QVERIFY(h.button("btnRedeem")->isEnabled());
+        // the vault's own lock length (lockHeight − refHeight) is reused while its class takes it
+        QCOMPARE(h.ctl.renewLockBlocks(YellowbackPosition::fromJson(row)), 51);
+        json odd = row; odd["refHeight"] = 200;     // 180 blocks: in no class on this table any more? C takes 145-240
+        QCOMPARE(h.ctl.renewLockBlocks(YellowbackPosition::fromJson(odd)), 180);
+        odd["refHeight"] = 0;                        // 380 blocks: in no class, so the shortest enabled one
+        QCOMPARE(h.ctl.renewLockBlocks(YellowbackPosition::fromJson(odd)), 48);
+    }
+
+    static json renewEstimate() {
+        json e = estimateReply();                    // at height 381: refHeight 379, lock 51 blocks
+        e["refHeight"] = 379; e["lockHeight"] = 430; e["claimHeight"] = 454;
+        return e;
+    }
+
+    // H-9.2: renew is one confirmation; the redeem goes at once, the mint when the vault reads CLOSED.
+    void renewRedeemsThenMintsInOneFlow() {
+        Harness h;
+        json row = positionActive(); row["canRedeem"] = true;
+        h.feedActive(381, json::array({row}));
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = renewEstimate();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(VAULT_ZAT);
+        h.rpc.results[YellowbackRpc::REDEEM]             = redeemReply();
+        h.rpc.results[YellowbackRpc::MINT]               = mintReply();
+        Settings::getInstance()->setYellowbackBackupPending(false);
+        h.tab.renewVault(YellowbackPosition::fromJson(row));
+
+        QCOMPARE(h.confirms.size(), 1);
+        const QString& t = h.confirms[0];
+        QVERIFY2(t.startsWith("Renew vault 6a1f"), qPrintable(t));
+        QVERIFY(t.contains("burn $1,000.00 of YED"));
+        QVERIFY(t.contains("Enforcement fee: " % YellowbackFormat::zec(62814070)));
+        QVERIFY(t.contains(YellowbackFormat::zec(VAULT_ZAT - 62814070)));
+        QVERIFY(t.contains("against " % YellowbackFormat::zec(EST_ZAT)));
+        QVERIFY(t.contains("at most " % YellowbackFormat::zec(253768844820)));
+        QVERIFY(t.contains("lock 51 blocks (class A)"));
+        QVERIFY(t.contains("Lock height about 430 (~"));
+        QVERIFY(t.contains("claim height about 454 (~"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::ESTIMATECOLLATERAL), json::array({100000, 51}));
+        QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 1);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}));
+        QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);           // not before the redeem is mined
+        QVERIFY(h.tab.renewPending());
+        QVERIFY(h.notices.isEmpty());
+
+        // The redeem is mined: yed_listpositions reads the vault CLOSED, and the mint goes out
+        json closed = row; closed["status"] = "CLOSED"; closed["closeHeight"] = 382; closed["burnedCents"] = 100000; closed["canRedeem"] = false;
+        h.rpc.results[YellowbackRpc::LISTPOSITIONS] = json::array({closed});
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({closed}), json(nullptr), json(nullptr));
+        QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 51, "", "", false, 253768844820}));   // the cap the dialog showed
+        QTRY_COMPARE_WITH_TIMEOUT(h.notices.size(), 1, 2000);
+        QVERIFY2(h.notices[0].startsWith("Vault renewed|Vault 6a1f"), qPrintable(h.notices[0]));
+        QVERIFY(h.notices[0].contains("redeemed (txid 9e8d7c6b"));
+        QVERIFY(h.notices[0].contains("Minted $1,000.00 of YED"));
+        QVERIFY(!h.tab.renewPending());
+        QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
+        QVERIFY(h.copyIsClean());
+    }
+
+    // The mint leg is held to the cap: a price move past it stops the renewal after the redeem.
+    void renewStopsWhenTheCollateralMovedPastTheCap() {
+        Harness h;
+        json row = positionActive(); row["canRedeem"] = true;
+        h.feedActive(381, json::array({row}));
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = renewEstimate();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(VAULT_ZAT);
+        h.rpc.results[YellowbackRpc::REDEEM]             = redeemReply();
+        h.rpc.results[YellowbackRpc::MINT]               = mintReply();
+        h.tab.renewVault(YellowbackPosition::fromJson(row));
+        QVERIFY(h.tab.renewPending());
+        json moved = renewEstimate(); moved["pMint"] = 1900000; moved["requiredZat"] = 263157895000;
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = moved;
+        json closed = row; closed["status"] = "CLOSED";
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({closed}), json(nullptr), json(nullptr));
+        QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
+        QCOMPARE(h.errorNotices.size(), 1);
+        QVERIFY2(h.errorNotices[0].contains("is redeemed (txid 9e8d"), qPrintable(h.errorNotices[0]));
+        QVERIFY(h.errorNotices[0].contains("above the " % YellowbackFormat::zec(253768844820) % " you confirmed"));
+        QVERIFY(!h.tab.renewPending());
+        // a vault claimed by someone else before the redeem: no mint either
+        Harness c;
+        c.feedActive(381, json::array({row}));
+        c.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = renewEstimate();
+        c.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(VAULT_ZAT);
+        c.rpc.results[YellowbackRpc::REDEEM]             = redeemReply();
+        c.tab.renewVault(YellowbackPosition::fromJson(row));
+        json claimed = row; claimed["status"] = "CLAIMED";
+        c.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({claimed}), json(nullptr), json(nullptr));
+        QCOMPARE(c.rpc.count(YellowbackRpc::MINT), 0);
+        QVERIFY(c.errorNotices.value(0).contains("ended CLAIMED"));
+    }
+
+    // H-1: mintRequiresArmed while unarmed pauses the Mint page and the renew by name.
+    void mintRequiresArmedPausesMintAndRenew() {
+        Harness h;
+        json row = positionActive(); row["canRedeem"] = true;
+        h.feedActive(381, json::array({row}));
+        json info = infoActive(); info["height"] = 381; info["chainHeight"] = 381;
+        info["mintRequiresArmed"] = true;
+        info["attest"]["status"] = "TRIGGERED"; info["attest"]["armed"] = false;
+        h.feed(info);
+        QVERIFY(h.ctl.mintRequiresArmed());
+        QVERIFY(!h.ctl.isArmed());
+        const QString b = h.ctl.mintBlocker(100000, "A");
+        QVERIFY2(b.contains("paused until the attestation layer is ARMED"), qPrintable(b));
+        QVERIFY(b.contains("mint-halted-unarmed"));
+        QVERIFY(!h.visible("lblClassNote") || h.label("lblClassNote").contains("ARMED"));
+        QVERIFY2(h.label("lblClassNote").contains("needs the attestation layer ARMED, and it is not"), qPrintable(h.label("lblClassNote")));
+        h.selectRow("tblPositions", 0);
+        QVERIFY(!h.button("btnRenew")->isEnabled());
+        QVERIFY(h.button("btnRedeem")->isEnabled());                       // redeem never needs a mint
+        QVERIFY(h.label("lblVaultAction").contains("Renew is not possible now"));
+        h.tab.renewVault(YellowbackPosition::fromJson(row));
+        QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+        QVERIFY(h.errorNotices.value(0).contains("Renew is not possible now"));
+        // armed: the note says so and minting is open
+        info["attest"]["status"] = "ARMED"; info["attest"]["armed"] = true;
+        h.feed(info);
+        QVERIFY(h.ctl.mintBlocker(100000, "A").isEmpty());
+        QVERIFY(h.label("lblClassNote").contains("(it is)"));
+        QVERIFY(YellowbackController::explainError("mintpol-unarmed: the reference height is not ARMED").contains("ARMED"));
+        QVERIFY(YellowbackFormat::voidReason("mint-halted-unarmed").contains("not ARMED"));
+    }
+
+    // H-5: classes B and C disabled (empty term ranges) on mainnet: only class A is offered.
+    void mintOffersClassAOnlyWhenBAndCAreDisabled() {
+        Harness h;
+        json info = infoActive(); info["network"] = "main";
+        info["params"]["classes"] = json::parse(R"([
+            {"class": "A", "minBlocks": 34560, "maxBlocks": 103680, "baseRatioBps": 50000},
+            {"class": "B", "minBlocks": 103681, "maxBlocks": 103680, "baseRatioBps": 40000},
+            {"class": "C", "minBlocks": 103681, "maxBlocks": 103680, "baseRatioBps": 30000}])");
+        h.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json::array(), json::array(), json(nullptr));
+        QCOMPARE(h.ctl.termClasses().size(), 3);
+        QCOMPARE(h.ctl.enabledClasses().size(), 1);
+        auto tier = h.tab.page(YellowbackTab::Mint)->findChild<QComboBox*>("cmbTier");
+        QCOMPARE(tier->count(), 1);
+        QVERIFY(tier->itemText(0).startsWith("Class A"));
+        const QString note = h.label("lblClassNote");
+        QVERIFY2(note.contains("Only class A (lock 34560–103680 blocks"), qPrintable(note));
+        QVERIFY(note.contains("class B and C are disabled"));
+        QVERIFY(h.ctl.classForLock(103681).name.isEmpty());
+        QCOMPARE(h.ctl.classForLock(34560).name, QString("A"));
+        QCOMPARE(h.ctl.maxMintCents(), (qint64)250000);                     // H-12 off regtest
+        QVERIFY(h.label("m1").contains("$2,500.00"));
+        QVERIFY(YellowbackController::explainError("mint-bad-lock: lockBlocks 200000 is in no term class (A 34560-103680, B disabled, C disabled)").contains("disabled"));
+        // regtest with every class enabled and no H-1: no note
+        Harness r;
+        r.feedActive();
+        QVERIFY(r.label("lblClassNote").isEmpty());
+        QCOMPARE(r.ctl.maxMintCents(), (qint64)1000000);
+    }
+
+    // H-9.3: the local recomputation, and each action refusing a reply that disagrees with it.
+    void plausibilityRecomputesFeesAndHeights() {
+        const json params = infoActive()["params"];
+        QCOMPARE(YellowbackController::feeZatFor(params, VAULT_ZAT), (qint64)62814070);
+        QCOMPARE(YellowbackController::feeZatFor(params, 1000), (qint64)50000000);           // FEE_MIN
+        QCOMPARE(YellowbackController::attestFeeZatFor(params, 62814070), (qint64)15703517);
+        QCOMPARE(YellowbackController::requiredZatFor(100000, 50000, 1990000), EST_ZAT);
+        QCOMPARE(YellowbackController::requiredZatFor(100000, 50000, 0), (qint64)-1);
+        QCOMPARE(YellowbackController::mintCollateralZatFor(params, 1000), (qint64)200000000);  // MINT-5: 4 · FEE_MIN
+        QCOMPARE(YellowbackController::mintCollateralZatFor(params, EST_ZAT), EST_ZAT);
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, estimateReply()).isEmpty());
+        json ahead = estimateReply(); ahead["refHeight"] = 330; ahead["lockHeight"] = 378; ahead["claimHeight"] = 402;
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, ahead).isEmpty());   // one block past the wallet's tip
+        json behind = estimateReply(); behind["refHeight"] = 300; behind["lockHeight"] = 348; behind["claimHeight"] = 372;
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, behind).join(" ").contains("refHeight is 300"));
+        json armedBad = estimateReplyArmed(); armedBad["attestFeeZat"] = 999999999;
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, armedBad).join(" ").contains("attestFeeZat"));
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, estimateReplyArmed()).isEmpty());
+        json sigma = estimateReply(); sigma["sigmaMultBps"] = 20000; sigma["minRatioBps"] = 50000;
+        QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, sigma).join(" ").contains("minRatioBps is 50000 where the parameters give 100000"));
+
+        // Mint: an inflated requirement, an inflated lock height, an inflated fee — nothing sent
+        struct Case { const char* key; qint64 value; const char* says; };
+        for (const Case& k : { Case{"requiredZat", 2 * EST_ZAT, "requiredZat is"}, Case{"lockHeight", 100000, "lockHeight is 100000 where the parameters give 377"},
+                               Case{"claimHeight", 999999, "claimHeight is 999999 where the parameters give 401"} }) {
+            Harness h;
+            h.feedActive();
+            json e = estimateReply(); e[k.key] = k.value;
+            h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
+            h.rpc.results[YellowbackRpc::MINT]               = mintReply();
+            h.mintAmount("1000");
+            h.tab.doMint();
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::GETFEEPAYEE), 0);
+            QVERIFY2(h.errorNotices.value(0).contains("do not match what the wallet computes"), qPrintable(h.errorNotices.value(0)));
+            QVERIFY2(h.errorNotices.value(0).contains(k.says), qPrintable(h.errorNotices.value(0)));
+        }
+        {
+            Harness h;
+            h.feedActive();
+            h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
+            json f = feePayeeReply(EST_ZAT); f["feeZat"] = 200000000000;   // a server taking most of the collateral as the fee (audit G-2)
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE] = f;
+            h.rpc.results[YellowbackRpc::MINT]        = mintReply();
+            h.mintAmount("1000");
+            h.tab.doMint();
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
+            QVERIFY(h.errorNotices.value(0).contains("the enforcement fee is"));
+        }
+        {   // Redeem with an inflated fee
+            Harness h;
+            json row = positionActive(); row["canRedeem"] = true;
+            h.feedActive(381, json::array({row}));
+            json f = feePayeeReply(VAULT_ZAT); f["feeZat"] = 20000000000;
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE] = f;
+            h.rpc.results[YellowbackRpc::REDEEM]      = redeemReply();
+            h.tab.redeemVault(YellowbackPosition::fromJson(row));
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+            QVERIFY(h.errorNotices.value(0).contains("FEE-1 of the collateral"));
+        }
+        {   // Claim: an inflated fee, then a claim height not yet reached
+            Harness h;
+            json row = claimableRow(); row["feeZat"] = 9000000000;
+            h.feedActive(410, json(nullptr), json::array({row}));
+            h.rpc.results[YellowbackRpc::CLAIM] = redeemReply();
+            h.tab.claimVault(YellowbackClaimable::fromJson(row));
+            QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), 0);
+            QVERIFY(h.errorNotices.value(0).contains("the enforcement fee is"));
+            Harness early;
+            early.feedActive(400, json(nullptr), json::array({claimableRow()}));
+            early.tab.claimVault(YellowbackClaimable::fromJson(claimableRow()));
+            QCOMPARE(early.rpc.count(YellowbackRpc::CLAIM), 0);
+            QVERIFY(early.errorNotices.value(0).contains("the claim height 404 is not reached"));
+        }
+        {   // A vault whose heights break the identity is flagged on the Vaults page
+            Harness h;
+            json row = positionActive(); row["claimHeight"] = 9999;
+            h.feedActive(381, json::array({row}));
+            h.selectRow("tblPositions", 0);
+            QVERIFY2(h.label("lblVaultAction").contains("heights for this vault are inconsistent"), qPrintable(h.label("lblVaultAction")));
+        }
+        QVERIFY(YellowbackController::explainError("claim-burn-above-max: 100100 > 100099").contains("more YED"));
+    }
+
     void devnetEndToEnd() {
         QString dir = qEnvironmentVariable("YELLOWBACK_DEVNET_DIR");
         if (dir.isEmpty())
