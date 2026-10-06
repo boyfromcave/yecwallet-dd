@@ -42,7 +42,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 3, "enabled": true, "network": "regtest", "height": 331,
+      "rpcversion": 4, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 1, "healthy": true, "unhealthyReason": "",
       "enforcing": true, "valveTripped": false, "sunset": false, "rejectedBlocks": 0,
@@ -102,7 +102,7 @@ static json claimableRow() {
     return json::parse(R"({
       "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0",
       "ownerAddress": "yrExampleOwnerAddress111111111111111", "collateralZat": 25125628141, "mintedCents": 100000,
-      "feeZat": 62814071, "claimHeight": 404, "underwaterAt": 437800, "pClaim": 400000
+      "feeZat": 62814070, "claimHeight": 404, "underwaterAt": 437800, "pClaim": 400000
     })");
 }
 
@@ -116,7 +116,7 @@ static json txMint() {
 
 static json estimateReply() {
     return json::parse(R"({
-      "requiredZat": 25125628141, "termClass": "A", "lockHeight": 380, "claimHeight": 404, "minRatioBps": 50000,
+      "requiredZat": 251256282000, "termClass": "A", "lockHeight": 377, "claimHeight": 401, "minRatioBps": 50000,
       "baseRatioBps": 50000, "sigmaMultBps": 10000, "pMint": 1990000, "refHeight": 329
     })");
 }
@@ -158,7 +158,8 @@ static json selectionReply() {
 static json estimateReplyArmed() {
     json e = estimateReply();
     e["xMint"] = 1990000; e["aMint"] = 1985000; e["pMint"] = 1985000; e["source"] = "a"; e["armed"] = true;
-    e["bundleSeqs"] = json::array({1, 2}); e["attestFeeZat"] = 15703517; e["divergenceBps"] = 25;
+    e["bundleSeqs"] = json::array({1, 2}); e["attestFeeZat"] = 157430730; e["divergenceBps"] = 25;
+    e["requiredZat"] = 251889169000;     // H-9.3: ceil(100000 · 50000 · COIN / 1985000) up to 1,000 zat, as the wallet recomputes it
     return e;
 }
 
@@ -214,19 +215,28 @@ static json noticePendingReply() {
     })");
 }
 
-static json feePayeeReply() {
-    return json::parse(R"({
+// H-9.3: the wallet recomputes FEE-1 (feeMinZat 50000000, feeBps 25 in infoActive), so the
+// canned fee is FEE-1 of the collateral asked about (the contract's example figures disagree with
+// its own parameters; the fixtures are the consistent ones)
+static qint64 fee1(qint64 collateralZat) { return std::max<qint64>(50000000, collateralZat * 25 / 10000); }
+static const qint64 VAULT_ZAT   = 25125628141;     // positionActive / claimableRow collateral
+static const qint64 EST_ZAT     = 251256282000;    // estimateReply: $1,000 at 500 % and $1.99
+static const qint64 EST_ARMED_ZAT = 251889169000;  // estimateReplyArmed: $1,000 at 500 % and $1.985
+static json feePayeeReply(qint64 collateralZat = VAULT_ZAT) {
+    json f = json::parse(R"({
       "eligible": ["smQvTmAz2ExamplePayoutAddress1111111"], "feeZat": 50000000,
       "default": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "weight": 19800},
       "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000}
     })");
+    f["feeZat"] = fee1(collateralZat);
+    return f;
 }
 
 static json mintReply() {
     return json::parse(R"({
       "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8",
       "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0",
-      "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 25125628141, "feeZat": 62814071,
+      "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 251256282000, "feeZat": 628140705,
       "payee": "smQvTmAz2ExamplePayoutAddress1111111", "fundedFrom": "transparent", "warning": ""
     })");
 }
@@ -538,9 +548,37 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsThree() {
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 3);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 3);
+    void contractVersionIsFour() {
+        // hardening H-9.3 (H5-a): rpcversion 4 adds yed_claim's maxBurnCents
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 4);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 4);
+    }
+
+    // The rpcversion 4 handshake: 4 is accepted, 3 (the v3 node before H3-c) and 5 are refused
+    // with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionFourOnly() {
+        for (int v : { 3, 5 }) {
+            Harness h;
+            json info = infoActive();
+            info["rpcversion"] = v;
+            h.feed(info, statsOpen(), activationActive());
+            QVERIFY(!h.ctl.isAvailable());
+            QVERIFY(!h.ctl.isVersionOk());
+            QVERIFY(h.label("lblBanner").contains("version 4"));
+            QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
+            QVERIFY(!h.button("btnMint")->isEnabled());
+        }
+        Harness h;
+        h.feedActive();
+        QVERIFY(h.ctl.isVersionOk());
+        QVERIFY(h.ctl.isAvailable());
+        // onConnected over the transport: yed_getinfo answering 4 starts the refresh
+        Harness c;
+        json info = infoActive();
+        c.rpc.results[YellowbackRpc::GETINFO] = info;
+        c.ctl.onConnected();
+        QVERIFY(c.ctl.isVersionOk());
+        QVERIFY(c.rpc.count(YellowbackRpc::GETSTATS) >= 1);
     }
 
     // ── Helpers and records ───────────────────────────────────────────────────────────────
@@ -607,7 +645,7 @@ private slots:
 
         auto c = YellowbackClaimable::fromJson(claimableRow());
         QCOMPARE(c.vault.right(2), QString(":0"));
-        QCOMPARE(c.feeZat, (qint64)62814071);
+        QCOMPARE(c.feeZat, (qint64)62814070);
         QCOMPARE(c.pClaim, (qint64)400000);
 
         auto t = YellowbackTx::fromJson(txMint());
@@ -650,7 +688,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 3"));
+        QVERIFY(h.label("lblBanner").contains("version 4"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -1373,7 +1411,7 @@ private slots:
         auto m = h.ctl.claimableModel();
         QCOMPARE(m->rowCount(QModelIndex()), 1);
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Burn), Qt::DisplayRole).toString(), QString("$1,000.00"));
-        QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Fee), Qt::DisplayRole).toString(), YellowbackFormat::zec(62814071));
+        QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Fee), Qt::DisplayRole).toString(), YellowbackFormat::zec(62814070));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::ClaimHeight), Qt::DisplayRole).toString(), QString("404"));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::UnderwaterAt), Qt::DisplayRole).toString(), QString("$0.4378"));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::PClaim), Qt::DisplayRole).toString(), QString("$0.4000"));
@@ -1435,7 +1473,7 @@ private slots:
         Harness h;
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
         h.rpc.results[YellowbackRpc::MINT]               = mintReply();
         Settings::getInstance()->setYellowbackBackupPending(false);
         h.mintAmount("1000");
@@ -1446,13 +1484,14 @@ private slots:
         QVERIFY(text.contains("Mint $1,000.00 of YED"));
         QVERIFY(text.contains("class A"));
         QVERIFY(text.contains("48 blocks"));
-        QVERIFY(text.contains(YellowbackFormat::zec(25125628141)));          // exact collateral
-        QVERIFY2(text.contains("at most " % YellowbackFormat::zec(25376884422)), qPrintable(text));   // the cap sent (F-1)
+        QVERIFY(text.contains(YellowbackFormat::zec(EST_ZAT)));              // exact collateral
+        QVERIFY2(text.contains("at most " % YellowbackFormat::zec(253768844820)), qPrintable(text));   // the cap sent (F-1)
         QVERIFY(text.contains("500.00 %"));                                  // ratio
         QVERIFY(text.contains("1.00x"));                                     // sigma
-        QVERIFY(text.contains(YellowbackFormat::zec(50000000)));             // enforcement fee
+        QVERIFY(text.contains(YellowbackFormat::zec(628140705)));            // enforcement fee: FEE-1 of the collateral (H-9.3)
         QVERIFY(text.contains("smQvTmAz2ExamplePayoutAddress1111111"));      // payee
-        QVERIFY(text.contains("height 380"));
+        QVERIFY(text.contains("height 377"));                                 // refHeight 329 + 48 (H-9.3 recomputes it)
+        QVERIFY(text.contains("claim height is 401"));
         QVERIFY(text.contains("Back up wallet.dat"));
         QVERIFY(text.contains("only your key can spend it before the claim height"));
 
@@ -1460,9 +1499,9 @@ private slots:
         // the bundle from the pool, wait = false (W7). This reply is not pending (a node that
         // answered in the full shape), so the summary comes straight from it.
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 48, "", "", false, 25376884422}));   // maxCollateralZat = required + 1 % (F-1)
-        // yed_getfeepayee <refHeight from the estimate> <requiredZat>
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({329, 25125628141}));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 48, "", "", false, 253768844820}));   // maxCollateralZat = collateral + 1 % (F-1)
+        // yed_getfeepayee <refHeight from the estimate> <the vault's collateral, max(required, 4 FEE_MIN)>
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({329, EST_ZAT}));
         QCOMPARE(h.notices.size(), 1);
         QVERIFY(h.notices[0].startsWith("Mint sent|"));
         QVERIFY(h.notices[0].contains("6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"));
@@ -1477,7 +1516,7 @@ private slots:
         h.answer = false;
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
         h.mintAmount("1000");
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
@@ -1502,7 +1541,7 @@ private slots:
         Harness h;
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
         h.rpc.errors[YellowbackRpc::MINT] = "mintpol-no-price: no mint price at the reference snapshot";
         h.mintAmount("1000");
         h.tab.doMint();
@@ -1522,7 +1561,7 @@ private slots:
             Harness h;
             h.feedActive();
             h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
             h.rpc.errors[YellowbackRpc::MINT] = "collateral-above-max: 26000000000 > 25376884422";
             h.mintAmount("1000");
             h.tab.doMint();
@@ -1535,18 +1574,18 @@ private slots:
             Harness h;
             h.feedActive();
             h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
-            json r = mintReply(); r["collateralZat"] = 25200000000;          // within the cap, but not the figure shown
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
+            json r = mintReply(); r["collateralZat"] = 252000000000;         // within the cap, but not the figure shown
             h.rpc.results[YellowbackRpc::MINT] = r;
             h.mintAmount("1000");
             h.tab.doMint();
             QCOMPARE(h.notices.size(), 1);
-            QVERIFY2(h.notices[0].startsWith("Mint sent|NOTE: the vault locked " % YellowbackFormat::zec(25200000000) % " of YEC, not the " % YellowbackFormat::zec(25125628141)), qPrintable(h.notices[0]));
+            QVERIFY2(h.notices[0].startsWith("Mint sent|NOTE: the vault locked " % YellowbackFormat::zec(252000000000) % " of YEC, not the " % YellowbackFormat::zec(EST_ZAT)), qPrintable(h.notices[0]));
             // the same amount: no note
             Harness same;
             same.feedActive();
             same.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-            same.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+            same.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
             same.rpc.results[YellowbackRpc::MINT]               = mintReply();
             same.mintAmount("1000");
             same.tab.doMint();
@@ -1556,12 +1595,17 @@ private slots:
             Harness h;
             h.feedActive();
             h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
             h.rpc.results[YellowbackRpc::MINT]               = mintReply();
             // A block arrives while the first dialog is open
             h.tab.confirmFn = [&h](const QString&, const QString& text) {
                 h.confirms << text;
-                if (h.confirms.size() == 1) h.feedActive(332);
+                if (h.confirms.size() == 1) {
+                    h.feedActive(332);
+                    // the node's next estimate is at the new reference height (H-9.3 checks it)
+                    json e = estimateReply(); e["refHeight"] = 330; e["lockHeight"] = 378; e["claimHeight"] = 402;
+                    h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+                }
                 return true;
             };
             h.mintAmount("1000");
@@ -1574,7 +1618,7 @@ private slots:
     }
 
     void mintBadLockAndUnsatisfiable() {
-        QVERIFY(YellowbackController::explainError("mint-bad-lock: lockBlocks 47 is in no term class").contains("no term class"));
+        QVERIFY(YellowbackController::explainError("mint-bad-lock: lockBlocks 47 is in no term class").contains("no enabled term class"));
         QVERIFY(YellowbackController::explainError("mint-unsatisfiable: the required collateral exceeds MAX_MONEY").contains("maximum amount of YEC"));
         QVERIFY(YellowbackController::explainError("mintpol-participation: x").contains("60 %"));
         QVERIFY(YellowbackController::explainError("mintpol-cap: x").contains("supply cap"));
@@ -1665,9 +1709,9 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Redeem vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(50000000)));                 // fee estimate
+        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(62814070)));                 // fee estimate = FEE-1 (H-9.3)
         QVERIFY(h.confirms[0].contains("smQvTmAz2ExamplePayoutAddress1111111"));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 50000000)));   // collateral out
+        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070)));   // collateral out
         QVERIFY(h.confirms[0].contains("fresh transparent address"));
         // yed_getfeepayee <tip - refLag> <collateralZat>; yed_redeem <vaultTxid> (no `to`)
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({379, 25125628141}));
@@ -1802,12 +1846,13 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Claim vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY(h.confirms[0].contains("Enforcement fee: " % YellowbackFormat::zec(62814071)));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814071)));
-        QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24812185930)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
+        QVERIFY(h.confirms[0].contains("Enforcement fee: " % YellowbackFormat::zec(62814070)));
+        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070)));
+        QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24812185931)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
+        QVERIFY2(h.confirms[0].contains("burning at most $1,000.99 of YED"), qPrintable(h.confirms[0]));               // the burn cap sent (H-9.3)
         QVERIFY(h.confirms[0].contains("$0.4000 per YEC"));
         // yed_claim <vaultTxid> [to] [bundleHex] [wait]: default destination, pool bundle, wait = false
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24812185930}));   // minOutZat = youGet - 1 % (F-1)
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24812185931, 100099}));   // minOutZat = youGet - 1 % (F-1); maxBurnCents = debt + 99 (H-9.3)
         QVERIFY(h.notices[0].startsWith("Claim sent|"));
         QVERIFY(h.notices[0].contains("YED burned: $1,000.00"));
         QVERIFY(h.notices[0].contains("smQvTmAz2ExamplePayoutAddress1111111"));
@@ -2177,7 +2222,7 @@ private slots:
         h.feedActive();
         h.ctl.setPendingPollMs(10);
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReplyArmed();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ARMED_ZAT);
         h.rpc.results[YellowbackRpc::MINT]               = mintPendingReply();
         h.rpc.results[YellowbackRpc::LISTTRANSACTIONS]   = json::array({txMint()});   // the row the node adds on the next ChainTip
         h.rpc.results[YellowbackRpc::GETTXINFO]          = txInfoMint();
@@ -2187,7 +2232,7 @@ private slots:
 
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].contains("Mint $1,000.00 of YED"));
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 48, "", "", false, 25376884422}));   // maxCollateralZat = required + 1 % (F-1)
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 48, "", "", false, 254408060690}));   // maxCollateralZat = collateral + 1 % (F-1)
         // Step 1: the carrier is out, the page says so, no result dialog yet
         QVERIFY2(h.label("lblMintPageStatus").startsWith("Preparing price proof (1 block)"), qPrintable(h.label("lblMintPageStatus")));
         QVERIFY(h.label("lblMintPageStatus").contains("5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c"));
@@ -2212,7 +2257,7 @@ private slots:
         Harness h;
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReplyArmed();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ARMED_ZAT);
         h.rpc.results[YellowbackRpc::GETSELECTION]       = selectionReply();
         h.rpc.errors[YellowbackRpc::MINT] = "bundle-insufficient: 1 of 2 selected attestors have a fresh attestation; missing seq 3";
         // The parser reads the grammar the contract fixes
@@ -2240,7 +2285,7 @@ private slots:
         Harness h;
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReplyArmed();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ARMED_ZAT);
         h.rpc.errors[YellowbackRpc::MINT] = "mint10-diverged: |xMint - aMint| exceeds DIVERGE_BPS_ATTEST";
         h.mintAmount("1000");
         h.tab.doMint();
@@ -2278,8 +2323,8 @@ private slots:
         QVERIFY(h.confirms[0].contains("height 338"));
         QVERIFY2(h.confirms[0].contains("Residual: " % YellowbackFormat::zec(250000000) % " of YEC goes back to the vault owner"), qPrintable(h.confirms[0]));
         QVERIFY(h.confirms[0].contains("Attestation fee: " % YellowbackFormat::zec(15703517)));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814071 - 15703517 - 250000000)));   // what the claimant gets
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24549139448}));   // (25125628141 - 62814071 - 15703517 - 250000000) - 1 %
+        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070 - 15703517 - 250000000)));   // what the claimant gets
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24549139449, 100099}));   // (25125628141 - 62814070 - 15703517 - 250000000) - 1 %
         QVERIFY2(h.label("lblClaimHint").startsWith("Preparing price proof (1 block)"), qPrintable(h.label("lblClaimHint")));
         QTRY_COMPARE_WITH_TIMEOUT(h.notices.size(), 1, 2000);
         QVERIFY(h.notices[0].startsWith("Claim sent|"));
@@ -2564,7 +2609,7 @@ private slots:
         h.feedActive();
         h.ctl.setPendingPollMs(10);
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReplyArmed();
-        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ARMED_ZAT);
         h.rpc.results[YellowbackRpc::MINT]               = mintPendingReply();      // refHeight 329
         h.rpc.results[YellowbackRpc::LISTTRANSACTIONS]   = json::array();
         h.mintAmount("1000");

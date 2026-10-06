@@ -17,6 +17,13 @@
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="lblClassNote">
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="text"><string/></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; }</string></property>
+    </widget>
+   </item>
+   <item>
     <layout class="QFormLayout" name="mintForm">
      <item row="0" column="0"><widget class="QLabel" name="m1"><property name="text"><string>Amount to mint (dollars, $100 – $10,000)</string></property></widget></item>
      <item row="0" column="1"><widget class="QLineEdit" name="txtAmount"><property name="placeholderText"><string>100.00</string></property></widget></item>

@@ -71,6 +71,7 @@ public:
         bool    release = false;   // VOID at or past lockHeight (yed_redeem, no burn, no fee; L14)
         bool    redeem  = false;   // ACTIVE at or past lockHeight (yed_redeem)
         bool    sweep   = false;   // ACTIVE while abandoned (yed_sweep, L10)
+        bool    renew   = false;   // H-9.2: ACTIVE at or past lockHeight, not abandoned (yed_redeem, then yed_mint)
         QString text;              // the sentence shown under the table
     };
     static VaultActions vaultActions(const YellowbackPosition& p, int height, bool abandoned);
@@ -87,6 +88,13 @@ public:
     static QString extraBurnLine(const nlohmann::json& r);      // H4: the extraBurnCents clause, empty when there is none
     void claimVault(const YellowbackClaimable& c, const QString& to = QString());
     void sweepVault(const YellowbackPosition& p, const QString& to = QString());    // L10: carries the acknowledgement
+    // Hardening H-9.2: renew = redeem the vault and re-mint its debt in a new vault, in one flow.
+    // One confirmation covers both legs; the redeem is sent at once, and the mint follows when the
+    // redeem has closed the vault (continueRenew, on each yed_listpositions), held to the
+    // maxCollateralZat the dialog showed. The new vault is funded from the transparent balance the
+    // redeem paid the collateral back to.
+    void renewVault(const YellowbackPosition& p);
+    bool renewPending() const { return renew.active; }
     QString redeemDestination() const;   // the Redeem page's choice: "" = a fresh own transparent address
     // v3: the claim notice (NOT-1) on a vault whose canNotice is true; two-step like Mint
     void noticeVault(const YellowbackPosition& p);
@@ -174,6 +182,17 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     void failed(const QString& what, const QString& e);   // "yed_x failed: <verbatim>" + explainError
 
     void requestEstimate();
+    void continueRenew();                   // H-9.2: the mint leg once the redeem has closed the vault
+    struct RenewState {
+        bool    active = false;
+        bool    minting = false;            // the mint leg has been sent
+        QString vaultTxid;                  // the vault being renewed
+        QString redeemTxid;
+        qint64  cents = 0;                  // its debt, re-minted
+        int     lockBlocks = 0;
+        qint64  maxCollateralZat = 0;       // the cap the dialog showed for the new vault
+        qint64  shownCollateralZat = 0;
+    } renew;
     void newReceiveAddress();
     void explainVoid(const YellowbackPosition& p);
     void saveSettings();

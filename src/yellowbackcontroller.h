@@ -101,8 +101,45 @@ public:
     int     refWindow() const;                    // v3: the carrier and its main transaction expire together after it
     int     grace() const;
     // Term classes from yed_getinfo.params.classes, in class order (empty until the node answered)
-    struct TermClass { QString name; int minBlocks = 0; int maxBlocks = 0; qint64 baseRatioBps = 0; };
-    QList<TermClass> termClasses() const;
+    // H-5: a row with minBlocks > maxBlocks is a disabled class (B and C on mainnet and testnet).
+    struct TermClass { QString name; int minBlocks = 0; int maxBlocks = 0; qint64 baseRatioBps = 0;
+                       bool enabled() const { return !name.isEmpty() && minBlocks <= maxBlocks; } };
+    QList<TermClass> termClasses() const;          // every row, enabled or not
+    QList<TermClass> enabledClasses() const;       // the rows a mint can use (H-5)
+    // ── Hardening H-1 / H-5 (the Mint page's standing note) ──────────────────────────────
+    bool    mintRequiresArmed() const;             // yed_getinfo.mintRequiresArmed; false on a node before H-1
+    bool    isArmed() const;                       // yed_getinfo.attest.armed
+    /** The Mint page's standing note: which classes this network offers (class A only under H-5)
+     *  and, under H-1, that every mint needs the attestation layer ARMED. Empty when neither applies. */
+    QString mintClassNote() const;
+
+    // ── Hardening H-9.3: client plausibility (audit G-1/G-2, F-4) ─────────────────────────
+    // The wallet recomputes, from yed_getinfo.params, every figure it shows the user before a
+    // mint, a redeem or a claim, and refuses to send when the node's reply disagrees. Pure.
+    static qint64 feeZatFor(const json& params, qint64 collateralZat);        // FEE-1: max(FEE_MIN, c · FEE_BPS / 10⁴)
+    static qint64 attestFeeZatFor(const json& params, qint64 feeZat);         // AFEE-1: fee · ATTEST_FEE_BPS / 10⁴
+    static qint64 requiredZatFor(qint64 cents, qint64 minRatioBps, qint64 pMint);   // ceil(cents · ratio · COIN / pMint) up to 1,000 zat; -1 undefined
+    static qint64 mintCollateralZatFor(const json& params, qint64 requiredZat);     // MINT-5: max(required, 4 · FEE_MIN) up to 1,000 zat
+    /** What is wrong with a yed_estimatecollateral reply for (cents, lockBlocks) at index height
+     *  `indexHeight`: the height identities (refHeight = tip − REF_LAG, lockHeight = refHeight +
+     *  lockBlocks, claimHeight = lockHeight + GRACE), the class and its ratio, the collateral
+     *  and the attestor fee. Empty when every figure checks out. */
+    static QStringList checkEstimate(const json& params, int indexHeight, qint64 cents, int lockBlocks, const json& estimate);
+    /** The same for a yed_listclaimable row: FEE-1, AFEE-1, the claim height reached. */
+    static QStringList checkClaimable(const json& params, int indexHeight, const YellowbackClaimable& c);
+    /** The same for a vault's heights: claimHeight = lockHeight + GRACE, lockHeight − refHeight in its class. */
+    static QStringList checkVaultHeights(const json& params, const YellowbackPosition& p);
+
+    // ── Hardening H-9.2: vault deadlines ──────────────────────────────────────────────────
+    static constexpr int BLOCKS_PER_DAY = 86400 / 75;   // SECONDS_PER_BLOCK: the "claimHeight − 1 day" warning
+    /** The persistent warning for one vault: an ACTIVE vault from claimHeight − 1 day on (redeem or
+     *  renew before the claim height), a VOID one likewise (release); empty otherwise. Pure. */
+    static QString deadlineWarning(const YellowbackPosition& p, int height);
+    /** Every owned vault's deadlineWarning at the index height, for the tab's banner. */
+    QStringList deadlineWarnings() const;
+    /** The lock length a renewal of `p` re-mints with: the vault's own (lockHeight − refHeight)
+     *  when an enabled class still takes it, else the shortest enabled one; 0 when none. */
+    int renewLockBlocks(const YellowbackPosition& p) const;
 
     // ── v3 attestation layer (plan §4.8), pure functions of the replies so the QTest reads them ──
     // The arming banner: "UNARMED" / "TRIGGERED at h, arms at h'" / "ARMED", or the disabled
@@ -164,7 +201,8 @@ public:
     void mint(qint64 cents, int lockBlocks, const QString& from, qint64 maxCollateralZat, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);     // to: "" | s1... | ys1... (I2)
-    void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, OkFn ok, ErrFn err);
+    // maxBurnCents (rpcversion 4, H-9.3): the most YED the claim may burn (claim-burn-above-max beyond it).
+    void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, qint64 maxBurnCents, OkFn ok, ErrFn err);
     void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)
     void sweepCarriers(OkFn ok, ErrFn err);                                           // v3: yed_sweepcarriers (W7)
     void registerAttestor(const QString& bondYec, int lockBlocks, int flags, OkFn ok, ErrFn err);   // v3; bondYec a decimal string (AmountFromValue takes it exactly, audit F-8)

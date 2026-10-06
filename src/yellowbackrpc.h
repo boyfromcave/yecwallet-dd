@@ -7,7 +7,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 3), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 4), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -23,8 +23,9 @@
 namespace YellowbackRpc {
 
 // The rpcversion this build of the wallet understands. yed_getinfo.rpcversion must equal it
-// (bumped to 2 in Phase 7b-a's first commit, N27; to 3 in v3 Phase A5's first commit).
-constexpr int RPC_VERSION = 3;
+// (bumped to 2 in Phase 7b-a's first commit, N27; to 3 in v3 Phase A5's first commit; to 4 with
+// the hardening H-9.3 client bounds, yed_claim's maxBurnCents, H5-a).
+constexpr int RPC_VERSION = 4;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -83,6 +84,7 @@ namespace Info {   // contract: yed_getinfo
     constexpr const char* PARAMS            = "params";
     constexpr const char* ATTEST            = "attest";         // v3: the arming state at the index tip
     constexpr const char* SUPPLY_CAP_REACHED = "supplyCapReached"; // v3 W20: the next mint of any class would exceed the cap; absent before W20
+    constexpr const char* MINT_REQUIRES_ARMED = "mintRequiresArmed"; // hardening H-1: a mint whose reference height is not ARMED is VOID (mint-halted-unarmed)
 }
 
 // v3: yed_getinfo.attest, the arming state (ARM-1/2) the Attestors view's banner shows.
@@ -138,7 +140,7 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* REF_WINDOW          = "refWindow";
     constexpr const char* GRACE               = "grace";
     constexpr const char* PAYEE_WINDOW        = "payeeWindow";
-    constexpr const char* FEE_MIN_ZAT         = "feeMinZat";
+    constexpr const char* FEE_MIN_ZAT         = "feeMinZat";       // FEE-1's floor; H-9.3 recomputes the fee from it
     constexpr const char* FEE_BPS             = "feeBps";
     constexpr const char* TOKEN_VALUE_ZAT     = "tokenValueZat";
     constexpr const char* FEE_ZAT             = "feeZat";       // the network fee, not the enforcement fee
@@ -166,6 +168,7 @@ namespace ParamsAttest {   // contract: yed_getinfo.params.attest
     constexpr const char* BOND_MIN_ZAT        = "bondMinZat";       // A5-b: the register dialog states them
     constexpr const char* BOND_MIN_LOCK       = "bondMinLock";
     constexpr const char* BOND_MATURITY       = "bondMaturity";
+    constexpr const char* ATTEST_FEE_BPS      = "attestFeeBps";     // AFEE-1; H-9.3 recomputes the attestor fee from it
 }
 
 namespace ParamClass {   // contract: yed_getinfo.params.classes[]
@@ -634,11 +637,14 @@ namespace Errors {   // contract: errors
     constexpr const char* MINTPOL_CAP           = "mintpol-cap";
     constexpr const char* MINT_UNSATISFIABLE    = "mint-unsatisfiable";
     constexpr const char* MINT_BAD_LOCK         = "mint-bad-lock";
-    // The caps the wallet sends from its confirmation dialog (audit F-1): yed_mint's 6th argument
-    // maxCollateralZat and yed_claim's 5th argument minOutZat. The node refuses instead of
-    // building a vault (or a claim) the user did not agree to when the reference price moved.
+    constexpr const char* MINTPOL_UNARMED       = "mintpol-unarmed";        // hardening H-1: mintRequiresArmed and the reference height not ARMED
+    // The caps the wallet sends from its confirmation dialog (audit F-1, hardening H-9.3): yed_mint's
+    // 6th argument maxCollateralZat, yed_claim's 5th argument minOutZat and 6th maxBurnCents
+    // (rpcversion 4). The node refuses instead of building a vault (or a claim) the user did not
+    // agree to when the reference price moved or the server inflated a figure.
     constexpr const char* COLLATERAL_ABOVE_MAX  = "collateral-above-max";
     constexpr const char* CLAIM_OUT_BELOW_MIN   = "claim-out-below-min";
+    constexpr const char* CLAIM_BURN_ABOVE_MAX  = "claim-burn-above-max";
     constexpr const char* CLAIM_NOT_YET         = "claim-not-yet";
     constexpr const char* CLAIM_NOT_UNDERWATER  = "claim-not-underwater";
     // The contract lists `mempool-check-failed:<verdict>`; the wallet matches the prefix
@@ -681,7 +687,8 @@ namespace RpcErrors {
 // has answered. SECONDS_PER_BLOCK is display-only (estimated dates).
 constexpr int    SECONDS_PER_BLOCK   = 75;
 constexpr qint64 MIN_MINT_CENTS      = 10000;     // $100 (§3.1 MIN_MINT)
-constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000 (§3.1 MAX_MINT)
+constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000 (§3.1 MAX_MINT; regtest)
+constexpr qint64 MAX_MINT_CENTS_GUARDED = 250000; // $2,500 on mainnet and testnet (hardening H-12; not reported by yed_getinfo)
 constexpr qint64 MIN_OUTPUT_CENTS    = 100;       // $1 change floor (§3.1 MIN_OUTPUT)
 // The exact acknowledgement yed_sweep requires as its second argument (L10).
 constexpr const char* SWEEP_ACKNOWLEDGEMENT = "I understand this leaves YED unbacked";

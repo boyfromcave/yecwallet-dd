@@ -170,7 +170,7 @@ void YellowbackTab::setController(YellowbackController* controller) {
     QObject::connect(ctl, &YellowbackController::selectionUpdated,    this, [=, this]() { updateMintAttest(); });
     QObject::connect(ctl, &YellowbackController::statsUpdated,        this, [=, this]() { updateBanner(); updateOverview(); updateMintGate(); });
     QObject::connect(ctl, &YellowbackController::balanceUpdated,      this, [=, this]() { updateBalances(); });
-    QObject::connect(ctl, &YellowbackController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); });
+    QObject::connect(ctl, &YellowbackController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); updateBanner(); continueRenew(); });
     QObject::connect(ctl, &YellowbackController::claimableUpdated,    this, [=, this]() { updateClaimPage(); });
     QObject::connect(ctl, &YellowbackController::transactionsUpdated, this, [=, this]() {
         uiOverview->tblRecent->resizeColumnsToContents();
@@ -208,6 +208,9 @@ void YellowbackTab::updateBanner() {
         ui->lblStatus->setVisible(false);
         ui->lblNotes->setVisible(false);
     } else {
+        // H-9.2: a vault within a day of its claim height is warned about here, above every page,
+        // until it is redeemed, renewed or released
+        st.warnings << ctl->deadlineWarnings();
         ui->lblBanner->setText(st.warnings.join("\n"));
         ui->lblBanner->setVisible(!st.warnings.isEmpty());
         ui->lblStatus->setText(st.headline);
@@ -227,6 +230,7 @@ void YellowbackTab::setActionsEnabled(bool enabled) {
         uiMint->btnMint->setEnabled(false);
         uiPositions->btnRelease->setEnabled(false);
         uiPositions->btnRedeem->setEnabled(false);
+        uiPositions->btnRenew->setEnabled(false);
         uiPositions->btnSweep->setEnabled(false);
         uiPositions->btnNotice->setEnabled(false);
         uiClaim->btnClaim->setEnabled(false);
@@ -665,13 +669,19 @@ void YellowbackTab::setupMint() {
     refreshFundingSources();
 
     uiMint->lblGate->setVisible(false);
+    uiMint->lblClassNote->setVisible(false);
     uiMint->btnMint->setEnabled(false);
     uiMint->lblMintPageStatus->setText(tr("Your own node builds, signs and sends the mint. Back up wallet.dat afterwards: the vault's key exists only there."));
 }
 
 void YellowbackTab::updateMintClasses() {
     if (ctl == nullptr) return;
-    auto classes = ctl->termClasses();
+    // H-5: a disabled class (empty term range) is not offered; the class note says why
+    auto classes = ctl->enabledClasses();
+    uiMint->m1->setText(tr("Amount to mint (dollars, %1 – %2)").arg(YellowbackFormat::cents(ctl->minMintCents())).arg(YellowbackFormat::cents(ctl->maxMintCents())));
+    const QString note = ctl->mintClassNote();
+    uiMint->lblClassNote->setText(note);
+    uiMint->lblClassNote->setVisible(!note.isEmpty());
     if (classes.isEmpty() || uiMint->cmbTier->count() == classes.size()) return;
     QSignalBlocker block(uiMint->cmbTier);
     uiMint->cmbTier->clear();
@@ -836,6 +846,13 @@ void YellowbackTab::updateMintAttest() {
     uiMint->lblSelection->setText(line.isEmpty() ? tr("not required (attestation layer not armed)") : line);
 }
 
+// H-9.3: the refusal when the node's figures fail the wallet's own recomputation
+static QString implausibleText(const QString& what, const QStringList& bad) {
+    return QObject::tr("The node's figures for this %1 do not match what the wallet computes from the network's parameters, so nothing was sent:\n\n- %2\n\n"
+                       "If the chain just advanced, try again. Otherwise the node is misconfigured, or is not the node you meant to trust with this wallet.")
+        .arg(what).arg(bad.join("\n- "));
+}
+
 void YellowbackTab::doMint() {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
@@ -863,7 +880,17 @@ void YellowbackTab::doMint() {
                 uiMint->lblMintPageStatus->setText(tr("No estimate: the mint price is undefined at the reference height."));
                 return;
             }
+            // H-9.3: every figure the dialog shows is recomputed from yed_getinfo.params first
+            const QStringList bad = YellowbackController::checkEstimate(ctl->params(), ctl->height(), cents, lockBlocks, e);
+            if (!bad.isEmpty()) {
+                updateMintGate();
+                uiMint->lblMintPageStatus->setText(tr("Not sent: the node's estimate failed the wallet's check."));
+                notice(tr("Mint not sent"), implausibleText(tr("mint"), bad), true);
+                return;
+            }
             const qint64 required   = YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT);
+            // MINT-5: the vault locks max(required, 4 · FEE_MIN), so the figure shown and capped is that one
+            const qint64 collateral = YellowbackController::mintCollateralZatFor(ctl->params(), required);
             const int    lockHeight = (int)YellowbackJson::toInt(e, Estimate::LOCK_HEIGHT);
             const int    claimHeight= (int)YellowbackJson::toInt(e, Estimate::CLAIM_HEIGHT);
             const int    refHeight  = (int)YellowbackJson::toInt(e, Estimate::REF_HEIGHT, ctl->refHeightNow());
@@ -876,25 +903,26 @@ void YellowbackTab::doMint() {
             // The cap the node is held to (audit F-1): 1 % above the estimate, so a block that
             // moves the reference price by more than that refuses the mint instead of locking
             // more YEC than the dialog showed.
-            const qint64 maxCollateral = capAbove(required);
+            const qint64 maxCollateral = capAbove(collateral);
             const int    heightAtDialog = ctl->height();
 
             auto ask = [=, this](const QString& feeLine) {
                 QString text = tr("Mint %1 of YED against %2 of YEC locked in a new vault (at most %14; the node refuses the mint if the price moves further).\n\n"
                                   "Lock: %3 blocks (class %4, about %5 days). Collateral can leave the vault from height %6 on (%7); "
-                                  "its claim height is %8.\n"
+                                  "its claim height is %8 (%15): redeem or renew it before then.\n"
                                   "Collateral ratio: %9 at a mint price of %10 per YEC (reference height %11).\n"
                                   "%12\n"
                                   "Funded from: %13.\n\n"
                                   "Every Ycash node enforces that the collateral cannot leave the vault before its lock height, and that only your key can spend it before the claim height. "
                                   "The mining pools that run the Yellowback module enforce that it is released only against the burn of %1 of YED.\n\n"
                                   "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file.")
-                    .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(required))
+                    .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(collateral))
                     .arg(lockBlocks).arg(termClass).arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
                     .arg(lockHeight).arg(YellowbackFormat::estimateDate(lockHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"))
                     .arg(claimHeight).arg(ratio).arg(price).arg(refHeight).arg(feeLine)
                     .arg(from.isEmpty() ? tr("your transparent YEC") : tr("shielded address %1").arg(from))
-                    .arg(YellowbackFormat::zec(maxCollateral));
+                    .arg(YellowbackFormat::zec(maxCollateral))
+                    .arg(YellowbackFormat::estimateDate(claimHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"));
                 if (!confirm(tr("Confirm mint"), text)) {
                     updateMintGate();
                     uiMint->lblMintPageStatus->clear();
@@ -914,7 +942,7 @@ void YellowbackTab::doMint() {
                         Settings::getInstance()->setYellowbackBackupPending(true);
                         updateBackupNag();
                         followPending(Transaction::TYPE_MINT, r, uiMint->lblMintPageStatus, [=, this](const json& done) {
-                            QString summary = mintSummary(cents, done, required);
+                            QString summary = mintSummary(cents, done, collateral);
                             QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
                             if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
                             summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
@@ -940,14 +968,23 @@ void YellowbackTab::doMint() {
             // The enforcement fee and its payee (FEE-1, FEE-W) for this collateral at the
             // reference height; under FEE-0 the node refuses with fee-no-eligible-payee and the
             // mint carries no fee output.
-            ctl->getFeePayee(refHeight, required,
+            ctl->getFeePayee(refHeight, collateral,
                 [=, this](const json& f) {
                     const json& def = YellowbackJson::obj(f, FeePayee::DEFAULT);
                     QString payee = YellowbackJson::has(f, FeePayee::PREFERRED) && !YellowbackJson::isNull(f, FeePayee::PREFERRED)
                         ? YellowbackJson::toStr(f, FeePayee::PREFERRED)
                         : YellowbackJson::toStr(def, FeePayeeDefault::PAYOUT_ADDRESS);
+                    // H-9.3: FEE-1 recomputed locally; the node's figure must match it
+                    const qint64 fee = YellowbackController::feeZatFor(ctl->params(), collateral);
+                    if (YellowbackJson::toInt(f, FeePayee::FEE_ZAT) != fee) {
+                        updateMintGate();
+                        uiMint->lblMintPageStatus->setText(tr("Not sent: the node's fee failed the wallet's check."));
+                        notice(tr("Mint not sent"), implausibleText(tr("mint"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                            .arg(YellowbackFormat::zec(YellowbackJson::toInt(f, FeePayee::FEE_ZAT))).arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(fee)) }), true);
+                        return;
+                    }
                     ask(tr("Enforcement fee: %1 of YEC, paid from the collateral to the pool %2 (a pool that published a price quote in the 100 blocks up to the reference height).")
-                            .arg(YellowbackFormat::zec(YellowbackJson::toInt(f, FeePayee::FEE_ZAT))).arg(payee));
+                            .arg(YellowbackFormat::zec(fee)).arg(payee));
                 },
                 [=, this](const QString& e) {
                     if (e.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive))
@@ -1060,13 +1097,21 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
                         "Sweep before height %2 or whoever claims first takes the collateral.")
                         .arg(YellowbackFormat::cents(p.mintedCents)).arg(p.sweepBefore > 0 ? p.sweepBefore : p.claimHeight);
         }
+        // H-9.2: the two deadlines as dates, on every ACTIVE vault
+        const QString lockDate  = YellowbackFormat::estimateDate(p.lockHeight, height).toString("yyyy-MM-dd HH:mm");
+        const QString claimDate = YellowbackFormat::estimateDate(p.claimHeight, height).toString("yyyy-MM-dd HH:mm");
         if (p.canRedeem || height >= p.lockHeight) {
             a.redeem = true;
+            a.renew  = !abandoned;      // under abandonment no mint is built: sweep or redeem
             a.text += (a.text.isEmpty() ? QString() : QString(" ")) %
                       tr("Redeem burns %1 of your YED and pays an enforcement fee from the collateral; the rest returns to you.")
                           .arg(YellowbackFormat::cents(p.mintedCents));
+            if (a.renew)
+                a.text += " " % tr("Renew redeems it and mints %1 again in a new vault, in one confirmation.").arg(YellowbackFormat::cents(p.mintedCents));
+            a.text += " " % tr("Claim height %1 (~%2): act before it.").arg(p.claimHeight).arg(claimDate);
         } else if (!a.sweep) {
-            a.text = tr("Active vault: redeemable from %1 on by burning %2 of YED.").arg(lockAt).arg(YellowbackFormat::cents(p.mintedCents));
+            a.text = tr("Active vault: redeemable or renewable from %1 (~%2) on by burning %3 of YED; claim height %4 (~%5).")
+                         .arg(lockAt).arg(lockDate).arg(YellowbackFormat::cents(p.mintedCents)).arg(p.claimHeight).arg(claimDate);
         }
         if (p.claimable)
             a.text += " " % tr("This vault is past its claim height and underwater: anyone may claim it by burning its debt.");
@@ -1095,6 +1140,8 @@ void YellowbackTab::setupPositions() {
     uiPositions->btnRelease->setEnabled(false);
     uiPositions->btnRedeem->setEnabled(false);
     uiPositions->btnSweep->setEnabled(false);
+    uiPositions->btnRenew->setEnabled(false);
+    uiPositions->btnRenew->setToolTip(tr("Redeem the vault and mint its YED again in a new vault with a fresh lock and claim height: one confirmation, two transactions (yed_redeem, then yed_mint)."));
     uiPositions->btnRelease->setToolTip(tr("Return a VOID vault's collateral: no YED burned, no fee (yed_redeem)."));
     uiPositions->btnRedeem->setToolTip(tr("Burn the vault's YED and take the collateral back, minus the enforcement fee (yed_redeem)."));
     uiPositions->btnSweep->setToolTip(tr("Under abandonment only: move the collateral out with no burn, leaving the YED unbacked (yed_sweep)."));
@@ -1114,6 +1161,7 @@ void YellowbackTab::setupPositions() {
     QObject::connect(uiPositions->btnRelease, &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnRedeem,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) redeemVault(*p); });
     QObject::connect(uiPositions->btnSweep,   &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) sweepVault(*p); });
+    QObject::connect(uiPositions->btnRenew,   &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) renewVault(*p); });
     QObject::connect(uiPositions->btnNotice,  &QPushButton::clicked, [=, this]() { auto p = selected(); if (p) noticeVault(*p); });
     QObject::connect(uiPositions->btnWhyVoid, &QPushButton::clicked, [=, this]() {
         auto p = selectedPosition();
@@ -1156,10 +1204,25 @@ void YellowbackTab::updateVaultButtons() {
         uiPositions->btnWhyVoid->setEnabled(false);
         uiPositions->btnNotice->setVisible(false);
         uiPositions->btnNotice->setEnabled(false);
+        uiPositions->btnRenew->setVisible(false);
+        uiPositions->btnRenew->setEnabled(false);
         return;
     }
     VaultActions a = vaultActions(*p, ctl->height(), ctl->isAbandoned());
+    // H-9.2: renew needs a mint now; when the gate is shut the row says why and offers redeem only
+    QString renewBlocker;
+    if (a.renew) {
+        const int lockBlocks = ctl->renewLockBlocks(*p);
+        renewBlocker = lockBlocks <= 0 ? tr("no term class is enabled") : ctl->mintBlocker(p->mintedCents, ctl->classForLock(lockBlocks).name);
+        if (!renewBlocker.isEmpty()) a.text += " " % tr("Renew is not possible now: %1").arg(renewBlocker);
+        if (renew.active && renew.vaultTxid == p->txid) a.text += " " % tr("A renewal of this vault is in progress.");
+    }
+    // H-9.3: heights that fail the identities are named, not hidden
+    const QStringList bad = YellowbackController::checkVaultHeights(ctl->params(), *p);
+    if (!bad.isEmpty()) a.text += " " % tr("Warning: the node's heights for this vault are inconsistent (%1).").arg(bad.join("; "));
     uiPositions->lblVaultAction->setText(a.text);
+    uiPositions->btnRenew->setVisible(a.renew);
+    uiPositions->btnRenew->setEnabled(actionsEnabled && a.renew && renewBlocker.isEmpty() && !renew.active);
     uiPositions->btnWhyVoid->setEnabled(actionsEnabled && p->status == YellowbackRpc::Position::STATUS_VOID);
     uiPositions->btnRelease->setVisible(a.release);
     uiPositions->btnRedeem->setVisible(a.redeem || (!a.release && !a.sweep));
@@ -1243,6 +1306,13 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             qint64 fee = YellowbackJson::toInt(f, FeePayee::FEE_ZAT);
             QString payee = YellowbackJson::has(f, FeePayee::PREFERRED) && !YellowbackJson::isNull(f, FeePayee::PREFERRED)
                 ? YellowbackJson::toStr(f, FeePayee::PREFERRED) : YellowbackJson::toStr(def, FeePayeeDefault::PAYOUT_ADDRESS);
+            // H-9.3: FEE-1 recomputed locally (the node pays exactly FEE-1; a different figure is a bad reply)
+            const qint64 local = YellowbackController::feeZatFor(ctl->params(), p.collateralZat);
+            if (fee != local) {
+                notice(tr("Redeem not sent"), implausibleText(tr("redemption"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                    .arg(YellowbackFormat::zec(fee)).arg(YellowbackFormat::zec(p.collateralZat)).arg(YellowbackFormat::zec(local)) }), true);
+                return;
+            }
             ask(fee, tr("Enforcement fee: %1 of YEC from the collateral to the pool %2.").arg(YellowbackFormat::zec(fee)).arg(payee));
         },
         [=, this](const QString& e) {
@@ -1285,6 +1355,164 @@ void YellowbackTab::sweepVault(const YellowbackPosition& p, const QString& to) {
 
 // v3: yed_claimnotice, step 1 of the emergency claim (NOT-1). Two-step like Mint; the vault
 // row then shows emergencyOpenAt once the notice confirms.
+// ── Renew (hardening H-9.2): redeem and re-mint in one flow ───────────────────────────────
+// The redeem goes out at once; the mint waits for the redeem to close the vault (the collateral
+// it pays back funds the new vault) and is held to the cap the one confirmation showed.
+
+void YellowbackTab::renewVault(const YellowbackPosition& p) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc;
+    const QString what = tr("Renew");
+    if (renew.active) { notice(what, tr("A renewal is already in progress (vault %1).").arg(renew.vaultTxid), true); return; }
+    if (p.status != Position::STATUS_ACTIVE) { notice(what, tr("Only an ACTIVE vault can be renewed."), true); return; }
+    if (ctl->height() < p.lockHeight) {
+        notice(what, tr("The vault is locked until height %1 (the chain is at %2). Every Ycash node enforces that lock.").arg(p.lockHeight).arg(ctl->height()));
+        return;
+    }
+    if (ctl->isAbandoned()) { notice(what, tr("Enforcement is abandoned, so no new vault can be minted: sweep or redeem this one instead."), true); return; }
+    if (p.mintedCents > ctl->confirmedCents()) {
+        notice(what, tr("Renewing first redeems the vault, which burns %1 of YED, but only %2 is confirmed in this wallet.")
+            .arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
+        return;
+    }
+    const int lockBlocks = ctl->renewLockBlocks(p);
+    const QString cls = ctl->classForLock(lockBlocks).name;
+    const QString blocker = lockBlocks <= 0 ? tr("no term class is enabled on this network.") : ctl->mintBlocker(p.mintedCents, cls);
+    if (!blocker.isEmpty()) {
+        notice(what, tr("Renew is not possible now, because a new vault cannot be minted: %1\n\nRedeem the vault instead if its claim height is near.").arg(blocker), true);
+        return;
+    }
+    const qint64 cents = p.mintedCents;
+
+    ctl->estimateCollateral(cents, lockBlocks,
+        [=, this](const json& e) {
+            if (YellowbackJson::isNull(e, Estimate::REQUIRED_ZAT)) {
+                notice(what, tr("No estimate: the mint price is undefined at the reference height, so the new vault cannot be sized. Redeem instead, or try again later."), true);
+                return;
+            }
+            const QStringList bad = YellowbackController::checkEstimate(ctl->params(), ctl->height(), cents, lockBlocks, e);
+            if (!bad.isEmpty()) { notice(tr("Renew not sent"), implausibleText(tr("renewal's new mint"), bad), true); return; }
+            const qint64 collateral = YellowbackController::mintCollateralZatFor(ctl->params(), YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT));
+            const qint64 maxCollateral = capAbove(collateral);
+            const int newLock  = (int)YellowbackJson::toInt(e, Estimate::LOCK_HEIGHT);
+            const int newClaim = (int)YellowbackJson::toInt(e, Estimate::CLAIM_HEIGHT);
+            const QString ratio = YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(e, Estimate::MIN_RATIO_BPS));
+            const QString price = YellowbackFormat::priceOrUndefined(e, Estimate::P_MINT);
+
+            auto ask = [=, this](qint64 redeemFee, const QString& feeLine) {
+                const QString text = tr("Renew vault %1: redeem it, then mint %2 of YED again in a new vault.\n\n"
+                                        "1. Redeem now: burn %2 of YED from this wallet (%3 confirmed). %4 "
+                                        "Collateral out: about %5 of YEC to a fresh transparent address of this wallet.\n\n"
+                                        "2. Mint, once the redeem is mined: %2 of YED against %6 of YEC (at most %7; the node refuses the mint if the price moves further), "
+                                        "lock %8 blocks (class %9). Lock height about %10 (~%11), claim height about %12 (~%13). "
+                                        "Collateral ratio %14 at a mint price of %15 per YEC. The new vault is funded from your transparent YEC, "
+                                        "which the redeem pays back into, and pays its own enforcement fee.\n\n"
+                                        "These are two transactions. If the mint cannot be built when the redeem confirms (minting paused, or the price moved past the cap), "
+                                        "the vault stays redeemed, nothing else is sent, and the wallet tells you. "
+                                        "Back up wallet.dat after the renewal: the new vault's key exists only there.")
+                    .arg(p.txid).arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(feeLine)
+                    .arg(YellowbackFormat::zec(p.collateralZat - redeemFee)).arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(maxCollateral))
+                    .arg(lockBlocks).arg(cls)
+                    .arg(newLock).arg(YellowbackFormat::estimateDate(newLock, ctl->height()).toString("yyyy-MM-dd"))
+                    .arg(newClaim).arg(YellowbackFormat::estimateDate(newClaim, ctl->height()).toString("yyyy-MM-dd"))
+                    .arg(ratio).arg(price);
+                if (!confirm(tr("Confirm renew"), text)) return;
+                uiPositions->lblVaultAction->setText(tr("Renew: redeeming..."));
+                ctl->redeem(p.txid, QString(),
+                    [=, this](const json& r) {
+                        renew = RenewState();
+                        renew.active = true;
+                        renew.vaultTxid = p.txid;
+                        renew.redeemTxid = YellowbackJson::toStr(r, RedeemResult::TXID);
+                        renew.cents = cents;
+                        renew.lockBlocks = lockBlocks;
+                        renew.maxCollateralZat = maxCollateral;
+                        renew.shownCollateralZat = collateral;
+                        uiPositions->lblVaultAction->setText(tr("Renew: redeem %1 sent; the new mint follows when it is mined.").arg(renew.redeemTxid));
+                        ctl->refresh(true);
+                    },
+                    [=, this](const QString& err) { updateVaultButtons(); failed("yed_redeem", err); });
+            };
+            ctl->getFeePayee(ctl->refHeightNow(), p.collateralZat,
+                [=, this](const json& f) {
+                    const qint64 fee = YellowbackJson::toInt(f, FeePayee::FEE_ZAT);
+                    const qint64 local = YellowbackController::feeZatFor(ctl->params(), p.collateralZat);
+                    if (fee != local) {
+                        notice(tr("Renew not sent"), implausibleText(tr("renewal's redemption"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                            .arg(YellowbackFormat::zec(fee)).arg(YellowbackFormat::zec(p.collateralZat)).arg(YellowbackFormat::zec(local)) }), true);
+                        return;
+                    }
+                    ask(fee, tr("Enforcement fee: %1 of YEC from the collateral.").arg(YellowbackFormat::zec(fee)));
+                },
+                [=, this](const QString& err) {
+                    if (err.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive)) ask(0, tr("Enforcement fee: none (no pool published a price quote in the payee window)."));
+                    else ask(0, tr("Enforcement fee: could not be estimated (%1).").arg(err));
+                });
+        },
+        [=, this](const QString& err) { failed("yed_estimatecollateral", err); });
+}
+
+void YellowbackTab::continueRenew() {
+    if (ctl == nullptr || !renew.active || renew.minting) return;
+    using namespace YellowbackRpc;
+    const YellowbackPosition* p = nullptr;
+    for (int i = 0; ; i++) {
+        const YellowbackPosition* q = ctl->positionsModel()->positionAt(i);
+        if (q == nullptr) break;
+        if (q->txid == renew.vaultTxid) { p = q; break; }
+    }
+    if (p == nullptr || p->status == Position::STATUS_ACTIVE) return;     // the redeem is not mined yet
+    const RenewState r = renew;
+    auto stop = [=, this](const QString& why) {
+        renew = RenewState();
+        updateVaultButtons();
+        notice(tr("Renew stopped"), tr("Vault %1 is redeemed (txid %2), but the new mint was not sent: %3\n\nMint again from the Mint page when it clears.")
+            .arg(r.vaultTxid).arg(r.redeemTxid).arg(why), true);
+    };
+    if (p->status != Position::STATUS_CLOSED) {
+        renew = RenewState();
+        updateVaultButtons();
+        notice(tr("Renew stopped"), tr("Vault %1 ended %2 instead of being redeemed by this wallet; no mint was sent.").arg(r.vaultTxid).arg(p->status), true);
+        return;
+    }
+    renew.minting = true;
+    const QString cls = ctl->classForLock(r.lockBlocks).name;
+    const QString blocker = ctl->mintBlocker(r.cents, cls);
+    if (!blocker.isEmpty()) { stop(blocker); return; }
+    uiPositions->lblVaultAction->setText(tr("Renew: the redeem is mined; minting %1 again...").arg(YellowbackFormat::cents(r.cents)));
+    ctl->estimateCollateral(r.cents, r.lockBlocks,
+        [=, this](const json& e) {
+            if (YellowbackJson::isNull(e, Estimate::REQUIRED_ZAT)) { stop(tr("the mint price is undefined at the reference height.")); return; }
+            const QStringList bad = YellowbackController::checkEstimate(ctl->params(), ctl->height(), r.cents, r.lockBlocks, e);
+            if (!bad.isEmpty()) { stop(tr("the node's estimate failed the wallet's check (%1).").arg(bad.join("; "))); return; }
+            const qint64 collateral = YellowbackController::mintCollateralZatFor(ctl->params(), YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT));
+            if (collateral > r.maxCollateralZat) {
+                stop(tr("the new vault now needs %1 of YEC, above the %2 you confirmed.").arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(r.maxCollateralZat)));
+                return;
+            }
+            ctl->mint(r.cents, r.lockBlocks, QString(), r.maxCollateralZat,
+                [=, this](const json& m) {
+                    Settings::getInstance()->setYellowbackBackupPending(true);
+                    updateBackupNag();
+                    auto done = [=, this](const json& info) {
+                        renew = RenewState();
+                        updateVaultButtons();
+                        notice(tr("Vault renewed"), tr("Vault %1 redeemed (txid %2).\n\n").arg(r.vaultTxid).arg(r.redeemTxid) %
+                               mintSummary(r.cents, info, r.shownCollateralZat) % "\n\n" % tr("Back up wallet.dat now."));
+                        ctl->refresh(true);
+                    };
+                    if (!YellowbackJson::toBool(m, MintResult::PENDING)) { done(m); return; }
+                    uiPositions->lblVaultAction->setText(tr("Renew: preparing price proof (1 block): carrier %1 sent; the mint follows when it confirms.")
+                        .arg(YellowbackJson::toStr(m, MintResult::CARRIER_TXID)));
+                    ctl->awaitPending(Transaction::TYPE_MINT, YellowbackJson::toStr(m, MintResult::CARRIER_TXID),
+                        (int)YellowbackJson::toInt(m, MintResult::REF_HEIGHT, ctl->refHeightNow()), done,
+                        [=, this](const QString& err) { stop(err); });
+                },
+                [=, this](const QString& err) { stop(tr("yed_mint failed: %1").arg(err) % [&]() { QString x = YellowbackController::explainError(err); return x.isEmpty() ? QString() : QString("\n\n") % x; }()); });
+        },
+        [=, this](const QString& err) { stop(tr("yed_estimatecollateral failed: %1").arg(err)); });
+}
+
 void YellowbackTab::noticeVault(const YellowbackPosition& p) {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
@@ -1405,14 +1633,24 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
         return;
     }
     QString txid = c.txid();
+    // H-9.3: the row's fee, attestor fee and claim height recomputed from the parameters
+    const QStringList bad = YellowbackController::checkClaimable(ctl->params(), ctl->height(), c);
+    if (!bad.isEmpty()) {
+        notice(tr("Claim not sent"), implausibleText(tr("claim"), bad), true);
+        return;
+    }
     const qint64 youGet = c.collateralZat - c.feeZat - c.attestFeeZat - c.residualZat;
     // The floor the node is held to (audit F-1): 1 % under the row's figure; a claim that
     // would pay out less is refused (claim-out-below-min) rather than sent.
     const qint64 minOut = capBelow(youGet);
+    // maxBurnCents (rpcversion 4, H-9.3): the debt the row shows, plus at most the sub-dollar
+    // remainder H4 may burn with it (below MIN_OUTPUT); the node refuses claim-burn-above-max beyond
+    const qint64 maxBurn = c.mintedCents + ctl->minOutputCents() - 1;
     QString text = tr("Claim vault %1 (owner %2).\n\n"
                       "Burn: %3 of YED from this wallet (%4 confirmed).\n"
                       "Enforcement fee: %5 of YEC from the collateral to a pool that published a price quote.\n"
-                      "You receive: about %6 of YEC (collateral %7 minus the fees and the residual) to %8, at least %13 (the node refuses the claim if the price moves further).\n"
+                      "You receive: about %6 of YEC (collateral %7 minus the fees and the residual) to %8, at least %13 (the node refuses the claim if the price moves further), "
+                      "burning at most %14 of YED.\n"
                       "%12\n\n"
                       "The vault is past its claim height (%9) and underwater at the claim price of %10 per YEC (underwater below %11). "
                       "Your own node builds the claim in two steps — the carrier with the price proof now, the claim when it confirms — "
@@ -1420,10 +1658,11 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
         .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
         .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(youGet)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
         .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt))
-        .arg(describeClaimPath(c)).arg(YellowbackFormat::zec(minOut));
+        .arg(describeClaimPath(c)).arg(YellowbackFormat::zec(minOut))
+        .arg(YellowbackFormat::cents(maxBurn));
     if (!confirm(tr("Confirm claim"), text)) return;
     uiClaim->lblClaimHint->setText(tr("Claiming..."));
-    ctl->claim(txid, to, minOut,
+    ctl->claim(txid, to, minOut, maxBurn,
         [=, this](const json& r) {
             followPending(Transaction::TYPE_CLAIM, r, uiClaim->lblClaimHint, [=, this](const json& done) {
                 notice(tr("Claim sent"), claimSummary(done));
