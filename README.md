@@ -1,33 +1,29 @@
 YecWallet is the official wallet for [Ycash](https://www.ycash.xyz) that runs on Linux, Windows and macOS.
 
-## This branch: Ycash Yellowback (YED) on the vault network upgrade
+## Ycash Yellowback (YED) on this branch
 
-This fork's `upgrade/vault` branch adds a Yellowback tab for **Ycash Yellowback (YED)**, a dollar
-unit backed by YEC locked in vaults. It drives a node that carries the **vault network upgrade**
-(`UPGRADE_VAULT`, consensus branch ID `0x6d5b7a31`): a coordinated hard fork that adds a generic
-lock/unlock primitive (signer sets, vault templates, intents) with Yellowback as its one rule
-module, so YED's rules are consensus on every upgraded node. The wallet speaks the node's
-`yed_*` RPCs at `rpcversion` 5 and the primitive's `set_*` / `vault_*` RPCs: mint, send, redeem,
-claim, **Pending claims** (release after the claim delay; a member of the YED attestor set may
-cancel a wrong-price claim), and attestor set membership with heartbeats. Nothing in `ycash.conf`
-enables Yellowback; it is on wherever the node has the upgrade and the network's YED attestor set
-configured.
+This branch (`upgrade/vault`) adds a **Yellowback** tab to YecWallet. It is the wallet side of a
+proposed Ycash network upgrade, **the vault upgrade**, which adds **vaults** to Ycash: YEC locked on
+chain under rules every node enforces. **Ycash Yellowback (YED)** is a dollar token built on vaults:
+lock YEC in a vault to mint YED (`1 YED = 1 US dollar`), return the YED to get the YEC back. If a
+vault's YEC becomes worth less than the YED it backs, others can claim it.
 
-**Status:** implemented and tested on regtest and the one-laptop devnet only. **Mainnet and testnet
-have no activation height and no attestor set**, and the upgrade is not adopted by the Ycash
-Foundation, not audited and not activated on any public network. The releases linked below are
-upstream YecWallet and know nothing of Yellowback.
-
-- **Node:** a ycashd built from `upgrade/vault` of
-  [ycash-dd](https://github.com/boyfromcave/ycash-dd) (v4.5.0 line) or
-  [ycash6](https://github.com/boyfromcave/ycash6) (6.20.0 line); the wallet reads the node version
-  at connect and drives either. A stock ycashd has no `yed_*` RPCs, and the tab says so. On regtest
-  the node takes `-nuparams=6d5b7a31:<height> -yellowbackattestorset=<setid>`.
-- **Try it:** start the devnet from the node tree (`contrib/yellowback/devnet/yellowback-devnet up`)
-  and attach the wallet with `yecwallet --conf <dir>/node0/ycash.conf --no-embedded`.
-- **Details:** [docs/yellowback.md](docs/yellowback.md) (its opening status section is the
-  `upgrade/vault` one; the rest records the earlier flows). The `harden/yellowback` branch is the
-  no-upgrade fallback line, which used the `experimentalfeatures` / `yellowback` conf keys.
+- **What the tab does:** mint, send and redeem YED; claim an under-collateralised vault and, on
+  the **Pending claims** page, release the claimed YEC once its delay has passed. For
+  **attestors** (members of Yellowback's signer set, who sign YEC/USD prices): join the set, send
+  heartbeats, and cancel a claim made at a wrong price. The wallet does not touch the wYEC bridge.
+- **Node it needs:** a ycashd built from the `upgrade/vault` branch of
+  [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
+  [ycash6](https://github.com/boyfromcave/ycash6). A stock ycashd has no Yellowback, and the tab
+  says so. Nothing in `ycash.conf` turns Yellowback on.
+- **Status: proposed, not live.** It runs on a local test network (regtest) only. It has not been
+  adopted by the Ycash Foundation, has not been audited, and has no activation height on mainnet
+  or testnet. The releases linked below are upstream YecWallet and know nothing of Yellowback.
+- **Try it:** in a ycash-dd checkout, `contrib/yellowback/devnet/yellowback-devnet up` starts a
+  local test network and `contrib/yellowback/devnet/yellowback-devnet wallet` opens this wallet on
+  it (the node's [devnet crash course](https://github.com/boyfromcave/ycash-dd/blob/upgrade/vault/doc/yellowback-devnet.md)
+  has the details). By hand: `yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`.
+- **More:** [docs/yellowback.md](docs/yellowback.md), the developer notes for the tab.
 
 # Installation
 
