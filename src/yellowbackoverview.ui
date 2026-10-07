@@ -67,9 +67,11 @@
     </widget>
    </item>
    <item>
-    <widget class="QLabel" name="lblTrust">
+    <widget class="QLabel" name="lblNotes">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Ycash Yellowback (YED) is an over-collateralised dollar on Ycash. Since the vault upgrade every Yellowback rule is a Ycash consensus rule that every full node checks: no pool enforces it, and nothing can pause or abandon it. YED is minted only at a price that both the mining pools' quotes and a majority of bonded attestors support; neither can mint against a price it sets alone, and a single signer is never a price. Collateral stays locked for the vault's term and returns to the owner who redeems before the claim height (the lock height plus a grace period of about 30 days); after it, anyone may close an underwater vault by burning its debt in YED, after a delay during which any honest attestor can cancel a claim made at a wrong price. Nothing in Yellowback touches the shielded pool. YED is transparent: balances and transfers are visible on the chain; it is not a shielded asset.</string></property>
+     <property name="styleSheet"><string notr="true">QLabel { color: #444; padding: 2px 6px; }</string></property>
+     <property name="text"><string/></property>
+     <property name="textInteractionFlags"><set>Qt::TextSelectableByMouse</set></property>
     </widget>
    </item>
   </layout>

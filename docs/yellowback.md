@@ -77,7 +77,12 @@ off regtest (the contract does not report it).
 
 **Deadlines.** Every ACTIVE vault states its lock and claim heights with estimated dates (the
 table and the action line). From `claimHeight − 1 day` (1,152 blocks) the banner warns
-persistently about the vault (a VOID one: release).
+persistently about the vault (a VOID one: release). Several such vaults share one banner line,
+with each vault's warning in its tooltip. The banner area carries only warnings: the "consensus
+rules since height N" line shows only while the upgrade is pending (once active, the Overview's
+Rules row says it), and information lines (locked YED outputs, the node's own quote) sit at the
+foot of the Overview, which scrolls rather than squeezing its rows. The trust statement is behind
+the ⓘ button at the right of the sub-tabs and in Help > About.
 
 **Plausibility.** Before any confirmation the wallet recomputes from `yed_getinfo.params` the pool
 fee (FEE-1), the attestor fee (AFEE-1), `requiredZat` (and the `4 · FEE_MIN` floor, which is what

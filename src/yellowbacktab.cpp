@@ -21,6 +21,8 @@
 #include "ui_yellowbackmint.h"
 
 #include <QSignalBlocker>
+#include <QScrollArea>
+#include <QToolButton>
 #include "ui_yellowbackpositions.h"
 #include "ui_yellowbackclaim.h"
 #include "ui_yellowbacktransactions.h"
@@ -54,7 +56,7 @@ YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent
     ui->lblBanner->setText(tr("Yellowback: waiting for the node..."));
     ui->lblBanner->setVisible(true);
     ui->lblStatus->setVisible(false);
-    ui->lblNotes->setVisible(false);
+    uiOverview->lblNotes->setVisible(false);
     ui->wBackupNag->setVisible(false);
     setActionsEnabled(false);
     updateBackupNag();
@@ -80,6 +82,15 @@ YellowbackTab::~YellowbackTab() {
 }
 
 // ── Construction ──────────────────────────────────────────────────────────────────────────
+
+QString YellowbackTab::aboutText() {
+    return tr("Ycash Yellowback (YED) is an over-collateralised dollar on Ycash. Since the vault upgrade every Yellowback rule is a Ycash consensus rule that every full node checks: "
+              "no pool enforces it, and nothing can pause or abandon it. YED is minted only at a price that both the mining pools' quotes and a majority of bonded attestors support; "
+              "neither can mint against a price it sets alone, and a single signer is never a price. Collateral stays locked for the vault's term and returns to the owner who redeems "
+              "before the claim height (the lock height plus a grace period of about 30 days); after it, anyone may close an underwater vault by burning its debt in YED, after a delay "
+              "during which any honest attestor can cancel a claim made at a wrong price. Nothing in Yellowback touches the shielded pool. YED is transparent: balances and transfers "
+              "are visible on the chain; it is not a shielded asset.");
+}
 
 void YellowbackTab::setupPages() {
     for (int i = 0; i < PageCount; i++)
@@ -112,7 +123,15 @@ void YellowbackTab::setupPages() {
     uiSettings  = new Ui::YellowbackSettings();     uiSettings->setupUi(pages[Settings]);
     uiAttestors = new Ui::YellowbackAttestors();    uiAttestors->setupUi(pages[Attestors]);
 
-    ui->subTabs->addTab(pages[Overview],     tr("Overview"));
+    // The Overview scrolls rather than squeezing its rows on top of each other when the window is
+    // short (the owner's walk-through: the system column and the recent table were unreadable)
+    auto* overviewScroll = new QScrollArea(this);
+    overviewScroll->setWidgetResizable(true);
+    overviewScroll->setFrameShape(QFrame::NoFrame);
+    overviewScroll->setWidget(pages[Overview]);
+    uiOverview->tblRecent->setMinimumHeight(uiOverview->tblRecent->verticalHeader()->defaultSectionSize() * 5 +
+                                            uiOverview->tblRecent->horizontalHeader()->sizeHint().height() + 4);
+    ui->subTabs->addTab(overviewScroll,      tr("Overview"));
     ui->subTabs->addTab(pages[Receive],      tr("Receive"));
     ui->subTabs->addTab(pages[Send],         tr("Send"));
     ui->subTabs->addTab(pages[Mint],         tr("Mint"));
@@ -123,6 +142,14 @@ void YellowbackTab::setupPages() {
     ui->subTabs->addTab(pages[Redeem],       tr("Redeem"));
     ui->subTabs->addTab(pages[Attestors],    tr("Attestors"));
     ui->subTabs->addTab(pages[Settings],     tr("Settings"));
+    // What Yellowback is and what it promises: behind an info button, not on every page (and in Help > About)
+    auto* info = new QToolButton(ui->subTabs);
+    info->setObjectName("btnAboutYellowback");
+    info->setText(QString::fromUtf8("\u24D8"));
+    info->setAutoRaise(true);
+    info->setToolTip(tr("What is Yellowback?"));
+    QObject::connect(info, &QToolButton::clicked, [=, this]() { notice(tr("About Yellowback"), aboutText()); });
+    ui->subTabs->setCornerWidget(info, Qt::TopRightCorner);
 
     setupOverview();
     setupReceive();
@@ -206,26 +233,36 @@ void YellowbackTab::updateBanner() {
         ui->lblBanner->setText(tr("Yellowback: not connected."));
         ui->lblBanner->setVisible(true);
         ui->lblStatus->setVisible(false);
-        ui->lblNotes->setVisible(false);
+        uiOverview->lblNotes->setVisible(false);
         setActionsEnabled(false);
         return;
     }
     YellowbackStatus st = ctl->status();
     if (!st.available) {
         ui->lblBanner->setText(st.headline);
+        ui->lblBanner->setToolTip(QString());
         ui->lblBanner->setVisible(true);
         ui->lblStatus->setVisible(false);
-        ui->lblNotes->setVisible(false);
+        uiOverview->lblNotes->setVisible(false);
     } else {
         // H-9.2: a vault within a day of its claim height is warned about here, above every page,
-        // until it is redeemed, renewed or released
-        st.warnings << ctl->deadlineWarnings();
+        // until it is redeemed, renewed or released. Several such vaults share one line (on regtest
+        // every vault is inside the window from its mint on); the tooltip names each.
+        const QStringList deadlines = ctl->deadlineWarnings();
+        if (deadlines.size() > 1) {
+            st.warnings << tr("%1 of your vaults are near or past their claim height: redeem or renew them on the Vaults page (hover for each).").arg(deadlines.size());
+            ui->lblBanner->setToolTip(deadlines.join("\n"));
+        } else {
+            st.warnings << deadlines;
+            ui->lblBanner->setToolTip(QString());
+        }
         ui->lblBanner->setText(st.warnings.join("\n"));
         ui->lblBanner->setVisible(!st.warnings.isEmpty());
+        // Once the upgrade is active the Overview's Rules row says the same; the banner is for news
         ui->lblStatus->setText(st.headline);
-        ui->lblStatus->setVisible(true);
-        ui->lblNotes->setText(st.notes.join("\n"));
-        ui->lblNotes->setVisible(!st.notes.isEmpty());
+        ui->lblStatus->setVisible(!ctl->upgradeActive());
+        uiOverview->lblNotes->setText(st.notes.join("\n"));
+        uiOverview->lblNotes->setVisible(!st.notes.isEmpty());
     }
     setActionsEnabled(st.available);
 }

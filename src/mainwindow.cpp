@@ -128,6 +128,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
         QString version    = QString("Version ") % QString(APP_VERSION) % " (" % QString(__DATE__) % ")";
         about.versionLabel->setText(version);
+        // Yellowback's trust statement, the one the Yellowback tab's info button shows
+        about.label->setText(about.label->text().replace("</body>",
+            "<p style=\" font-size:11pt;\">" % YellowbackTab::aboutText().toHtmlEscaped() % "</p></body>"));
         
         aboutDialog.exec();
     });

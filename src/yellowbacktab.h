@@ -68,6 +68,9 @@ public:
     // Parses "12.34" / "12" / "$12.34" / "1,234.56" into cents; false on anything else
     static bool parseDollars(const QString& text, qint64* cents);
 
+    // What Yellowback is and promises (upgrade plan §10): the info button and Help > About
+    static QString aboutText();
+
     // What the Vaults page says about the selected row's actions (plan §4.8 Vaults row):
     // which of Release / Redeem / Renew the row offers and why the others are not offered.
     // Pure function of the row and the index height (offline-testable).

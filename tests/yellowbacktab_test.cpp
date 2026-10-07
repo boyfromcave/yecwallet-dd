@@ -19,6 +19,7 @@
 // port and credentials from its node0/ycash.conf, and QSKIPs when the variable is unset; CI
 // runs only the offline cases.
 
+#include <QToolButton>
 #include <QtTest>
 #include <QStackedWidget>
 #include <QLayout>
@@ -791,7 +792,7 @@ private slots:
         h.feed(infoActive(), statsOpen(), activationActive());
         QVERIFY(h.ctl.isAvailable());
         QVERIFY(!h.visible("lblBanner"));           // no warnings
-        QVERIFY(h.visible("lblStatus"));
+        QVERIFY(!h.visible("lblStatus"));           // the Overview's Rules row says it; the text stays for the pending case
         QVERIFY2(h.label("lblStatus").contains("consensus rules since height 103"), qPrintable(h.label("lblStatus")));
         QVERIFY(h.label("lblStatus").contains("6d5b7a31"));
         QVERIFY(h.label("lblStatus").contains("every full node checks them"));
@@ -814,6 +815,7 @@ private slots:
         h.feed(info, statsOpen(), act);
         QVERIFY(h.ctl.isAvailable());
         QVERIFY(!h.ctl.upgradeActive());
+        QVERIFY(h.visible("lblStatus"));            // news until the upgrade activates
         QVERIFY2(h.label("lblStatus").contains("activates at height 500"), qPrintable(h.label("lblStatus")));
         QVERIFY(h.label("lblActivation").contains("activates at 500"));
         QVERIFY(!h.visible("lblBanner"));
@@ -933,7 +935,8 @@ private slots:
 
     void overviewTrustCopy() {
         Harness h;
-        QString trust = h.label("lblTrust");
+        QString trust = YellowbackTab::aboutText();   // behind the tab's info button and in Help > About, not on the Overview
+        QVERIFY(h.tab.findChild<QToolButton*>("btnAboutYellowback") != nullptr);
         // upgrade plan §10, summarised: consensus rules, two-party pricing, the claim delay and cancel, no shielded pool
         QVERIFY(trust.startsWith("Ycash Yellowback (YED) is an over-collateralised dollar on Ycash."));
         QVERIFY(trust.contains("every Yellowback rule is a Ycash consensus rule that every full node checks"));
@@ -1185,7 +1188,7 @@ private slots:
         };
         for (const Probe& pr : probes) {
             QWidget* page = h.tab.page(pr.id);
-            if (auto* stack = qobject_cast<QStackedWidget*>(page->parentWidget())) stack->setCurrentWidget(page);
+            h.tab.findChild<QTabWidget*>("subTabs")->setCurrentIndex(pr.id);   // the Overview sits in a scroll area, not in the stack
             auto lbl = h.tab.findChild<QLabel*>(pr.label);
             QVERIFY2(lbl != nullptr, pr.label);
             lbl->setText(pr.text);
@@ -2931,6 +2934,14 @@ private slots:
         QCOMPARE(h.ctl.deadlineWarnings().size(), 1);
         QVERIFY(h.visible("lblBanner"));
         QVERIFY2(h.label("lblBanner").contains("Vault 6a1f2b3c4d5e… reaches its claim height 404"), qPrintable(h.label("lblBanner")));
+        // two such vaults share one line; the tooltip names each
+        json second = positionActive(); second["txid"] = "7b2c3d4e5f60718293a4b5c6d7e8f9001a2b3c4d5e6f708192a3b4c5d6e7f809";
+        h.feedActive(381, json::array({positionActive(), second}));
+        QCOMPARE(h.ctl.deadlineWarnings().size(), 2);
+        QVERIFY2(h.label("lblBanner").startsWith("2 of your vaults are near or past their claim height"), qPrintable(h.label("lblBanner")));
+        QVERIFY(!h.label("lblBanner").contains("\n"));
+        QVERIFY(h.tab.findChild<QLabel*>("lblBanner")->toolTip().contains("Vault 7b2c3d4e5f60… reaches its claim height 404"));
+        h.feedActive(381, json::array({positionActive()}));
         // a vault far from its claim height: no warning, no banner
         json far = positionActive(); far["lockHeight"] = 5000; far["claimHeight"] = 5024;
         h.feedActive(381, json::array({far}));
