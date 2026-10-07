@@ -98,7 +98,7 @@ void YellowbackTab::setupPages() {
     // label, and let the label grow with its text.
     for (QFormLayout* form : { uiOverview->balanceForm, uiOverview->systemForm, uiMint->mintForm })
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    for (QLabel* grows : { uiOverview->lblAttestation, uiOverview->lblMintStatus, uiMint->lblSource, uiMint->lblSelection }) {
+    for (QLabel* grows : { uiOverview->lblActivation, uiOverview->lblEnforcement, uiOverview->lblAttestation, uiOverview->lblMintStatus, uiMint->lblSource, uiMint->lblSelection }) {
         grows->setWordWrap(true);
         grows->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         // A word-wrapped label's minimum height is near zero, so when a page is short of room it is
@@ -933,40 +933,56 @@ void YellowbackTab::doMint() {
                     uiMint->lblMintPageStatus->clear();
                     return;
                 }
-                // A block arrived while the dialog was open: the estimate it showed is stale, so
-                // estimate again and show the dialog again rather than send the old figure.
-                if (ctl->height() != heightAtDialog) {
-                    uiMint->lblMintPageStatus->setText(tr("The chain advanced while you were confirming; estimating again."));
-                    doMint();
-                    return;
-                }
-                uiMint->lblMintPageStatus->setText(tr("Minting..."));
-                ctl->mint(cents, lockBlocks, from, maxCollateral,
-                    [=, this](const json& r) {
-                        // The vault key exists from the carrier step on: nag for the backup at once
-                        Settings::getInstance()->setYellowbackBackupPending(true);
-                        updateBackupNag();
-                        followPending(Transaction::TYPE_MINT, r, uiMint->lblMintPageStatus, [=, this](const json& done) {
-                            QString summary = mintSummary(cents, done, collateral);
-                            QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
-                            if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
-                            summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
-                            uiMint->lblMintPageStatus->setText(tr("Minted. txid: ") % YellowbackJson::toStr(done, MintResult::TXID));
-                            mintedStatusHeight = ctl->height();
-                            uiMint->txtAmount->clear();
-                            notice(tr("Mint sent"), summary);
-                            ctl->refresh(true);
+                auto send = [=, this]() {
+                    uiMint->lblMintPageStatus->setText(tr("Minting..."));
+                    ctl->mint(cents, lockBlocks, from, maxCollateral,
+                        [=, this](const json& r) {
+                            // The vault key exists from the carrier step on: nag for the backup at once
+                            Settings::getInstance()->setYellowbackBackupPending(true);
+                            updateBackupNag();
+                            followPending(Transaction::TYPE_MINT, r, uiMint->lblMintPageStatus, [=, this](const json& done) {
+                                QString summary = mintSummary(cents, done, collateral);
+                                QString warning = YellowbackJson::toStr(r, MintResult::WARNING);
+                                if (!warning.isEmpty()) summary += "\n\n" % tr("Node warning: ") % warning;
+                                summary += "\n\n" % tr("The YED arrives once the transaction is mined. Back up wallet.dat now.");
+                                uiMint->lblMintPageStatus->setText(tr("Minted. txid: ") % YellowbackJson::toStr(done, MintResult::TXID));
+                                mintedStatusHeight = ctl->height();
+                                uiMint->txtAmount->clear();
+                                notice(tr("Mint sent"), summary);
+                                ctl->refresh(true);
+                            });
+                        },
+                        [=, this](const QString& e) {
+                            updateMintGate();
+                            uiMint->lblMintPageStatus->setText(tr("yed_mint failed: ") % e);
+                            if (bundleInsufficientRetry(tr("The mint"), e)) return;
+                            // mint10-diverged: the page's own banner, the same one the estimate shows
+                            QString diverged = YellowbackController::describeDivergenceError(e, ctl->divergeBpsAttest());
+                            uiMint->lblDivergence->setText(diverged);
+                            uiMint->lblDivergence->setVisible(!diverged.isEmpty());
+                            failed("yed_mint", e);
                         });
+                };
+                if (ctl->height() == heightAtDialog) { send(); return; }
+                // A block arrived while the dialog was open, which at regtest's 15 s heartbeat is
+                // nearly every time (the owner had to answer Yes again and again). The cap the user
+                // confirmed is what binds the node (yed_mint's maxCollateralZat, audit F-1), so
+                // estimate again and send if the fresh figure still fits it; ask again only when
+                // the class changed or the price moved past the cap.
+                uiMint->lblMintPageStatus->setText(tr("The chain advanced while you were confirming; checking the estimate again."));
+                ctl->estimateCollateral(cents, lockBlocks,
+                    [=, this](const json& e2) {
+                        const bool fits = !YellowbackJson::isNull(e2, Estimate::REQUIRED_ZAT)
+                            && YellowbackController::checkEstimate(ctl->params(), ctl->height(), cents, lockBlocks, e2).isEmpty()
+                            && YellowbackJson::toStr(e2, Estimate::TERM_CLASS, cls.name) == termClass
+                            && YellowbackController::mintCollateralZatFor(ctl->params(), YellowbackJson::toInt(e2, Estimate::REQUIRED_ZAT)) <= maxCollateral;
+                        if (fits) { send(); return; }
+                        doMint();
                     },
                     [=, this](const QString& e) {
                         updateMintGate();
-                        uiMint->lblMintPageStatus->setText(tr("yed_mint failed: ") % e);
-                        if (bundleInsufficientRetry(tr("The mint"), e)) return;
-                        // mint10-diverged: the page's own banner, the same one the estimate shows
-                        QString diverged = YellowbackController::describeDivergenceError(e, ctl->divergeBpsAttest());
-                        uiMint->lblDivergence->setText(diverged);
-                        uiMint->lblDivergence->setVisible(!diverged.isEmpty());
-                        failed("yed_mint", e);
+                        uiMint->lblMintPageStatus->setText(tr("yed_estimatecollateral failed: ") % e);
+                        failed("yed_estimatecollateral", e);
                     });
             };
 

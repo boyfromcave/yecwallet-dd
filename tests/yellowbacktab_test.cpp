@@ -1895,10 +1895,34 @@ private slots:
             };
             h.mintAmount("1000");
             h.tab.doMint();
-            QCOMPARE(h.confirms.size(), 2);                                   // estimated and asked again
-            QCOMPARE(h.rpc.count(YellowbackRpc::ESTIMATECOLLATERAL), 2);
-            QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);                    // sent once, after the second dialog
+            QCOMPARE(h.confirms.size(), 1);                                   // the fresh figure fits the cap: not asked again
+            QCOMPARE(h.rpc.count(YellowbackRpc::ESTIMATECOLLATERAL), 2);      // but estimated again before sending
+            QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
             QCOMPARE(h.notices.size(), 1);
+        }
+        {
+            Harness h;
+            h.feedActive();
+            h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
+            h.rpc.results[YellowbackRpc::MINT]               = mintReply();
+            // A block arrives while the first dialog is open and the mint price falls 5 %: past the cap
+            h.tab.confirmFn = [&h](const QString&, const QString& text) {
+                h.confirms << text;
+                if (h.confirms.size() == 1) {
+                    h.feedActive(332);
+                    json e = estimateReply(); e["refHeight"] = 330; e["lockHeight"] = 378; e["claimHeight"] = 402;
+                    e["pMint"] = 1890000; e["requiredZat"] = 264550265000;
+                    h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+                    h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(264550265000);
+                }
+                return true;
+            };
+            h.mintAmount("1000");
+            h.tab.doMint();
+            QCOMPARE(h.confirms.size(), 2);                                   // asked again with the new figure
+            QVERIFY2(h.confirms[1].contains(YellowbackFormat::zec(264550265000)), qPrintable(h.confirms[1]));
+            QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);                    // sent once, after the second dialog
         }
     }
 
