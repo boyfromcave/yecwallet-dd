@@ -144,29 +144,26 @@ banner for every activation state, the Overview, the Vaults rows (ACTIVE, VOID, 
 CLOSED, CLAIMED), the claim list, the transaction types, class derivation for lock lengths
 47/48/96/97/144/145/240/241, and each dialog with its result and its error identifiers.
 
-The two devnet cases (`devnetEndToEnd`: mint → send → redeem; `devnetClaimAndSweep`: sweep
-under a forced abandonment, then claim when a claimable vault exists) run only with
-`YELLOWBACK_DEVNET_DIR=<the devnet's --dir>` set; they read `rpcuser`, `rpcpassword` and
-`rpcport` from `<dir>/node0/ycash.conf` (the same file the GUI reads through `--conf`) and post
-JSON-RPC to node 0 directly, because the test has no `MainWindow` for `Connection::doRPCSafe`.
-`devnetClaimAndSweep` also QSKIPs while the node lacks `yed_claim`/`yed_sweep`. Note that the
-devnet's per-node conf uses the test framework's regtest credentials; nothing leaves 127.0.0.1.
+The four devnet cases run only with `YELLOWBACK_DEVNET_DIR=<the devnet's --dir>` set; they read
+`rpcuser`, `rpcpassword` and `rpcport` from `<dir>/node0/ycash.conf` (the same file the GUI reads
+through `--conf`) and post JSON-RPC to node 0 directly, because the test has no `MainWindow` for
+`Connection::doRPCSafe`. They expect the default `yellowback-devnet up` (vault upgrade active,
+ARMED, three attestors in the YED attestor set) built from an `upgrade/vault` tree:
 
-A third case, `devnetAttestedMintNoticeAndEmergencyClaim` (v3 A5-b), mints while ARMED, crashes
-the price, posts a claim notice and claims by the emergency clause (b). All three expect the
-default `yellowback-devnet up` (ARMED, three attestors), so every mint, notice and claim is the
-v3 two-step: the reply names only the carrier, and the test mines a block at a time
-(`DevnetTransport::awaitTwoStep`) until the wallet's follow-up posts the result, then reads the
-txid from that notice. Before each of them `DevnetTransport::waitFresh` probes
-`yed_buildbundle` at the action's reference height (tip − refLag; the tip for a notice) and
-mines a block when the pool only holds attestations newer than it: `yed_getinfo.attest.poolFresh`
-counts those too, so it can read "3 of 3" while the action is refused `bundle-insufficient`.
-Under v3 a claim is priced from the attestors' bundle, so the crash moves the attestors'
-`attest-price-<n>` files and `mock-price` as well as the pools' quotes
-(`DevnetTransport::setMarketPrice`, as `yellowback-devnet price` does), and the emergency claim
-waits for the vault's `claimHeight` (the vault script's CLTV gates either clause). Run them in
-order on a fresh devnet: green on both node lines (6.20.0 `ycash6` and v4.5.0 `ycash-dd`,
-2026-10-01), as is `nodecompat_test devnetImports`.
+- `devnetEndToEnd`: mint → send → redeem.
+- `devnetMintAndRenew`: mint, wait for the lock height, Renew from the Vaults page.
+- `devnetClaimReleaseAndCancel`: two vaults minted at $50, the market crashed; one claim is
+  released after `CLAIM_DELAY` on the Pending claims page, the other is cancelled by node 5's
+  attestor wallet before it matures (the vault is ACTIVE again, the claimant's burn is lost).
+- `devnetAttestedMintNoticeAndEmergencyClaim`: mints while ARMED, crashes the price, posts a claim
+  notice and claims by the emergency clause.
+
+Every mint, notice and claim is the two-step: the reply names only the carrier, and the test mines
+a block at a time (`DevnetTransport::awaitTwoStep`) until the wallet's follow-up posts the result.
+Each case starts from $50 with full price windows and a fresh bundle (`restoreMarket`,
+`waitFresh`); the crash moves the attestors' price files and the pools' quotes together
+(`DevnetTransport::setMarketPrice`, as `yellowback-devnet price` does). Run them in order on a
+fresh devnet. Nothing leaves 127.0.0.1.
 
 ## Build status
 
@@ -226,40 +223,45 @@ Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
   `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
   separate step that needs an Apple Developer account.
 
-## Trying it on one laptop: the devnet (v2)
+## Trying it on one laptop: the devnet
 
-`ycash-dd/contrib/yellowback/devnet/yellowback-devnet` builds a private Yellowback v2 network
-on one machine and leaves it running: five regtest nodes (0 the user wallet, 1 a stock node,
-2–4 pools with payout addresses and mock price quotes), a funded user wallet, and enough
-signalling blocks that Yellowback is active and minting is open. Nothing leaves 127.0.0.1 and no
-mainnet sync happens.
+`ycash-dd/contrib/yellowback/devnet/yellowback-devnet` (the same script ships in `ycash6`) builds a
+private regtest network on one machine with the vault upgrade active and leaves it running: eight
+nodes (0 the user wallet, 1 a stock node, 2–4 quoting pools, 5–7 attestors), a funded user
+wallet, the YED attestor set created and the three attestors joined to it, and the price layer
+**ARMED**, so minting is open. The node must be built from an `upgrade/vault` tree. Nothing
+leaves 127.0.0.1 and no mainnet sync happens.
 
 ```bash
 cd ycash-dd
 PY=../.venv/bin/python                                  # the workspace venv has the test framework's deps
-$PY contrib/yellowback/devnet/yellowback-devnet up      # about a minute; prints the wallet command
+$PY contrib/yellowback/devnet/yellowback-devnet up      # about two minutes; prints the wallet command
 $PY contrib/yellowback/devnet/yellowback-devnet wallet  # launches the built wallet against node 0
 ```
 
 Options of `up`: `--dir` (default `~/yb-devnet`), `--portseed` (default 7; pick another when
 other regtest nodes run on the machine), `--bitcoind <path>` (default `src/ycashd`), `--price`,
-`--force`. `up` prints the wallet command (`yecwallet --conf <dir>/node0/ycash.conf --no-embedded`).
-From then on Mint, Send, Redeem and Release work end to end from the Yellowback tab.
+`--force`, `--role {user,attestor,pool}` (leave one seat for you; see the devnet's own
+`contrib/yellowback/devnet/README.md`). `up` prints the wallet command
+(`yecwallet --conf <dir>/node0/ycash.conf --no-embedded`). From then on Mint, Send, Redeem, Claim,
+Release (Pending claims) and, on an attestor's node, Cancel and Heartbeat work from the
+Yellowback tab.
 
 | Command | What it does |
 |---|---|
-| `yellowback-devnet mine 10 [node]` | mines 10 blocks on node 0 (untagged) or on a pool node (tagged, carrying its quote) |
-| `yellowback-devnet price 45` | changes the mock price the pools quote; mine pool blocks to publish it |
-| `yellowback-devnet status` | nodes and ports, activation, minting state, each pool's registration and eligibility |
-| `yellowback-devnet check` | exits 0 iff active, minting allowed, all pools eligible and node 0 funded |
-| `yellowback-devnet cli -- yed_listpositions` | `ycash-cli` against node 0 (`--node 2` for a pool) |
+| `yellowback-devnet mine 10 [node]` | mines 10 blocks, round-robin on the quoting pools (or on one node) |
+| `yellowback-devnet price 45` | moves the YEC/USD price for the pools and every attestor together |
+| `yellowback-devnet status` | nodes and ports, the upgrade, minting state, pools and attestors |
+| `yellowback-devnet check` | exits 0 iff the upgrade is active, minting is allowed, the pools are eligible and the layer is ARMED |
+| `yellowback-devnet cli -- yed_listpositions` | `ycash-cli` against node 0 (`--node 5` for an attestor) |
+| `yellowback-devnet wallet --node 5` | opens the wallet on an attestor's node (Attestors page, Cancel wrong-price claim) |
 | `yellowback-devnet down` | stops the nodes; `down --wipe` also deletes the directory |
 
-A class-A vault unlocks 48 blocks after its mint on regtest (classes A 48–96, B 97–144,
-C 145–240 blocks). To redeem: mint, `mine 48`, select the vault on the Vaults page, Redeem.
-To see Sweep: mine untagged blocks on node 0 until fewer than half of a window signal and the
-enforcement halt has held for `abandonBlocks` (128) — the banner then says "abandoned" and every
-ACTIVE row offers Sweep. The wallet QTest's devnet cases do the same through the RPC.
+A class-A vault unlocks 48 blocks after its mint on regtest. To redeem: mint, `mine 48`, select
+the vault on the Vaults page, Redeem. To see a claim: mint, crash the price
+(`price --shock=-70%`, then mine), claim the vault on the Claim page; the claim waits
+`CLAIM_DELAY` (10 blocks on regtest) on the Pending claims page, where an attestor's wallet can
+cancel it and anyone can release it afterwards. The wallet QTest's devnet cases do the same.
 
 ## Attaching the GUI to a regtest playground node (plan H2)
 
@@ -328,8 +330,9 @@ Risks of an embedded 6.20.0 node:
   reindex each way. Verified on regtest with both binaries. The wallet now warns first (below).
 
 - **`ycash.conf` differences.** `fastsync` is `ibdskiptxverification` on 6.20.0 (handled, see the
-  table above); the Yellowback keys (`experimentalfeatures`, `yellowback`, and on regtest
-  `yellowbackstartheight`) are the same on both lines. 6.20.0 keeps every zcashd-deprecated RPC the
+  table above); Yellowback needs no `ycash.conf` key on either line: it is on wherever
+  the vault upgrade and the YED attestor set are configured (on regtest `nuparams=6d5b7a31:<h>`
+  and `yellowbackattestorset=<setid>`, the same keys on both lines). 6.20.0 keeps every zcashd-deprecated RPC the
   wallet calls enabled by default (`ref/ycash6/src/deprecation.h`, `DEFAULT_DENY_DEPRECATED` empty)
   and has no end-of-service height.
 - **The startup version check** (`Controller::checkForUpdate`) compares `APP_VERSION` with the
@@ -420,10 +423,11 @@ would pick the mainnet `ye` prefix. The Yellowback code therefore takes the netw
 ## Verification status of the fork
 
 The Yellowback code compiles cleanly against the system Qt 6 (`cmake --build build`, no warnings
-in the Yellowback files) and the QTest target passes under `QT_QPA_PLATFORM=offscreen`. The
-mint → send → redeem flow has been run against the v2 devnet through the QTest's devnet case and
-the GUI attached with `--conf --no-embedded`; the claim and sweep dialogs are verified offline
-against the contract's example values until the node ships `yed_claim` / `yed_sweep`.
+in the Yellowback files) and the QTest target passes under `QT_QPA_PLATFORM=offscreen`. Every
+action — mint, send, redeem, renew, claim, release, attestor cancel, heartbeat — is covered
+offline against the contract's example values, and the devnet cases run mint → send → redeem,
+mint → renew, and claim → release / claim → attestor cancel against a fresh vault-upgrade devnet
+(105 offline and 4 devnet cases green); the GUI attaches with `--conf --no-embedded`.
 
 ## Conventions
 
@@ -440,11 +444,11 @@ against the contract's example values until the node ships `yed_claim` / `yed_sw
 
 | File | What |
 |---|---|
-| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier and displayed protocol constant; `RPC_VERSION = 2`; `tests/check-rpc-contract.py` parses its `// contract:` markers |
+| `src/yellowbackrpc.h` | the RPC contract: every `yed_*` method name, result field, error identifier and displayed protocol constant; `RPC_VERSION = 5`; `tests/check-rpc-contract.py` parses its `// contract:` markers |
 | `docs/yellowback-rpc-contract.json` | generated copy of the RPC contract (plan §4.5 / `ycash-dd/doc/yellowback-rpc.md`), written by the workspace `make spec`; the `wallet` CI job checks `yellowbackrpc.h` against it from Phase 7b |
 | `src/yellowbackcontroller.{cpp,h}` | `YellowbackController`: all `yed_*` calls through `Connection::doRPCSafe`; availability (enabled, rpcversion, synced, healthy), cached info/stats/activation/balance, mint gate reasons, `classForLock`, `explainError`, `parseChangeFloor`, `setTransport` (the test's fake Connection). Driven from `Controller::setConnection`, the block-changed branch of `Controller::getInfoThenRefresh`, and `Controller::watchTxStatus` |
 | `src/yellowbackmodels.{cpp,h}` | `YellowbackPosition` / `YellowbackClaimable` / `YellowbackTx` records, tolerant JSON readers, formatting helpers, the positions, claimable and transactions table models |
-| `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,transactions,redeem,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its nine sub-pages; the five action flows and their confirmation dialogs (`confirmFn`/`noticeFn` for the test) |
+| `src/yellowbacktab.{cpp,h,ui}` + `src/yellowback{overview,receive,send,mint,positions,claim,transactions,redeem,attestors,settings}.ui` | the Yellowback tab (index 4 of the main tab bar, after Transactions) and its eleven sub-pages (Overview, Receive, Send, Mint, Vaults, Claim, Pending claims, Transactions, Redeem, Attestors, Settings); the action flows and their confirmation dialogs (`confirmFn`/`noticeFn` for the test) |
 | `src/vaultrpc.h` | rpcversion 5: the vault primitive RPCs the wallet calls (`set_getinfo`, `set_heartbeat`, `vault_release`, `vault_buildcancel`, `set_signcancel`, `vault_send`, `vault_getinfo`) |
 | `src/connection.{cpp,h}` | rpcversion 5: `createZcashConf` no longer writes `experimentalfeatures=1` / `yellowback=1` and the conf repair is gone (no flag gates YED) |
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
