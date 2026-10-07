@@ -81,7 +81,7 @@ persistently about the vault (a VOID one: release). Several such vaults share on
 with each vault's warning in its tooltip. The banner area carries only warnings: the "consensus
 rules since height N" line shows only while the upgrade is pending (once active, the Overview's
 Rules row says it), and information lines (locked YED outputs, the node's own quote) sit at the
-foot of the Overview, which scrolls rather than squeezing its rows. The trust statement is behind
+foot of the Overview. Every page scrolls rather than squeezing its rows. The trust statement is behind
 the ⓘ button at the right of the sub-tabs and in Help > About.
 
 **Plausibility.** Before any confirmation the wallet recomputes from `yed_getinfo.params` the pool

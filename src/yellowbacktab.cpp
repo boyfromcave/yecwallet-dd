@@ -22,6 +22,7 @@
 
 #include <QSignalBlocker>
 #include <QScrollArea>
+#include <QFormLayout>
 #include <QToolButton>
 #include "ui_yellowbackpositions.h"
 #include "ui_yellowbackclaim.h"
@@ -31,6 +32,7 @@
 #include "ui_yellowbackattestors.h"
 
 using json = nlohmann::json;
+
 
 YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent) {
     this->main = main;
@@ -107,15 +109,8 @@ void YellowbackTab::setupPages() {
     // "ARMED — mints and claims use attested prices") were clipped to one line beside their
     // labels on the owner's first walk-through: let such a field take the full width under its
     // label, and let the label grow with its text.
-    for (QFormLayout* form : { uiOverview->balanceForm, uiOverview->systemForm, uiMint->mintForm })
-        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    for (QLabel* grows : { uiOverview->lblActivation, uiOverview->lblEnforcement, uiOverview->lblAttestation, uiOverview->lblMintStatus, uiMint->lblSource, uiMint->lblSelection }) {
+    for (QLabel* grows : { uiOverview->lblActivation, uiOverview->lblEnforcement, uiOverview->lblAttestation, uiOverview->lblMintStatus, uiMint->lblSource, uiMint->lblSelection })
         grows->setWordWrap(true);
-        grows->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        // A word-wrapped label's minimum height is near zero, so when a page is short of room it is
-        // the one widget the layout collapses -- to 8 px on the owner's screen. Two lines is the floor.
-        grows->setMinimumHeight(grows->fontMetrics().lineSpacing() * 2 + 4);
-    }
     uiPositions = new Ui::YellowbackPositions();    uiPositions->setupUi(pages[Vaults]);
     uiClaim     = new Ui::YellowbackClaim();        uiClaim->setupUi(pages[Claim]);
     uiTx        = new Ui::YellowbackTransactions(); uiTx->setupUi(pages[Transactions]);
@@ -123,25 +118,20 @@ void YellowbackTab::setupPages() {
     uiSettings  = new Ui::YellowbackSettings();     uiSettings->setupUi(pages[Settings]);
     uiAttestors = new Ui::YellowbackAttestors();    uiAttestors->setupUi(pages[Attestors]);
 
-    // The Overview scrolls rather than squeezing its rows on top of each other when the window is
-    // short (the owner's walk-through: the system column and the recent table were unreadable)
-    auto* overviewScroll = new QScrollArea(this);
-    overviewScroll->setWidgetResizable(true);
-    overviewScroll->setFrameShape(QFrame::NoFrame);
-    overviewScroll->setWidget(pages[Overview]);
+    // Every page scrolls rather than squeezing its rows on top of each other, or stretching the
+    // window, when it is taller than the window (the owner's walk-through: the Overview's system
+    // column and recent table, the Settings subscriber status). page() still names the page itself.
     uiOverview->tblRecent->setMinimumHeight(uiOverview->tblRecent->verticalHeader()->defaultSectionSize() * 5 +
                                             uiOverview->tblRecent->horizontalHeader()->sizeHint().height() + 4);
-    ui->subTabs->addTab(overviewScroll,      tr("Overview"));
-    ui->subTabs->addTab(pages[Receive],      tr("Receive"));
-    ui->subTabs->addTab(pages[Send],         tr("Send"));
-    ui->subTabs->addTab(pages[Mint],         tr("Mint"));
-    ui->subTabs->addTab(pages[Vaults],       tr("Vaults"));
-    ui->subTabs->addTab(pages[Claim],        tr("Claim"));
-    ui->subTabs->addTab(pages[PendingClaims], tr("Pending claims"));
-    ui->subTabs->addTab(pages[Transactions], tr("Transactions"));
-    ui->subTabs->addTab(pages[Redeem],       tr("Redeem"));
-    ui->subTabs->addTab(pages[Attestors],    tr("Attestors"));
-    ui->subTabs->addTab(pages[Settings],     tr("Settings"));
+    const QString titles[PageCount] = { tr("Overview"), tr("Receive"), tr("Send"), tr("Mint"), tr("Vaults"), tr("Claim"),
+                                        tr("Pending claims"), tr("Transactions"), tr("Redeem"), tr("Attestors"), tr("Settings") };
+    for (int i = 0; i < PageCount; i++) {
+        auto* scroll = new QScrollArea(this);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(pages[i]);
+        ui->subTabs->addTab(scroll, titles[i]);
+    }
     // What Yellowback is and what it promises: behind an info button, not on every page (and in Help > About)
     auto* info = new QToolButton(ui->subTabs);
     info->setObjectName("btnAboutYellowback");
@@ -162,6 +152,20 @@ void YellowbackTab::setupPages() {
     setupAttestors();
     setupPendingClaims();
     setupSettings();
+
+    // Every wrapped value in a form takes the field's full width (a path or a status sentence
+    // wrapped at a third of the page otherwise); the page's scroll area gives it the height
+    for (QFormLayout* form : findChildren<QFormLayout*>()) {
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);   // macOS's default keeps every field at its size hint
+        for (int r = 0; r < form->rowCount(); r++) {
+            QLayoutItem* item = form->itemAt(r, QFormLayout::FieldRole);
+            if (auto* l = item != nullptr ? qobject_cast<QLabel*>(item->widget()) : nullptr; l != nullptr && l->wordWrap())
+            {
+                l->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+                l->setAlignment(Qt::AlignLeft | Qt::AlignTop);   // level with its row label, whatever height the form gives it
+            }
+        }
+    }
 
     // Backup nag
     QObject::connect(ui->btnBackupNow, &QPushButton::clicked, [=, this]() {

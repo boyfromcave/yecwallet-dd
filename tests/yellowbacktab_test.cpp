@@ -20,6 +20,7 @@
 // runs only the offline cases.
 
 #include <QToolButton>
+#include <QScrollArea>
 #include <QtTest>
 #include <QStackedWidget>
 #include <QLayout>
@@ -1428,7 +1429,7 @@ private slots:
         json tx = txMint(); tx["type"] = "claim"; tx["txid"] = CLAIM_TXID; tx["burned"] = 100000; tx["height"] = 405;
         h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({tx}));
         h.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(false));
-        QCOMPARE(h.tab.page(YellowbackTab::PendingClaims), h.tab.findChild<QTabWidget*>("subTabs")->widget(YellowbackTab::PendingClaims));
+        QCOMPARE(h.tab.page(YellowbackTab::PendingClaims), qobject_cast<QScrollArea*>(h.tab.findChild<QTabWidget*>("subTabs")->widget(YellowbackTab::PendingClaims))->widget());
         QCOMPARE(h.tab.findChild<QTabWidget*>("subTabs")->tabText(YellowbackTab::PendingClaims), QString("Pending claims"));
         auto m = h.ctl.pendingClaimsModel();
         QCOMPARE(m->rowCount(QModelIndex()), 2);
