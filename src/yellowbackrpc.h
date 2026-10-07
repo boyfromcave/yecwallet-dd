@@ -143,7 +143,7 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* FEE_MIN_ZAT         = "feeMinZat";       // FEE-1's floor; H-9.3 recomputes the fee from it
     constexpr const char* FEE_BPS             = "feeBps";
     constexpr const char* TOKEN_VALUE_ZAT     = "tokenValueZat";
-    constexpr const char* FEE_ZAT             = "feeZat";       // the network fee, not the enforcement fee
+    constexpr const char* FEE_ZAT             = "feeZat";       // the network fee, not the pool fee
     constexpr const char* WINDOWS             = "windows";
     constexpr const char* MIN_FILL            = "minFill";
     constexpr const char* CLASSES             = "classes";

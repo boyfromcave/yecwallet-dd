@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblPositionsIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>One row per vault you own. Redeeming an ACTIVE vault at or past its lock height burns exactly the YED it minted and pays an enforcement fee to a quoting pool; Renew redeems it and mints the same YED again in a new vault. "Claimable" means the vault is past its claim height and underwater, so anyone may burn its debt and claim the collateral; a CLAIMING vault is under such a claim, which is released to the claimant after the claim delay unless a member of the attestor set cancels it. A VOID vault (recorded before the vault upgrade) created no YED: release its collateral with no burn and no fee.</string></property>
+     <property name="text"><string>One row per vault you own. Redeeming an ACTIVE vault at or past its lock height burns exactly the YED it minted and pays a pool fee to a quoting pool; Renew redeems it and mints the same YED again in a new vault. "Claimable" means the vault is past its claim height and underwater, so anyone may burn its debt and claim the collateral; a CLAIMING vault is under such a claim, which is released to the claimant after the claim delay unless a member of the attestor set cancels it. A VOID vault (recorded before the vault upgrade) created no YED: release its collateral with no burn and no fee.</string></property>
     </widget>
    </item>
    <item>

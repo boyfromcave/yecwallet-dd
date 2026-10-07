@@ -509,7 +509,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                     return tr("Being claimed: someone burned %1 of YED and moved the collateral into a claim intent. "
                               "It is released to them after the claim delay unless a member of the attestor set cancels it as a wrong-price claim, "
                               "which returns the collateral to this vault (ACTIVE again).").arg(YellowbackFormat::cents(p.mintedCents));
-                return tr("Active: %1 of YED are backed by this vault. Releasing the collateral burns exactly that debt and pays an enforcement fee to a quoting pool.")
+                return tr("Active: %1 of YED are backed by this vault. Releasing the collateral burns exactly that debt and pays a pool fee to a quoting pool.")
                           .arg(YellowbackFormat::cents(p.mintedCents));
             case Claimable:
                 return p.underwaterAt >= 0
@@ -536,7 +536,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                           "the claim is released to them after the claim delay unless an attestor cancels it.");
             case Vault:
                 return QString(p.vaultName() % "\n" % tr("Owner: ") % p.ownerAddress % "\n" % tr("Owner key: ") % p.ownerKeyId %
-                               "\n" % tr("Minted at height %1 (reference height %2), enforcement fee paid %3")
+                               "\n" % tr("Minted at height %1 (reference height %2), pool fee paid %3")
                                    .arg(p.mintHeight).arg(p.refHeight).arg(YellowbackFormat::zec(p.feePaidZat)));
         }
     }
@@ -617,7 +617,7 @@ QVariant YellowbackClaimableModel::data(const QModelIndex& index, int role) cons
             case Burn:
                 return tr("A claim must burn exactly the vault's debt (its minted YED) from your own YED.");
             case Fee:
-                return tr("The enforcement fee, paid from your own YEC (not from the collateral) to a pool that published a price quote recently.");
+                return tr("The claim's pool fee, paid from your own YEC (not from the collateral) to a pool that published a price quote recently; any attestation fee and the network fee come from your YEC too.");
             case UnderwaterAt:
                 return tr("The claim price below which this vault is underwater. It is claimable while the current claim price is below it.");
             default:
@@ -941,7 +941,7 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
                     .arg(YellowbackFormat::cents(t.yedIn)).arg(YellowbackFormat::cents(t.yedOut));
         switch (index.column()) {
             case Amount:
-                return tr("YED in: %1, out: %2, burned: %3; enforcement fee %4%5")
+                return tr("YED in: %1, out: %2, burned: %3; pool fee %4%5")
                         .arg(YellowbackFormat::cents(t.yedIn)).arg(YellowbackFormat::cents(t.yedOut))
                         .arg(YellowbackFormat::cents(t.burned)).arg(YellowbackFormat::zec(t.feeZat))
                         .arg(t.payee.isEmpty() ? QString() : tr(" to %1").arg(t.payee));

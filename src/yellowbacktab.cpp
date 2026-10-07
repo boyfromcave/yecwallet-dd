@@ -654,7 +654,7 @@ void YellowbackTab::doSend() {
 // ── Mint ──────────────────────────────────────────────────────────────────────────────────
 // The page derives the class from the lock length and shows yed_estimatecollateral as the user
 // types; Mint is enabled only for an estimate that matches the current input and passes the
-// MINTPOL-1 gate. The confirmation adds the enforcement fee and payee (yed_getfeepayee) and
+// MINTPOL-1 gate. The confirmation adds the pool fee and payee (yed_getfeepayee) and
 // then makes the one yed_mint call (§4.8 Mint row).
 
 void YellowbackTab::setupMint() {
@@ -970,7 +970,7 @@ void YellowbackTab::doMint() {
                     });
             };
 
-            // The enforcement fee and its payee (FEE-1, FEE-W) for this collateral at the
+            // The pool fee and its payee (FEE-1, FEE-W) for this collateral at the
             // reference height; under FEE-0 the node refuses with fee-no-eligible-payee and the
             // mint carries no fee output.
             ctl->getFeePayee(refHeight, collateral,
@@ -984,18 +984,18 @@ void YellowbackTab::doMint() {
                     if (YellowbackJson::toInt(f, FeePayee::FEE_ZAT) != fee) {
                         updateMintGate();
                         uiMint->lblMintPageStatus->setText(tr("Not sent: the node's fee failed the wallet's check."));
-                        notice(tr("Mint not sent"), implausibleText(tr("mint"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                        notice(tr("Mint not sent"), implausibleText(tr("mint"), { tr("the pool fee is %1 where FEE-1 of the collateral %2 gives %3")
                             .arg(YellowbackFormat::zec(YellowbackJson::toInt(f, FeePayee::FEE_ZAT))).arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(fee)) }), true);
                         return;
                     }
-                    ask(tr("Enforcement fee: %1 of YEC, paid from the collateral to the pool %2 (a pool that published a price quote in the 100 blocks up to the reference height).")
+                    ask(tr("Pool fee: %1 of YEC, paid from your own YEC on top of the collateral (as are any attestation fee and the network fee) to the pool %2 (a pool that published a price quote in the 100 blocks up to the reference height).")
                             .arg(YellowbackFormat::zec(fee)).arg(payee));
                 },
                 [=, this](const QString& e) {
                     if (e.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive))
-                        ask(tr("Enforcement fee: none (no pool published a price quote in the payee window, so the mint carries no fee output)."));
+                        ask(tr("Pool fee: none (no pool published a price quote in the payee window, so the mint carries no fee output)."));
                     else
-                        ask(tr("Enforcement fee: could not be estimated (%1); the node reports the fee it pays after the mint.").arg(e));
+                        ask(tr("Pool fee: could not be estimated (%1); the node reports the fee it pays after the mint.").arg(e));
                 });
         },
         [=, this](const QString& e) {
@@ -1028,7 +1028,7 @@ QString YellowbackTab::mintSummary(qint64 cents, const json& r, qint64 confirmed
     else
         out += "\n" % tr("vault %1:0").arg(txid);
     QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, MintResult::PAYEE);
-    out += "\n" % tr("enforcement fee %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee);
+    out += "\n" % tr("pool fee %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee);
     if (YellowbackJson::has(r, MintResult::FUNDED_FROM))
         out += "\n" % tr("funded from %1").arg(YellowbackJson::toStr(r, MintResult::FUNDED_FROM));
     // v3: the price the mint was sized at and which source bound it
@@ -1060,7 +1060,7 @@ QString YellowbackTab::claimSummary(const json& r) const {
     qint64 burned = YellowbackJson::has(r, RedeemResult::BURNED_CENTS) ? YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)
                                                                         : YellowbackJson::toInt(r, TxInfo::BURNED);
     QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
-    QString out = tr("txid %1\nYED burned: %2%3\nenforcement fee: %4 to %5")
+    QString out = tr("txid %1\nYED burned: %2%3\npool fee: %4 to %5")
         .arg(YellowbackJson::toStr(r, RedeemResult::TXID)).arg(YellowbackFormat::cents(burned)).arg(extraBurnLine(r))
         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee);
     // rpcversion 5 (U-23): the collateral sits in a claimant intent until CLAIM_DELAY has passed
@@ -1126,7 +1126,7 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
             a.redeem = true;
             a.renew  = true;
             a.text += (a.text.isEmpty() ? QString() : QString(" ")) %
-                      tr("Redeem burns %1 of your YED and pays an enforcement fee from the collateral; the rest returns to you.")
+                      tr("Redeem burns %1 of your YED and pays a pool fee from the collateral; the rest returns to you.")
                           .arg(YellowbackFormat::cents(p.mintedCents));
             a.text += " " % tr("Renew redeems it and mints %1 again in a new vault, in one confirmation.").arg(YellowbackFormat::cents(p.mintedCents));
             a.text += " " % tr("Claim height %1 (~%2): act before it.").arg(p.claimHeight).arg(claimDate);
@@ -1165,7 +1165,7 @@ void YellowbackTab::setupPositions() {
     uiPositions->btnRenew->setEnabled(false);
     uiPositions->btnRenew->setToolTip(tr("Redeem the vault and mint its YED again in a new vault with a fresh lock and claim height: one confirmation, two transactions (yed_redeem, then yed_mint)."));
     uiPositions->btnRelease->setToolTip(tr("Return a VOID vault's collateral: no YED burned, no fee (yed_redeem)."));
-    uiPositions->btnRedeem->setToolTip(tr("Burn the vault's YED and take the collateral back, minus the enforcement fee (yed_redeem)."));
+    uiPositions->btnRedeem->setToolTip(tr("Burn the vault's YED and take the collateral back, minus the pool fee (yed_redeem)."));
     uiPositions->btnNotice->setEnabled(false);
     uiPositions->btnNotice->setToolTip(tr("Post a claim notice against a vault below the emergency ratio under the attested prices (yed_claimnotice). Anyone may; it costs the carrier and a network fee, no YED."));
 
@@ -1286,7 +1286,7 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             [=, this](const json& r) {
                 QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
                 notice(tr("%1 sent").arg(what),
-                    tr("txid %1\nYED burned: %2%7\nenforcement fee: %3 to %4\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
+                    tr("txid %1\nYED burned: %2%7\npool fee: %3 to %4\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
                         .arg(YellowbackJson::toStr(r, RedeemResult::TXID))
                         .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)))
                         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee)
@@ -1327,17 +1327,17 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             // H-9.3: FEE-1 recomputed locally (the node pays exactly FEE-1; a different figure is a bad reply)
             const qint64 local = YellowbackController::feeZatFor(ctl->params(), p.collateralZat);
             if (fee != local) {
-                notice(tr("Redeem not sent"), implausibleText(tr("redemption"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                notice(tr("Redeem not sent"), implausibleText(tr("redemption"), { tr("the pool fee is %1 where FEE-1 of the collateral %2 gives %3")
                     .arg(YellowbackFormat::zec(fee)).arg(YellowbackFormat::zec(p.collateralZat)).arg(YellowbackFormat::zec(local)) }), true);
                 return;
             }
-            ask(fee, tr("Enforcement fee: %1 of YEC from the collateral to the pool %2.").arg(YellowbackFormat::zec(fee)).arg(payee));
+            ask(fee, tr("Pool fee: %1 of YEC from the collateral to the pool %2.").arg(YellowbackFormat::zec(fee)).arg(payee));
         },
         [=, this](const QString& e) {
             if (e.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive))
-                ask(0, tr("Enforcement fee: none (no pool published a price quote in the payee window)."));
+                ask(0, tr("Pool fee: none (no pool published a price quote in the payee window)."));
             else
-                ask(0, tr("Enforcement fee: could not be estimated (%1); the node reports it after the redemption.").arg(e));
+                ask(0, tr("Pool fee: could not be estimated (%1); the node reports it after the redemption.").arg(e));
         });
 }
 
@@ -1393,7 +1393,7 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
                                         "2. Mint, once the redeem is mined: %2 of YED against %6 (at most %7; the node refuses the mint if the price moves further), "
                                         "lock %8 blocks (class %9). Lock height about %10 (~%11), claim height about %12 (~%13). "
                                         "Collateral ratio %14 at a mint price of %15 per YEC. The new vault is funded from your transparent YEC, "
-                                        "which the redeem pays back into, and pays its own enforcement fee.\n\n"
+                                        "which the redeem pays back into, and pays its own pool fee.\n\n"
                                         "These are two transactions. If the mint cannot be built when the redeem confirms (minting paused, or the price moved past the cap), "
                                         "the vault stays redeemed, nothing else is sent, and the wallet tells you. "
                                         "Back up wallet.dat after the renewal: the new vault's key exists only there.")
@@ -1425,15 +1425,15 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
                     const qint64 fee = YellowbackJson::toInt(f, FeePayee::FEE_ZAT);
                     const qint64 local = YellowbackController::feeZatFor(ctl->params(), p.collateralZat);
                     if (fee != local) {
-                        notice(tr("Renew not sent"), implausibleText(tr("renewal's redemption"), { tr("the enforcement fee is %1 where FEE-1 of the collateral %2 gives %3")
+                        notice(tr("Renew not sent"), implausibleText(tr("renewal's redemption"), { tr("the pool fee is %1 where FEE-1 of the collateral %2 gives %3")
                             .arg(YellowbackFormat::zec(fee)).arg(YellowbackFormat::zec(p.collateralZat)).arg(YellowbackFormat::zec(local)) }), true);
                         return;
                     }
-                    ask(fee, tr("Enforcement fee: %1 from the collateral.").arg(YellowbackFormat::zec(fee)));
+                    ask(fee, tr("Pool fee: %1 from the collateral.").arg(YellowbackFormat::zec(fee)));
                 },
                 [=, this](const QString& err) {
-                    if (err.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive)) ask(0, tr("Enforcement fee: none (no pool published a price quote in the payee window)."));
-                    else ask(0, tr("Enforcement fee: could not be estimated (%1).").arg(err));
+                    if (err.startsWith(Errors::FEE_NO_ELIGIBLE_PAYEE, Qt::CaseInsensitive)) ask(0, tr("Pool fee: none (no pool published a price quote in the payee window)."));
+                    else ask(0, tr("Pool fee: could not be estimated (%1).").arg(err));
                 });
         },
         [=, this](const QString& err) { failed("yed_estimatecollateral", err); });
@@ -1646,7 +1646,7 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
     const int delay = ctl->claimDelay();
     QString text = tr("Claim vault %1 (owner %2).\n\n"
                       "Burn: %3 of YED from this wallet (%4 confirmed), at most %14.\n"
-                      "Fees from your own YEC: the enforcement fee %5 to a pool that published a price quote%15, and the network fee.\n"
+                      "Fees from your own YEC: the pool fee %5 to a pool that published a price quote%15, and the network fee.\n"
                       "Claim intent: about %6 of YEC (collateral %7 less the owner's residual) for %8, at least %13 (the node refuses the claim if the price moves further).\n"
                       "%12\n\n"
                       "The YEC is not paid at once: it waits in a claim intent for %16 blocks, then you release it on the Pending claims page. "
@@ -2016,7 +2016,7 @@ void YellowbackTab::updateRedeemPage() {
         bool isVoid = sel->status == YellowbackRpc::Position::STATUS_VOID;
         uiRedeem->lblBurn->setText(isVoid ? tr("none (VOID vault: Release burns nothing and pays no fee)") : YellowbackFormat::cents(sel->mintedCents));
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat) %
-            (isVoid ? QString() : tr("  minus the enforcement fee")));
+            (isVoid ? QString() : tr("  minus the pool fee")));
         bool enough = isVoid || sel->mintedCents <= ctl->confirmedCents();
         uiRedeem->lblRedeemHint->setText(enough ? QString() : tr("You need %1 of confirmed YED to burn but have %2.")
                 .arg(YellowbackFormat::cents(sel->mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())));
