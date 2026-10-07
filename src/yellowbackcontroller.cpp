@@ -701,7 +701,7 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
             line += tr("next tag carries a price quote (%1 s old)").arg(YellowbackJson::toInt(miner, Miner::QUOTE_AGE_SECONDS));
         else
             line += tr("next block carries no price quote");
-        line += YellowbackJson::toBool(miner, Miner::ELIGIBLE) ? tr("; eligible for enforcement fees") : tr("; not eligible for enforcement fees");
+        line += YellowbackJson::toBool(miner, Miner::ELIGIBLE) ? tr("; eligible for pool fees") : tr("; not eligible for pool fees");
         st.notes << line;
     }
     return st;
@@ -1335,7 +1335,7 @@ QStringList YellowbackController::checkClaimable(const json& params, int indexHe
     QStringList bad;
     const qint64 fee = feeZatFor(params, c.collateralZat);
     if (c.feeZat != fee)
-        bad << tr("the enforcement fee is %1 where FEE-1 of the collateral gives %2").arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(fee));
+        bad << tr("the pool fee is %1 where FEE-1 of the collateral gives %2").arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(fee));
     const qint64 af = attestFeeZatFor(params, fee);
     if (c.attestFeeZat != 0 && c.attestFeeZat != af)
         bad << tr("the attestation fee is %1 where AFEE-1 gives %2").arg(YellowbackFormat::zec(c.attestFeeZat)).arg(YellowbackFormat::zec(af));

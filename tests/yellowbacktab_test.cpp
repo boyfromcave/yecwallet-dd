@@ -799,7 +799,7 @@ private slots:
         QVERIFY(h.visible("lblNotes"));
         QVERIFY(h.label("lblNotes").contains("smQvTmAz2ExamplePayoutAddress1111111"));
         QVERIFY(h.label("lblNotes").contains("price quote"));
-        QVERIFY(h.label("lblNotes").contains("eligible for enforcement fees"));
+        QVERIFY(h.label("lblNotes").contains("eligible for pool fees"));
         // Copy rule (§4.8, upgrade plan §10): never "trustless", and no enforcing pool is described
         QVERIFY(!h.label("lblStatus").contains("trustless", Qt::CaseInsensitive));
         QVERIFY(!h.label("lblStatus").contains("signal", Qt::CaseInsensitive));
@@ -1773,7 +1773,7 @@ private slots:
         QVERIFY2(text.contains("at most " % YellowbackFormat::zec(253768844820)), qPrintable(text));   // the cap sent (F-1)
         QVERIFY(text.contains("500.00 %"));                                  // ratio
         QVERIFY(text.contains("1.00x"));                                     // sigma
-        QVERIFY(text.contains(YellowbackFormat::zec(628140705)));            // enforcement fee: FEE-1 of the collateral (H-9.3)
+        QVERIFY(text.contains(YellowbackFormat::zec(628140705)));            // pool fee: FEE-1 of the collateral (H-9.3)
         QVERIFY(text.contains("smQvTmAz2ExamplePayoutAddress1111111"));      // payee
         QVERIFY(text.contains("height 377"));                                 // refHeight 329 + 48 (H-9.3 recomputes it)
         QVERIFY(text.contains("claim height is 401"));
@@ -1818,7 +1818,7 @@ private slots:
         h.mintAmount("1000");
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
-        QVERIFY(h.confirms[0].contains("Enforcement fee: none"));
+        QVERIFY(h.confirms[0].contains("Pool fee: none"));
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
     }
 
@@ -2042,7 +2042,7 @@ private slots:
         h.rpc.errors[YellowbackRpc::GETFEEPAYEE] = "fee-no-eligible-payee: E(R) is empty";
         h.rpc.results[YellowbackRpc::REDEEM]     = redeemReply();
         h.tab.redeemVault(YellowbackPosition::fromJson(p), "ys1exampleSaplingDestination");
-        QVERIFY(h.confirms[0].contains("Enforcement fee: none"));
+        QVERIFY(h.confirms[0].contains("Pool fee: none"));
         QVERIFY(h.confirms[0].contains("ys1exampleSaplingDestination"));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::REDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "ys1exampleSaplingDestination"}));
         // the Redeem page lists the vault and offers the default destination
@@ -2129,7 +2129,7 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Claim vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY2(h.confirms[0].contains("Fees from your own YEC: the enforcement fee " % YellowbackFormat::zec(62814070)), qPrintable(h.confirms[0]));
+        QVERIFY2(h.confirms[0].contains("Fees from your own YEC: the pool fee " % YellowbackFormat::zec(62814070)), qPrintable(h.confirms[0]));
         // rpcversion 5 (U-23): the claim intent carries the whole collateral less the residual (0 here)
         QVERIFY(h.confirms[0].contains("Claim intent: about " % YellowbackFormat::zec(25125628141)));
         QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24874371860)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
@@ -2964,7 +2964,7 @@ private slots:
         const QString& t = h.confirms[0];
         QVERIFY2(t.startsWith("Renew vault 6a1f"), qPrintable(t));
         QVERIFY(t.contains("burn $1,000.00 of YED"));
-        QVERIFY(t.contains("Enforcement fee: " % YellowbackFormat::zec(62814070)));
+        QVERIFY(t.contains("Pool fee: " % YellowbackFormat::zec(62814070)));
         QVERIFY(t.contains(YellowbackFormat::zec(VAULT_ZAT - 62814070)));
         QVERIFY(t.contains("against " % YellowbackFormat::zec(EST_ZAT)));
         QVERIFY(t.contains("at most " % YellowbackFormat::zec(253768844820)));
@@ -3137,7 +3137,7 @@ private slots:
             h.tab.doMint();
             QCOMPARE(h.confirms.size(), 0);
             QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
-            QVERIFY(h.errorNotices.value(0).contains("the enforcement fee is"));
+            QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
         }
         {   // Redeem with an inflated fee
             Harness h;
@@ -3158,7 +3158,7 @@ private slots:
             h.rpc.results[YellowbackRpc::CLAIM] = redeemReply();
             h.tab.claimVault(YellowbackClaimable::fromJson(row));
             QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), 0);
-            QVERIFY(h.errorNotices.value(0).contains("the enforcement fee is"));
+            QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
             Harness early;
             early.feedActive(400, json(nullptr), json::array({claimableRow()}));
             early.tab.claimVault(YellowbackClaimable::fromJson(claimableRow()));

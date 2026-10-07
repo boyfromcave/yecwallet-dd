@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblMintIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. Every Ycash node enforces that the collateral cannot leave the vault before its lock height; after it, releasing the collateral requires burning exactly the YED minted and paying an enforcement fee to a pool that publishes price quotes — a rule enforced by the mining pools that run the Yellowback module.</string></property>
+     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. Every upgraded Ycash node enforces, as a consensus rule of the vault upgrade, that the collateral cannot leave the vault before its lock height and that, after it, releasing the collateral requires burning exactly the YED minted. The mint's pool fee (to a pool that publishes price quotes), any attestation fee and the network fee are paid from your own YEC on top of the collateral; a redemption pays its pool fee from the collateral.</string></property>
     </widget>
    </item>
    <item>

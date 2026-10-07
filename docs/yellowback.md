@@ -38,6 +38,14 @@ mined.
 | **Register / Heartbeat / Withdraw bond / Report** (Attestors page) | this wallet's member keys of the YED attestor set (`set_getinfo`: current or dormant, last act, bond frozen) | `yed_registerattestor <bond> <lockBlocks>` (a `SET_JOIN`), `set_heartbeat`, `yed_withdrawbond`, `yed_reportequivocation` | `txid` |
 | **Release** (Vaults row, VOID) | a VOID vault (recorded before the vault upgrade; it created no YED), at or past `lockHeight` | `yed_redeem <vaultTxid>` | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
 
+**Who pays the fees** (the node's builder, `ycash-dd/src/yellowback/txbuilder.cpp` on
+`upgrade/vault`): a **mint** pays the pool fee, any attestation fee and the network fee from the
+wallet's own YEC on top of the collateral, which is locked whole (the funding covers every output
+plus the network fee); a **redemption** pays its pool fee and the network fee from the collateral
+(`collateralOut` is the vault value less the fees); a **claim** pays the pool fee, any attestation
+fee and the network fee from the claimant's own YEC, because the vault's value goes into the
+intents. The dialogs and the Claimable table's tooltip say the same.
+
 A claim of this wallet whose vault was cancelled (`yed_getvault` answers `vault-not-found`) is
 listed on Pending claims with the sentence that its burn is not refunded. Settings offers
 `yed_sweepcarriers`, which reclaims carriers whose follow-up lapsed.
@@ -410,9 +418,10 @@ mint → renew, and claim → release / claim → attestor cancel against a fres
   `ref/digibyte` files.
 - Amounts: integer cents in code; `YellowbackFormat::cents` renders them.
 - Heights: shown with an estimated date at 75 s per block, labelled as an estimate.
-- Copy: the wallet never describes Yellowback as trustless or shielded (plan §4.8, §8.1; the CI
-  grep `grep -rn 'trustless' src/`). It says "transparent" where a user might expect otherwise,
-  and states what enforcement means as §8.1 does.
+- Copy: the wallet never describes Yellowback as trustless or shielded (the CI grep
+  `grep -rn 'trustless' src/`). It says "transparent" where a user might expect otherwise, states
+  what enforcement means as the upgrade's trust statement does (consensus rules every upgraded
+  node checks), and calls the fee to a quoting pool the "pool fee".
 - Errors: node error strings are stable identifiers and are always shown verbatim.
 
 ## Where the code is
