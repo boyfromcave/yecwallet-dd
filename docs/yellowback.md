@@ -1,128 +1,103 @@
 # Yellowback in YecWallet — development notes
 
-**Status (2026-10-06, the vault upgrade, upgrade plan P6; branch `upgrade/vault`):** the wallet
-speaks `rpcversion` 5 only. Ycash Yellowback (YED) is the rule module of the Ycash vault primitive
-(`UPGRADE_VAULT`, branch ID `6d5b7a31`): its rules are consensus, so the wallet shows the upgrade's
-status (`yed_getinfo.upgrade`, `vault_getinfo`) where it showed activation, signalling and
-enforcement, and the valve, sunset, abandonment and Sweep screens are gone with the fields they read.
-No `ycash.conf` line enables Yellowback any more (the wallet writes none and offers no repair); a
-`-32601` from `yed_getinfo` means the node has no vault upgrade or no YED attestor set. The rest of
-this file describes the v2/v3 flows it grew from; where they differ, this section wins.
+YecWallet's Yellowback tab drives Ycash Yellowback (YED) on a node built from `upgrade/vault`: the
+Ycash vault upgrade (`UPGRADE_VAULT`, branch ID `6d5b7a31`), with YED as the rule module of the
+upgrade's vault primitive. The wallet speaks `rpcversion` 5 only. Yellowback's rules are
+consensus wherever the upgrade and the network's YED attestor set are configured, so the wallet
+shows the upgrade's status (`yed_getinfo.upgrade`, `vault_getinfo`) and writes no `ycash.conf`
+key for Yellowback. A `-32601` ("Method not found") from `yed_getinfo` means the node has no vault
+upgrade or no YED attestor set; the tab then says so and names the regtest flags
+(`-nuparams=6d5b7a31:<height> -yellowbackattestorset=<setid>`).
 
-- **Claims are intents (U-23).** `yed_claim` burns the debt and moves the collateral, less the
-  RED-5 residual, into a claimant intent; the fees come from the claimant's YEC, so the dialog's
-  figure and `minOutZat` floor are `collateral - residual`. A claim must pay a transparent address
-  (D-U1, refused locally). The new **Pending claims** page lists every CLAIMING vault's intents
-  (`yed_listvaults CLAIMING`; `yed_listpositions` rows lack `intents` on both node lines, so the
-  wallet merges them from there) with its release height; **Release** is `vault_release` (the
-  claimant's intent with no recipient argument; the owner's residual with the owner's P2PKH script,
-  `p2pkhScriptForKeyId(ownerKeyId)`).
-- **Cancelled claims (U-24, D-U3).** A claim of this wallet whose vault is gone (`yed_getvault`
-  answers `vault-not-found` after an attestor cancel re-created it under the cancel's txid) is
-  listed on Pending claims with the sentence that its burn is not refunded.
-- **Attestors are set members (P4-b).** The Attestors page shows this wallet's member keys of the
-  YED attestor set (`set_getinfo`: current or dormant, last act, bond frozen) and the table's
-  `lastAct` / `bondFrozen`; **Heartbeat** (`set_heartbeat`) replaces Revive; joining is
-  `yed_registerattestor` (= `set_join`, one key for hot, bond and fee, D-U4; no flags). On a node
-  whose wallet holds a current member key, Pending claims offers **Cancel wrong-price claim**
-  (`vault_buildcancel`, `set_signcancel`, `vault_send`) behind a warning naming the lost burn and
-  the equivocation risk. A signed cancel is kept (`yellowback/signedcancel/<outpoint>`) and only
-  ever re-sent: two different signed spends of one intent are a provable equivocation.
-- The primitive's RPCs are named once in `src/vaultrpc.h`; `tests/check-rpc-contract.py` learned
-  `// optional` for fields the contract marks optional and its example omits.
-- Trust text (Overview): a summary of the upgrade plan's §10 statement for Yellowback.
+The node-side contract lives in `ycash-dd/doc/yellowback-rpc.md` and `doc/vault-rpc.md`. Every
+`yed_*` method and result field this wallet depends on is listed once in `src/yellowbackrpc.h`,
+every `set_*` / `vault_*` method in `src/vaultrpc.h`. The generated RPC contract the wallet is
+checked against is `docs/yellowback-rpc-contract.json` (written by the workspace's `make spec`,
+never edited here); `tests/check-rpc-contract.py` asserts that every field `src/yellowbackrpc.h`
+reads is in it (`// optional` marks fields the contract's example omits).
 
-**Status (2026-09-10, Yellowback v2, Phase 7b-b):** the wallet talks to the miner-enforced
-Yellowback v2 node over `rpcversion 2` (`docs/plans/yellowback-v2-development-plan.md` in the
-workspace, §4.8 and Phase 7b). Phase 0 removed the federation prototype (the co-signing redemption
-wizard, the operator-endpoint settings, `yed_getroster` / `yed_submitredeem` / `yed_abortredeem`).
-Phase 7b-a bumped `RPC_VERSION` to 2 and built the node-context screens (status banner, Overview,
-Vaults, Claim list, Transactions). Phase 7b-b wired the five spending actions — Mint, Send,
-Redeem/Release, Claim, Sweep — each as one confirmation dialog and one `yed_*` call. The generated
-RPC contract this wallet is checked against is `docs/yellowback-rpc-contract.json` (written by the
-workspace's `make spec`, never edited here); `tests/check-rpc-contract.py` asserts that every field
-`src/yellowbackrpc.h` reads is in it.
-
-This file records the wallet-side baseline and the conventions the `feature/yellowback-price-attest` (v3) fork
-follows (`feature/yellowback-sf`, the superseded v2, and `feature/digidollar`, the retired prototype,
-are kept as records only, never as comparison bases). The node-side contract
-lives in `ycash-dd/doc/yellowback-rpc.md`; every RPC method and result field this wallet depends
-on is listed once in `src/yellowbackrpc.h`.
-
-## The v2 flow, screen by screen
+## The flow, screen by screen
 
 The wallet never talks to anything but the local node, and never holds key material: every
-transaction is built, checked against the enforcement rules, signed and committed by `ycashd`.
-The wallet validates what it can locally, shows one confirmation with the figures the node
-reported, makes one call, and shows the node's result.
+transaction is built, checked against the Yellowback consensus rules, signed and committed by
+`ycashd`. The wallet validates what it can locally, shows one confirmation with the figures the
+node reported, makes the call, and shows the node's result. Mints and claims are two-step: the
+node first sends a carrier, and the wallet's follow-up posts the mint or claim once the carrier is
+mined.
 
 | Action | Before the confirmation | The call | After |
 |---|---|---|---|
-| **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, MINTPOL-1 gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, cap headroom), class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`), the enforcement fee and payee from `yed_getfeepayee <refHeight> <requiredZat>` (`feeZat`, `default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none") | `yed_mint <cents> <lockBlocks> [from]` (`from` = a `ys1…` funding address, plan I2) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
+| **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, the mint gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, `mintableClasses`, cap headroom) and `yed_getinfo.mintRequiresArmed`, class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`), the pool fee and payee from `yed_getfeepayee <refHeight> <requiredZat>` (`feeZat`, `default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none") | `yed_mint <cents> <lockBlocks> [from] "" false <maxCollateralZat>` (`from` = a `ys1…` funding address) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
 | **Send** (Send page) | prefix check (`ye`/`yt`/`yr` from `yed_getinfo.network`), `s1…`/`ys…`/`z…` refused locally, amount ≥ `MIN_OUTPUT`, confirmed balance, `yed_validateaddress` (`isvalid`, `reason`) | `yed_send <address> <cents>` | `txid`, `changeCents`, `expiryHeight`; a `change-floor` refusal's two workable amounts ("send N cents … or at most M cents") are parsed into the hint |
 | **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, fee and payee from `yed_getfeepayee <tip − refLag> <collateralZat>`, destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
-| **Release** (Vaults row, VOID) | VOID at or past `lockHeight`; the dialog says no YED is burned and no fee is paid, and names `sweepBefore` (= `claimHeight`) | the same `yed_redeem <vaultTxid>` (L14) | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
-| **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED | `yed_claim <vaultTxid> [to]` | the `yed_redeem` shape |
-| **Sweep** (retired in rpcversion 5; kept here as the v2 record) (Vaults row, ACTIVE while `yed_getinfo.abandoned`) | the dialog carries `I understand this leaves YED unbacked` verbatim and names `sweepBefore` | `yed_sweep <vaultTxid> "I understand this leaves YED unbacked" [to]` (L10) | `txid`, `hex` (copied to the clipboard for submission elsewhere), `collateralOut`, `to`, `unbackedCents` |
+| **Renew** (Vaults row) | from `lockHeight`, one confirmation for both legs | `yed_redeem`, then, once `yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's lock length (or the shortest enabled one), held to the confirmed `maxCollateralZat` | a notice per leg; a mint that cannot be built (minting paused, price past the cap, the vault claimed instead) stops the renewal and sends nothing else |
+| **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED; a transparent destination | `yed_claim <vaultTxid> [to] "" false <minOutZat> <maxBurnCents>` | the debt is burned and the collateral, less the owner's residual, moves into a claimant intent that waits `CLAIM_DELAY`; the vault is CLAIMING |
+| **Notice** (Vaults row) | a vault below the emergency ratio under the attested prices; anyone may post one (it costs the carrier and a network fee, no YED) | `yed_claimnotice <vaultTxid>` | the carrier, then the notice |
+| **Release** (Pending claims) | an intent of a CLAIMING vault (`yed_listvaults CLAIMING`, merged into the vault rows) at or past its release height | `vault_release` (the claimant's intent with no recipient argument; the owner's residual with the owner's P2PKH script) | `txid`; the vault becomes CLAIMED |
+| **Cancel wrong-price claim** (Pending claims; only when this wallet holds a current member key of the YED attestor set) | a warning naming the claimant's lost burn and the equivocation risk | `vault_buildcancel`, `set_signcancel`, `vault_send` | the vault is ACTIVE again under the cancel's txid; the signed cancel is kept (`yellowback/signedcancel/<outpoint>`) and only ever re-sent, because two different signed spends of one intent are a provable equivocation |
+| **Register / Heartbeat / Withdraw bond / Report** (Attestors page) | this wallet's member keys of the YED attestor set (`set_getinfo`: current or dormant, last act, bond frozen) | `yed_registerattestor <bond> <lockBlocks>` (a `SET_JOIN`), `set_heartbeat`, `yed_withdrawbond`, `yed_reportequivocation` | `txid` |
+| **Release** (Vaults row, VOID) | a VOID vault (recorded before the vault upgrade; it created no YED), at or past `lockHeight` | `yed_redeem <vaultTxid>` | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
 
-Refresh reads `yed_getinfo`, `yed_getstats`, `yed_getactivation`, `yed_getbalance`,
-`yed_listpositions`, `yed_listclaimable` and `yed_listtransactions 200 0` on the stock
-`Controller`'s block-changed branch and after every successful action.
+A claim of this wallet whose vault was cancelled (`yed_getvault` answers `vault-not-found`) is
+listed on Pending claims with the sentence that its burn is not refunded. Settings offers
+`yed_sweepcarriers`, which reclaims carriers whose follow-up lapsed.
 
-**Mint limits (W16, W20).** The Mint gate distinguishes *paused* from *limited*.
+Refresh reads `yed_getinfo` and, when the index height moved, `yed_getstats`,
+`yed_getactivation`, `yed_getbalance`, `yed_listpositions`, `yed_listclaimable`,
+`yed_listtransactions 200 0`, `yed_getprice`, `yed_listattestors`, `yed_getselection`,
+`yed_listvaults CLAIMING`, `set_getinfo` (the attestor set), `vault_getinfo` and `yed_getvault`
+for this wallet's claims, on the stock `Controller`'s block-changed branch and after every
+successful action.
+
+**Mint limits.** The Mint gate distinguishes *paused* from *limited*.
 `yed_getstats.mintableClasses` lists the term classes that can mint now, and `mintingAllowed` is
 false whenever any halt bit is set or the supply cap is reached, so the wallet reads the two
-together. Under a lone `GLOBAL_RATIO` halt (W16) or, since plan v3 revision 4, once
-`yed_getinfo.supplyCapReached` is true with no halt bit (W20: the cap is soft above
-`params.recapRatioBps`, 500 %), or both, minting is *limited* while `mintableClasses` is
-non-empty: `YellowbackController::mintLimit()` explains which restriction applies (the supply
-in circulation, the cap and its share of issued YEC value; the global ratio and its floor), the
-Overview says "limited to class A", the cap row reads "$2,600.00 of $2,500.00 cap — class A
-only" instead of a negative headroom, and the lock lengths of the other classes are greyed out.
-`mintBlocker(cents, class)` lets a qualifying class through even when `supplyCents + cents`
-exceeds the cap, and refuses the others by name; while the cap still has room, an amount that
-would cross it is checked against the classes whose minimum ratio after the volatility
-multiplier (`baseRatioBps × sigmaMultBps / 10⁴`) reaches the floor — class A always, class B at
-≥ 1.25×. An empty `mintableClasses` (or any other halt bit) is *paused*, as before. A node from
-before W20 has no `supplyCapReached`: the cap stays a ceiling there and the wallet behaves
-exactly as it did. The abandonment banner says "about 30 days" (W21: `ABANDON_BLOCKS` = `GRACE`
-on mainnet and testnet; regtest keeps 128 blocks).
+together. Under a lone `GLOBAL_RATIO` halt, or once `yed_getinfo.supplyCapReached` is true with no
+halt bit (the cap is soft above `params.recapRatioBps`), or both, minting is *limited* while
+`mintableClasses` is non-empty: `YellowbackController::mintLimit()` explains which restriction
+applies (the supply in circulation, the cap and its share of issued YEC value; the global ratio
+and its floor), the Overview says "limited to class A", the cap row reads "$2,600.00 of $2,500.00
+cap — class A only" instead of a negative headroom, and the lock lengths of the other classes are
+greyed out. `mintBlocker(cents, class)` lets a qualifying class through even when
+`supplyCents + cents` exceeds the cap, and refuses the others by name; while the cap still has
+room, an amount that would cross it is checked against the classes whose minimum ratio after the
+volatility multiplier (`baseRatioBps × sigmaMultBps / 10⁴`) reaches the floor. An empty
+`mintableClasses` (or any other halt bit) is *paused*. With `mintRequiresArmed` and the
+attestation layer not ARMED, the Mint page and Renew are paused by name; disabled classes (empty
+term ranges) are not offered and the page says only class A can be minted; `MAX_MINT` is $2,500
+off regtest (the contract does not report it).
 
-**Hardening H5-a (rpcversion 4, 2026-10-05).** The wallet accepts `rpcversion` 4 only.
-*Deadlines (H-9.2):* every ACTIVE vault states its lock and claim heights with estimated dates
-(the table and the action line); from `lockHeight` the Vaults page offers **Renew** beside
-Redeem — one confirmation covering both legs: `yed_redeem` at once, then, when
-`yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's own lock
-length (or the shortest enabled one), funded from the transparent balance the redeem paid back
-into and held to the `maxCollateralZat` the dialog showed; a mint that cannot be built then
-(minting paused, price past the cap, the vault claimed instead) stops the renewal with a notice
-and sends nothing else. From `claimHeight − 1 day` (1,152 blocks) the banner warns persistently
-about the vault (a VOID one: release). The sunset warning of H-9.2 is dropped (upgrade plan §7).
-*Plausibility (H-9.3):* before any confirmation the wallet recomputes from `yed_getinfo.params`
-FEE-1, AFEE-1, `requiredZat` (and MINT-5's `4 · FEE_MIN` floor, which is what the vault locks
-and what `maxCollateralZat` caps), `refHeight = tip − REF_LAG` (one block of slack),
-`lockHeight = refHeight + lockBlocks`, `claimHeight = lockHeight + GRACE`, the class and its
-ratio, and refuses to send on any mismatch; `yed_claim` carries `minOutZat` and `maxBurnCents`
-(the debt plus at most the H4 sub-dollar remainder). *Mint gate (H-1, H-5):* with
-`mintRequiresArmed` and the layer not ARMED the Mint page and Renew are paused by name;
-disabled classes (empty term ranges) are not offered and the page says only class A can be
-minted; MAX_MINT is $2,500 off regtest (H-12; the contract does not report it).
+**Deadlines.** Every ACTIVE vault states its lock and claim heights with estimated dates (the
+table and the action line). From `claimHeight − 1 day` (1,152 blocks) the banner warns
+persistently about the vault (a VOID one: release).
+
+**Plausibility.** Before any confirmation the wallet recomputes from `yed_getinfo.params` the pool
+fee (FEE-1), the attestor fee (AFEE-1), `requiredZat` (and the `4 · FEE_MIN` floor, which is what
+the vault locks and what `maxCollateralZat` caps), `refHeight = tip − REF_LAG` (one block of
+slack), `lockHeight = refHeight + lockBlocks`, `claimHeight = lockHeight + GRACE`, the class and
+its ratio, and refuses to send on any mismatch; a claim's figure and `minOutZat` floor are
+`collateral − residual`, and `maxBurnCents` is the debt plus at most the sub-dollar remainder.
 
 **Errors.** Node error strings are stable identifiers and are always shown verbatim
 (`yed_x failed: <message>`); `YellowbackController::explainError` appends what the identifier
-means for `yellowback-unhealthy`, `change-floor`, `not-a-yellowback-address`, `insufficient-yed`,
-`vault-locked`, `vault-not-active`, `vault-not-owned`, `vault-not-found`, `sweep-not-abandoned`,
-`sweep-acknowledgement-missing`, `claim-not-yet`, `claim-not-underwater`, the six `mintpol-*`,
-`mint-unsatisfiable`, `mint-bad-lock`, `mempool-check-failed:<verdict>` and a locked wallet. A node
-that lacks `yed_claim` or `yed_sweep` answers JSON-RPC `-32601`; the dialog reports that the node
-does not offer the command. `yellowback-unhealthy` from any call takes the whole tab down at once.
+means for `yellowback-unhealthy`, `change-floor`, `not-a-yellowback-address`, `bad-address`,
+`insufficient-yed`, `insufficient-yec`, `vault-locked`, `vault-not-active`, `vault-not-owned`,
+`vault-not-found`, `claim-not-yet`, `claim-not-underwater`, `claim-out-below-min`,
+`claim-burn-above-max`, `collateral-above-max`, the `mintpol-*` gates (including
+`mintpol-unarmed`), `mint-unsatisfiable`, `mint-bad-lock`, `mint10-diverged`,
+`bundle-insufficient`, `bundle-malformed`, `notice-standing`, `yellowback-no-attestor-set`,
+`register-needs-admission`, `mempool-check-failed:<verdict>` and a locked wallet. A node that
+lacks a command answers JSON-RPC `-32601`; the dialog reports that the node does not offer it.
+`yellowback-unhealthy` from any call takes the whole tab down at once.
 
 **Copy.** The wallet never describes Yellowback as "trustless" (CI: `grep -rn 'trustless' src/`)
-and never mentions a federation; what enforcement means is stated as in plan §8.1 — every Ycash
-node enforces the lock height and that only the owner's key spends before the claim height; the
-mining pools running the module enforce that collateral is released only against the burn of the
-vault's debt. The Overview and every confirmation dialog are checked for this by the QTest
-(`Harness::copyIsClean`).
+and never mentions a federation. What enforcement means follows the upgrade's trust statement:
+every full node checks, as Ycash consensus rules, that the collateral cannot leave the vault
+before its lock height, that only the owner's key spends it before the claim height, and that it
+is released only against the burn of the vault's debt; after the claim height anyone may claim
+an underwater vault, after a delay in which a member of the attestor set can cancel a claim made
+at a wrong price. The QTest checks the Overview and every confirmation dialog for this
+(`Harness::copyIsClean`: no "trustless", "federat", "abandon" or "enforcing pool").
 
 ## Testing
 
