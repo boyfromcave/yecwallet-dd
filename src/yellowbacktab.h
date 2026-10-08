@@ -70,6 +70,9 @@ public:
 
     // What Yellowback is and promises (upgrade plan §10): the info button and Help > About
     static QString aboutText();
+    // rpcversion 6: the in-term claims promise, verbatim (in-term plan IT-8 = the generated spec §8.1's
+    // collateral bullet; tests/check-rpc-contract.py --spec compares the two)
+    static QString inTermPromise();
 
     // What the Vaults page says about the selected row's actions (plan §4.8 Vaults row):
     // which of Release / Redeem / Renew the row offers and why the others are not offered.
@@ -80,7 +83,9 @@ public:
         bool    renew   = false;   // H-9.2: ACTIVE at or past lockHeight (yed_redeem, then yed_mint)
         QString text;              // the sentence shown under the table
     };
-    static VaultActions vaultActions(const YellowbackPosition& p, int height);
+    // `params` (yed_getinfo.params) selects the rule set: under inTermClaims (rpcversion 6) an ACTIVE
+    // vault is redeemable at any height (canRedeem) and the text is about the threshold, priced at `pClaim`.
+    static VaultActions vaultActions(const YellowbackPosition& p, int height, const nlohmann::json& params = nlohmann::json(), qint64 pClaimMicroUsd = 0);
 
     // Modal prompts (defaults: QMessageBox / QInputDialog). The QTest replaces them to read the copy and answer.
     std::function<bool(const QString& title, const QString& text)>              confirmFn;

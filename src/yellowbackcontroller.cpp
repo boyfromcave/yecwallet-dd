@@ -177,6 +177,7 @@ void YellowbackController::applyInfo(const json& info) {
     healthy          = YellowbackJson::toBool(info, HEALTHY, false);
     if (info.is_object() && info.find(PARAMS) != info.end() && info[PARAMS].is_object())
         paramsJson = info[PARAMS];
+    positions->setRules(inTermClaims(), claimThresholdBps());
 
     if (!healthy) {
         QString why = YellowbackJson::toStr(info, UNHEALTHY_REASON, tr("unknown reason"));
@@ -1019,6 +1020,10 @@ void YellowbackController::send(const QString& addr, qint64 cents, OkFn ok, ErrF
     call(YellowbackRpc::SEND, json::array({addr.toStdString(), cents}), ok, err);
 }
 
+void YellowbackController::estimateRedeem(const QString& vaultTxid, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::ESTIMATEREDEEM, json::array({vaultTxid.toStdString()}), ok, err);
+}
+
 void YellowbackController::redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err) {
     if (to.isEmpty()) call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString()}), ok, err);
     else              call(YellowbackRpc::REDEEM, json::array({vaultTxid.toStdString(), to.toStdString()}), ok, err);
@@ -1343,9 +1348,83 @@ QStringList YellowbackController::checkClaimable(const json& params, int indexHe
     // residual; the fees come from the claimant's own YEC, not from the collateral
     if (c.residualZat < 0 || c.collateralZat - c.residualZat <= 0)
         bad << tr("the residual %1 leaves nothing of the collateral %2 for the claimant").arg(YellowbackFormat::zec(c.residualZat)).arg(YellowbackFormat::zec(c.collateralZat));
-    if (indexHeight < c.claimHeight)
+    // rpcversion 6 (IT-2): under in-term claims the threshold decides at every height, not the claim height
+    if (!YellowbackJson::toBool(params, YellowbackRpc::Params::IN_TERM_CLAIMS) && indexHeight < c.claimHeight)
         bad << tr("the claim height %1 is not reached (the chain is at %2)").arg(c.claimHeight).arg(indexHeight);
     return bad;
+}
+
+// ── rpcversion 6: in-term claims ──────────────────────────────────────────────────────────
+
+bool YellowbackController::inTermClaims() const {
+    return YellowbackJson::toBool(paramsJson, YellowbackRpc::Params::IN_TERM_CLAIMS);
+}
+
+qint64 YellowbackController::claimThresholdBps() const {
+    return YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::CLAIM_THRESHOLD_BPS, 11000);
+}
+
+qint64 YellowbackController::claimPriceNow() const {
+    return YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM);
+}
+
+qint64 YellowbackController::earlyRedeemFeeBpsFor(const json& params, const QString& termClass) {
+    using namespace YellowbackRpc;
+    // the per-class row's value; the top-level array (A, B, C) when the row lacks it
+    if (params.is_object() && params.find(Params::CLASSES) != params.end() && params[Params::CLASSES].is_array())
+        for (auto& c : params[Params::CLASSES])
+            if (YellowbackJson::toStr(c, ParamClass::CLASS) == termClass && YellowbackJson::has(c, ParamClass::EARLY_REDEEM_FEE_BPS))
+                return YellowbackJson::toInt(c, ParamClass::EARLY_REDEEM_FEE_BPS);
+    const int idx = termClass == "A" ? 0 : termClass == "B" ? 1 : termClass == "C" ? 2 : -1;
+    if (idx >= 0 && params.is_object() && params.find(Params::EARLY_REDEEM_FEE_BPS) != params.end()) {
+        const json& a = params[Params::EARLY_REDEEM_FEE_BPS];
+        if (a.is_array() && (int)a.size() > idx && a[idx].is_number_integer()) return a[idx].get<qint64>();
+    }
+    return 0;
+}
+
+qint64 YellowbackController::earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 collateralZat) {
+    const qint64 bps = earlyRedeemFeeBpsFor(params, termClass);
+    if (collateralZat <= 0 || bps <= 0) return 0;
+    return (qint64)((__int128)collateralZat * bps / 10000);
+}
+
+QStringList YellowbackController::checkEstimateRedeem(const json& params, const YellowbackPosition& p, const json& e) {
+    using namespace YellowbackRpc;
+    QStringList bad;
+    auto mismatch = [&](const QString& what, qint64 node, qint64 local) {
+        if (node != local) bad << tr("%1 is %2 where the vault and the parameters give %3").arg(what).arg(node).arg(local);
+    };
+    if (YellowbackJson::toStr(e, EstimateRedeem::VAULT) != p.vaultName())
+        bad << tr("the quote is for vault %1, not %2").arg(YellowbackJson::toStr(e, EstimateRedeem::VAULT)).arg(p.vaultName());
+    if (p.status != Position::STATUS_ACTIVE) return bad;   // a VOID release burns and pays nothing
+    mismatch(tr("burnedCents"), YellowbackJson::toInt(e, EstimateRedeem::BURNED_CENTS, -1), p.mintedCents);
+    mismatch(tr("collateralZat"), YellowbackJson::toInt(e, EstimateRedeem::COLLATERAL_ZAT, -1), p.collateralZat);
+    const qint64 height = YellowbackJson::toInt(e, EstimateRedeem::HEIGHT, -1);
+    const bool early = height >= 0 && height < p.lockHeight;
+    if (YellowbackJson::toBool(e, EstimateRedeem::EARLY) != early)
+        bad << tr("early is %1 for height %2 and lock height %3").arg(YellowbackJson::toBool(e, EstimateRedeem::EARLY) ? "true" : "false").arg(height).arg(p.lockHeight);
+    mismatch(tr("earlyRedeemFeeBps"), YellowbackJson::toInt(e, EstimateRedeem::EARLY_REDEEM_FEE_BPS, -1), earlyRedeemFeeBpsFor(params, p.termClass));
+    const qint64 fee = YellowbackJson::toInt(e, EstimateRedeem::FEE_ZAT, -1);
+    const qint64 earlyFee = YellowbackJson::toInt(e, EstimateRedeem::EARLY_REDEEM_FEE_ZAT, -1);
+    if (fee == 0 && earlyFee == 0) return bad;              // FEE-0: no pool eligible, no fee output at all
+    const qint64 localEarly = early ? earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat) : 0;
+    mismatch(tr("earlyRedeemFeeZat"), earlyFee, localEarly);
+    mismatch(tr("feeZat"), fee, feeZatFor(params, p.collateralZat) + localEarly);
+    return bad;
+}
+
+QString YellowbackController::thresholdWarning(const YellowbackPosition& p, qint64 pClaimMicroUsd) {
+    using namespace YellowbackRpc::Position;
+    if (p.status != STATUS_ACTIVE) return QString();
+    const QString vault = p.txid.left(12) % "…";
+    if (p.claimable)
+        return tr("Vault %1 is claimable now: its collateral is below the claim threshold at the claim price, so anyone may close it by paying its debt, "
+                  "and you would then usually receive nothing back. Redeem it now to stop that.").arg(vault);
+    if (YellowbackPositionsModel::nearThreshold(p, pClaimMicroUsd))
+        return tr("Vault %1 becomes claimable if the claim price falls below %2 (it is %3 now): redeem it, or be ready to, before that happens.")
+            .arg(vault).arg(YellowbackFormat::price(p.underwaterAt)).arg(YellowbackFormat::price(pClaimMicroUsd));
+    return QString();
 }
 
 QStringList YellowbackController::checkVaultHeights(const json& params, const YellowbackPosition& p) {
@@ -1393,7 +1472,9 @@ QStringList YellowbackController::deadlineWarnings() const {
     for (int i = 0; ; i++) {
         const YellowbackPosition* p = positions->positionAt(i);
         if (p == nullptr) break;
-        QString w = deadlineWarning(*p, indexHeight);
+        // rpcversion 6: under in-term claims an ACTIVE vault's danger is the threshold, not the claim height
+        QString w = inTermClaims() && p->status == YellowbackRpc::Position::STATUS_ACTIVE
+            ? thresholdWarning(*p, claimPriceNow()) : deadlineWarning(*p, indexHeight);
         if (!w.isEmpty()) out << w;
     }
     return out;

@@ -7,7 +7,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 5), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 6, the in-term claims line), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -30,8 +30,11 @@ namespace YellowbackRpc {
 // The rpcversion this build of the wallet understands. yed_getinfo.rpcversion must equal it
 // (bumped to 2 in Phase 7b-a's first commit, N27; to 3 in v3 Phase A5's first commit; to 4 with
 // the hardening H-9.3 client bounds, yed_claim's maxBurnCents, H5-a; to 5 with the vault upgrade,
-// upgrade plan §15.10: the enforcement machinery, the sweep and VOID are gone, a claim is an intent).
-constexpr int RPC_VERSION = 5;
+// upgrade plan §15.10: the enforcement machinery, the sweep and VOID are gone, a claim is an intent;
+// to 6 with in-term claims, docs/plans/yellowback-in-term-claims-plan.md §4.1 in the workspace: a
+// vault is claimable in term once under the claim threshold, the owner redeems at any height and pays
+// an early-redeem fee before lockHeight, yed_listclaimable lists in-term rows with `claimable`).
+constexpr int RPC_VERSION = 6;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -58,6 +61,7 @@ constexpr const char* REDEEM              = "yed_redeem";
 constexpr const char* CLAIM               = "yed_claim";
 constexpr const char* LISTPOSITIONS       = "yed_listpositions";
 constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
+constexpr const char* ESTIMATEREDEEM      = "yed_estimateredeem";    // rpcversion 6 (IT-9): the redeem quote the dialog shows first
 // v3 (plan §4.8, A5-b): the two-step notice, the carrier sweep and the attestor actions
 constexpr const char* CLAIMNOTICE         = "yed_claimnotice";        // step 1 of the emergency claim (NOT-1)
 constexpr const char* SWEEPCARRIERS       = "yed_sweepcarriers";      // reclaim lapsed carriers (W7)
@@ -151,6 +155,11 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* RECAP_RATIO_BPS     = "recapRatioBps";         // v3 W16: the class minimum that mints through a halt
     constexpr const char* POLICY              = "policy";
     constexpr const char* ATTEST              = "attest";       // v3: the attestation-layer parameters
+    // rpcversion 6 (in-term claims, IT-7 / IT-9)
+    constexpr const char* IN_TERM_CLAIMS      = "inTermClaims";      // true: a vault is claimable in term once under the threshold
+    constexpr const char* CLAIM_THRESHOLD_BPS = "claimThresholdBps"; // θ: RED-4 (12500 = 125 %)
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // [A, B, C]: of the collateral, a redeem before lockHeight
+    constexpr const char* SIGMA_MULT_MAX_BPS  = "sigmaMultMaxBps";   // 10000: the volatility multiplier is pinned at 1
 }
 
 // v3: yed_getinfo.params.attest, the values the Mint page and the Attestors view derive from.
@@ -174,6 +183,7 @@ namespace ParamClass {   // contract: yed_getinfo.params.classes[]
     constexpr const char* MIN_BLOCKS          = "minBlocks";
     constexpr const char* MAX_BLOCKS          = "maxBlocks";
     constexpr const char* BASE_RATIO_BPS      = "baseRatioBps";
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps";  // rpcversion 6 (IT-9)
 }
 
 // ── yed_getstats result ────────────────────────────────────────────────────────────────────
@@ -259,6 +269,7 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* NOTICE_HEIGHT     = "noticeHeight";  // v3: null unless noticed
     constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: first refHeight a clause-(b) claim may cite; null unless noticed
     constexpr const char* CAN_NOTICE        = "canNotice";     // v3, listpositions only
+    constexpr const char* EARLY_REDEEM_FEE_ZAT = "earlyRedeemFeeZat"; // rpcversion 6 (IT-9), listpositions only: what a redeem now would pay on top of FEE-1
 
     constexpr const char* STATUS_ACTIVE     = "ACTIVE";        // value
     constexpr const char* STATUS_VOID       = "VOID";          // value
@@ -295,6 +306,10 @@ namespace Claimable {   // contract: yed_listclaimable[]
     constexpr const char* NOTICED           = "noticed";       // v3
     constexpr const char* NOTICE_HEIGHT     = "noticeHeight";  // v3: null unless noticed
     constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: null unless noticed
+    // rpcversion 6 (IT-7): every ACTIVE vault whose claim branch is open is listed, in term too;
+    // a row with claimable false is above the threshold and underwaterAt is the price it becomes claimable at
+    constexpr const char* CLAIMABLE         = "claimable";
+    constexpr const char* LOCK_HEIGHT       = "lockHeight";    // tip < lockHeight: a claim in term
 }
 
 // ── yed_listtransactions element ───────────────────────────────────────────────────────────
@@ -484,6 +499,25 @@ namespace RedeemResult {   // contract: yed_redeem
     constexpr const char* COLLATERAL_OUT    = "collateralOut";
     constexpr const char* TO                = "to";
     constexpr const char* EXTRA_BURN_CENTS  = "extraBurnCents";  // H4: a sub-dollar remainder burned with the debt
+    constexpr const char* EARLY_REDEEM_FEE_ZAT = "earlyRedeemFeeZat"; // rpcversion 6 (IT-9): the part of feeZat due to a redeem before lockHeight
+}
+
+// rpcversion 6 (IT-9): yed_estimateredeem, the quote of a redeem confirming in the next block.
+namespace EstimateRedeem {   // contract: yed_estimateredeem
+    constexpr const char* VAULT             = "vault";
+    constexpr const char* STATUS            = "status";
+    constexpr const char* TERM_CLASS        = "termClass";
+    constexpr const char* LOCK_HEIGHT       = "lockHeight";
+    constexpr const char* HEIGHT            = "height";        // tip + 1, the block the quote is for
+    constexpr const char* EARLY             = "early";         // height < lockHeight on an ACTIVE vault
+    constexpr const char* BURNED_CENTS      = "burnedCents";
+    constexpr const char* COLLATERAL_ZAT    = "collateralZat";
+    constexpr const char* FEE_ZAT           = "feeZat";        // the whole fee output: FEE-1 plus the early-redeem fee (0 under FEE-0)
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps";
+    constexpr const char* EARLY_REDEEM_FEE_ZAT = "earlyRedeemFeeZat";
+    constexpr const char* PAYEE             = "payee";         // null when no pool is eligible
+    constexpr const char* CAN_REDEEM        = "canRedeem";
+    constexpr const char* ERROR             = "error";         // what yed_redeem would refuse with now; "" otherwise
 }
 
 // v3: the fields yed_claim adds to the yed_redeem shape (read alongside RedeemResult).

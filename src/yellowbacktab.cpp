@@ -85,12 +85,24 @@ YellowbackTab::~YellowbackTab() {
 
 // ── Construction ──────────────────────────────────────────────────────────────────────────
 
+QString YellowbackTab::inTermPromise() {
+    return tr("Your YEC is locked for the term you choose. You can redeem at any time by paying back the YED you minted; "
+              "redeeming before the term ends also costs an early-redeem fee of 5 %, 2.5 % or 1 % of your collateral for a short, medium or long term. "
+              "If your collateral falls below 125 % of your debt at the attested price, anyone may close your vault by paying your debt; "
+              "you then receive whatever collateral is worth more than 125 % of the debt — which, at the threshold, is usually nothing. "
+              "Before that happens, your wallet will warn you, and redeeming stops it.");
+}
+
 QString YellowbackTab::aboutText() {
+    // rpcversion 6: the collateral sentence is the in-term plan's IT-8 promise, verbatim, followed by the
+    // claim's cancel window and the calibration's expectation, which IT-8 says the disclosure states
     return tr("Ycash Yellowback (YED) is an over-collateralised dollar on Ycash. Since the vault upgrade every Yellowback rule is a Ycash consensus rule that every full node checks: "
               "no pool enforces it, and nothing can pause or abandon it. YED is minted only at a price that both the mining pools' quotes and a majority of bonded attestors support; "
-              "neither can mint against a price it sets alone, and a single signer is never a price. Collateral stays locked for the vault's term and returns to the owner who redeems "
-              "before the claim height (the lock height plus a grace period of about 30 days); after it, anyone may close an underwater vault by burning its debt in YED, after a delay "
-              "during which any honest attestor can cancel a claim made at a wrong price. Nothing in Yellowback touches the shielded pool. YED is transparent: balances and transfers "
+              "neither can mint against a price it sets alone, and a single signer is never a price. ") %
+           inTermPromise() % " " %
+           tr("A claim is released to the claimant only after a delay during which any honest attestor can cancel a claim made at a wrong price. "
+              "In a year like the last, the calibration expects between 19 % and 50 % of vaults to be claimed in term. "
+              "Nothing in Yellowback touches the shielded pool. YED is transparent: balances and transfers "
               "are visible on the chain; it is not a shielded asset.");
 }
 
@@ -952,7 +964,16 @@ void YellowbackTab::doMint() {
             const int    heightAtDialog = ctl->height();
 
             auto ask = [=, this](const QString& feeLine) {
-                QString text = tr("Mint %1 of YED against %2 of YEC locked in a new vault (at most %14; the node refuses the mint if the price moves further).\n\n"
+                // rpcversion 6 (in-term claims, IT-8 / IT-9): the term no longer protects the vault, the threshold does
+                const bool inTerm = ctl->inTermClaims();
+                const QString tmpl = inTerm
+                    ? tr("Mint %1 of YED against %2 of YEC locked in a new vault (at most %14; the node refuses the mint if the price moves further).\n\n"
+                         "Term: %3 blocks (class %4, about %5 days), ending at height %6 (%7); the vault's claim height is %8 (%15).\n"
+                         "Collateral ratio: %9 at a mint price of %10 per YEC (reference height %11).\n"
+                         "%12\n"
+                         "Funded from: %13.\n\n")
+                    : QString();
+                QString text = (inTerm ? tmpl : tr("Mint %1 of YED against %2 of YEC locked in a new vault (at most %14; the node refuses the mint if the price moves further).\n\n"
                                   "Lock: %3 blocks (class %4, about %5 days). Collateral can leave the vault from height %6 on (%7); "
                                   "its claim height is %8 (%15): redeem or renew it before then.\n"
                                   "Collateral ratio: %9 at a mint price of %10 per YEC (reference height %11).\n"
@@ -961,7 +982,7 @@ void YellowbackTab::doMint() {
                                   "Every full node checks, as Ycash consensus rules, that the collateral cannot leave the vault before its lock height, that only your key can spend it before the claim height, "
                                   "and that it is released only against the burn of %1 of YED. After the claim height anyone may claim the vault if it is underwater, "
                                   "after a delay in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"
-                                  "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file.")
+                                  "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file."))
                     .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(collateral))
                     .arg(lockBlocks).arg(termClass).arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
                     .arg(lockHeight).arg(YellowbackFormat::estimateDate(lockHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"))
@@ -969,6 +990,18 @@ void YellowbackTab::doMint() {
                     .arg(from.isEmpty() ? tr("your transparent YEC") : tr("shielded address %1").arg(from))
                     .arg(YellowbackFormat::zec(maxCollateral))
                     .arg(YellowbackFormat::estimateDate(claimHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"));
+                if (inTerm)
+                    text += tr("You can redeem at any time by paying back the %1 of YED; redeeming before height %2 also costs an early-redeem fee of %3 of the collateral (about %4). "
+                               "If the vault's collateral falls below %5 of its debt at the attested claim price, anyone may close it by paying its debt, in term too; "
+                               "you then receive whatever collateral is worth more than %5 of the debt, which at the threshold is usually nothing. "
+                               "This wallet warns you before that happens, and redeeming stops it. "
+                               "Every full node checks these rules as Ycash consensus rules, and that only your key can redeem the vault; a claim waits out a delay "
+                               "in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"
+                               "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file.")
+                        .arg(YellowbackFormat::cents(cents)).arg(lockHeight)
+                        .arg(YellowbackFormat::bpsAsShortPercent(YellowbackController::earlyRedeemFeeBpsFor(ctl->params(), termClass)))
+                        .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), termClass, collateral)))
+                        .arg(YellowbackFormat::bpsAsShortPercent(ctl->claimThresholdBps()));
                 if (!confirm(tr("Confirm mint"), text)) {
                     updateMintGate();
                     uiMint->lblMintPageStatus->clear();
@@ -1149,9 +1182,42 @@ QString YellowbackTab::claimSummary(const json& r) const {
 
 // ── Vaults (positions) ────────────────────────────────────────────────────────────────────
 
-YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition& p, int height) {
+YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition& p, int height, const json& params, qint64 pClaim) {
     using namespace YellowbackRpc::Position;
     VaultActions a;
+    if (p.status == STATUS_ACTIVE && YellowbackJson::toBool(params, YellowbackRpc::Params::IN_TERM_CLAIMS)) {
+        // rpcversion 6 (in-term claims, IT-1 / IT-2 / IT-9, D-IT-15): the owner redeems at any height; before the
+        // lock height that costs the early-redeem fee; anyone may claim once the vault is under the threshold
+        const qint64 theta = YellowbackJson::toInt(params, YellowbackRpc::Params::CLAIM_THRESHOLD_BPS, 11000);
+        const qint64 feeBps = YellowbackController::earlyRedeemFeeBpsFor(params, p.termClass);
+        const QString lockDate = YellowbackFormat::estimateDate(p.lockHeight, height).toString("yyyy-MM-dd HH:mm");
+        a.redeem = p.canRedeem || height >= p.lockHeight;
+        a.renew  = height >= p.lockHeight;      // a renewal before the term ends would pay the early-redeem fee: offered from the lock height
+        a.text = tr("Redeem burns %1 of your YED and pays a pool fee from the collateral; the rest returns to you.").arg(YellowbackFormat::cents(p.mintedCents));
+        if (height < p.lockHeight)
+            a.text += " " % tr("Before lock height %1 (~%2) a redeem also pays the early-redeem fee of %3 of the collateral (about %4).")
+                                .arg(p.lockHeight).arg(lockDate).arg(YellowbackFormat::bpsAsShortPercent(feeBps))
+                                .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat)));
+        else
+            a.text += " " % tr("Its term has ended: no early-redeem fee. Renew redeems it and mints %1 again in a new vault, in one confirmation.").arg(YellowbackFormat::cents(p.mintedCents));
+        if (p.claimable)
+            a.text += " " % tr("CLAIMABLE NOW: its collateral is below %1 of its debt at the claim price, so anyone may close it by paying its debt, and you would then usually receive nothing back. Redeem now to stop it.")
+                                .arg(YellowbackFormat::bpsAsShortPercent(theta));
+        else if (YellowbackPositionsModel::nearThreshold(p, pClaim))
+            a.text += " " % tr("WARNING: it becomes claimable if the claim price falls below %1 (it is %2 now). Redeeming stops it.")
+                                .arg(YellowbackFormat::price(p.underwaterAt)).arg(YellowbackFormat::price(pClaim));
+        else if (p.underwaterAt >= 0)
+            a.text += " " % tr("Anyone may close it, in term too, if the claim price falls below %1 (its collateral then under %2 of its debt).")
+                                .arg(YellowbackFormat::price(p.underwaterAt)).arg(YellowbackFormat::bpsAsShortPercent(theta));
+        if (!p.scriptPubKey.isEmpty())
+            a.text += " " % tr("Its collateral is a Ycash vault output (the YED vault template under the attestor set).");
+        if (p.noticed)
+            a.text += " " % tr("A claim notice stands against it (confirmed at height %1): from reference height %2 a claim may take the collateral under the emergency clause. Redeem or add collateral before then.")
+                                .arg(p.noticeHeight).arg(p.emergencyOpenAt);
+        else if (p.canNotice)
+            a.text += " " % tr("Under the attested prices this node holds it is below the emergency ratio: a claim notice could be posted against it.");
+        return a;
+    }
     const QString lockAt = tr("lock height %1").arg(p.lockHeight);
     if (p.status == STATUS_VOID) {
         if (p.canRedeem || height >= p.lockHeight) {
@@ -1285,7 +1351,7 @@ void YellowbackTab::updateVaultButtons() {
         uiPositions->btnRenew->setEnabled(false);
         return;
     }
-    VaultActions a = vaultActions(*p, ctl->height());
+    VaultActions a = vaultActions(*p, ctl->height(), ctl->params(), ctl->claimPriceNow());
     // H-9.2: renew needs a mint now; when the gate is shut the row says why and offers redeem only
     QString renewBlocker;
     if (a.renew) {
@@ -1327,7 +1393,9 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
     const bool isVoid = p.status == Position::STATUS_VOID;
     const QString what = isVoid ? tr("Release") : tr("Redeem");
     const QString dest = to.isEmpty() ? tr("a fresh transparent address of this wallet") : to;
-    if (ctl->height() < p.lockHeight) {
+    // rpcversion 6 (D-IT-15): under in-term claims an ACTIVE vault is the owner's to redeem at any height
+    const bool inTerm = !isVoid && ctl->inTermClaims();
+    if (!inTerm && ctl->height() < p.lockHeight) {
         notice(what, tr("The vault is locked until height %1 (the chain is at %2). Every Ycash node enforces that lock.").arg(p.lockHeight).arg(ctl->height()));
         return;
     }
@@ -1342,14 +1410,16 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
         ctl->redeem(p.txid, to,
             [=, this](const json& r) {
                 QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
+                const qint64 early = YellowbackJson::toInt(r, RedeemResult::EARLY_REDEEM_FEE_ZAT);
                 notice(tr("%1 sent").arg(what),
-                    tr("txid %1\nYED burned: %2%7\npool fee: %3 to %4\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
+                    tr("txid %1\nYED burned: %2%7\npool fee: %3 to %4%8\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
                         .arg(YellowbackJson::toStr(r, RedeemResult::TXID))
                         .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)))
                         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee)
                         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::COLLATERAL_OUT)))
                         .arg(YellowbackJson::toStr(r, RedeemResult::TO))
-                        .arg(extraBurnLine(r)));
+                        .arg(extraBurnLine(r))
+                        .arg(early > 0 ? tr(" (of which the early-redeem fee: %1)").arg(YellowbackFormat::zec(early)) : QString()));
                 ctl->refresh(true);
             },
             [=, this](const QString& e) { failed("yed_redeem", e); });
@@ -1375,6 +1445,43 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             .arg(p.txid).arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
             .arg(feeLine).arg(YellowbackFormat::zec(p.collateralZat - feeZat)).arg(dest));
     };
+    if (inTerm) {
+        // rpcversion 6 (IT-9): the node's own quote of this redeem, early-redeem fee included, before the
+        // confirmation; every figure is recomputed from the parameters first (H-9.3)
+        ctl->estimateRedeem(p.txid,
+            [=, this](const json& q) {
+                if (!YellowbackJson::toBool(q, EstimateRedeem::CAN_REDEEM)) {
+                    const QString why = YellowbackJson::toStr(q, EstimateRedeem::ERROR);
+                    const QString more = YellowbackController::explainError(why);
+                    notice(tr("Redeem not possible"), tr("The node would refuse this redeem now: %1").arg(why.isEmpty() ? tr("(no reason given)") : why) %
+                                                    (more.isEmpty() ? QString() : "\n\n" % more), true);
+                    return;
+                }
+                const QStringList bad = YellowbackController::checkEstimateRedeem(ctl->params(), p, q);
+                if (!bad.isEmpty()) {
+                    notice(tr("Redeem not sent"), implausibleText(tr("redemption"), bad), true);
+                    return;
+                }
+                const qint64 fee   = YellowbackJson::toInt(q, EstimateRedeem::FEE_ZAT);
+                const qint64 early = YellowbackJson::toInt(q, EstimateRedeem::EARLY_REDEEM_FEE_ZAT);
+                const QString payee = YellowbackJson::isNull(q, EstimateRedeem::PAYEE) ? QString() : YellowbackJson::toStr(q, EstimateRedeem::PAYEE);
+                QString feeLine = fee == 0
+                    ? tr("Pool fee: none (no pool published a price quote in the payee window).")
+                    : tr("Pool fee: %1 of YEC from the collateral to the pool %2.").arg(YellowbackFormat::zec(fee - early)).arg(payee);
+                if (YellowbackJson::toBool(q, EstimateRedeem::EARLY))
+                    feeLine += "\n" % (early > 0
+                        ? tr("Early-redeem fee: %1 of YEC (%2 of the collateral, class %3), because the vault's term runs to height %4; it goes to the same pool. "
+                             "Redeeming at or after height %4 pays no early-redeem fee.")
+                              .arg(YellowbackFormat::zec(early)).arg(YellowbackFormat::bpsAsShortPercent(YellowbackJson::toInt(q, EstimateRedeem::EARLY_REDEEM_FEE_BPS)))
+                              .arg(p.termClass).arg(p.lockHeight)
+                        : tr("Early-redeem fee: none (no pool is eligible for a fee)."));
+                ask(fee, feeLine);
+            },
+            [=, this](const QString& e) {
+                notice(tr("Redeem not sent"), tr("The node could not quote this redeem (yed_estimateredeem): %1").arg(e), true);
+            });
+        return;
+    }
     ctl->getFeePayee(ctl->refHeightNow(), p.collateralZat,
         [=, this](const json& f) {
             const json& def = YellowbackJson::obj(f, FeePayee::DEFAULT);
@@ -1632,20 +1739,26 @@ void YellowbackTab::updateClaimPage() {
     if (sel != nullptr) {
         QObject::disconnect(sel, nullptr, this, nullptr);
         QObject::connect(sel, &QItemSelectionModel::currentRowChanged, this, [=, this](const QModelIndex& cur, const QModelIndex&) {
-            uiClaim->btnClaim->setEnabled(actionsEnabled && ctl->claimableModel()->rowAt(cur.isValid() ? cur.row() : -1) != nullptr);
+            // rpcversion 6 (IT-7): a listed row with claimable false is above the threshold; its claim would be refused
+            auto row = ctl->claimableModel()->rowAt(cur.isValid() ? cur.row() : -1);
+            uiClaim->btnClaim->setEnabled(actionsEnabled && row != nullptr && row->claimable);
         });
     }
-    int n = ctl->claimableModel()->rowCount(QModelIndex());
+    const int listed = ctl->claimableModel()->rowAt(0) == nullptr ? 0 : ctl->claimableModel()->rowCount(QModelIndex());
+    int n = ctl->claimableModel()->claimableCount();
     auto idx = uiClaim->tblClaimable->currentIndex();
-    uiClaim->btnClaim->setEnabled(actionsEnabled && ctl->claimableModel()->rowAt(idx.isValid() ? idx.row() : -1) != nullptr);
+    auto cur = ctl->claimableModel()->rowAt(idx.isValid() ? idx.row() : -1);
+    uiClaim->btnClaim->setEnabled(actionsEnabled && cur != nullptr && cur->claimable);
+    const QString above = listed > n ? " " % tr("%n more vault(s) are listed above the claim threshold (grey): they become claimable only if the claim price falls below their \"Underwater below\" price.", "", listed - n)
+                                     : QString();
     if (n == 0) {
-        uiClaim->lblClaimHint->setText(tr("No vault is claimable at the current claim price."));
+        uiClaim->lblClaimHint->setText(tr("No vault is claimable at the current claim price.") % above);
         return;
     }
     uiClaim->lblClaimHint->setText(tr("%n claimable vault(s). A claim burns the vault's debt from your confirmed YED (%1 available), pays the fees from your YEC and "
                                       "moves the collateral, less the owner's residual, into a claim intent you release after %2 blocks (Pending claims page). "
                                       "Select a row and press Claim.", "", n)
-                                       .arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(ctl->claimDelay()));
+                                       .arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(ctl->claimDelay()) % above);
 }
 
 // v3: which clause opened the claim and what the claim must give back (RED-5), from the
@@ -1673,6 +1786,12 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
     const QString dest = to.isEmpty() ? tr("a fresh transparent address of this wallet") : to;
+    if (!c.claimable) {
+        // rpcversion 6 (IT-7): listed in term, but above the threshold: the node would refuse (claim-not-underwater)
+        notice(tr("Claim"), tr("Vault %1 is not claimable now: its collateral is above the claim threshold. It becomes claimable if the claim price falls below %2.")
+            .arg(c.vault).arg(YellowbackFormat::price(c.underwaterAt)), true);
+        return;
+    }
     if (c.mintedCents > ctl->confirmedCents()) {
         notice(tr("Claim"), tr("A claim burns %1 of YED but only %2 is confirmed in this wallet.")
             .arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
@@ -1709,16 +1828,23 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
                       "The YEC is not paid at once: it waits in a claim intent for %16 blocks, then you release it on the Pending claims page. "
                       "Until then any member of the YED attestor set may cancel the claim if it was made at a wrong price. "
                       "A cancel returns the collateral to the vault and does NOT refund the %3 of YED you burn: claim only at a price you are sure of.\n\n"
-                      "The vault is past its claim height (%9) and underwater at the claim price of %10 per YEC (underwater below %11). "
+                      "%17 "
                       "Your own node builds the claim in two steps (the carrier with the price proof now, the claim when it confirms) "
                       "and checks it against the Yellowback consensus rules before it signs and sends it.")
         .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
         .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(youGet)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
-        .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt))
         .arg(describeClaimPath(c)).arg(YellowbackFormat::zec(minOut))
         .arg(YellowbackFormat::cents(maxBurn))
         .arg(c.attestFeeZat > 0 ? tr(" and the attestation fee %1").arg(YellowbackFormat::zec(c.attestFeeZat)) : QString())
-        .arg(delay);
+        .arg(delay)
+        .arg(ctl->inTermClaims()
+             ? (c.lockHeight >= 0 && ctl->height() < c.lockHeight
+                ? tr("The vault is in term (lock height %1) and below the claim threshold of %2 at the claim price of %3 per YEC (claimable below %4).")
+                      .arg(c.lockHeight).arg(YellowbackFormat::bpsAsShortPercent(ctl->claimThresholdBps())).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt))
+                : tr("The vault is below the claim threshold of %1 at the claim price of %2 per YEC (claimable below %3).")
+                      .arg(YellowbackFormat::bpsAsShortPercent(ctl->claimThresholdBps())).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt)))
+             : tr("The vault is past its claim height (%1) and underwater at the claim price of %2 per YEC (underwater below %3).")
+                   .arg(c.claimHeight).arg(YellowbackFormat::price(c.pClaim)).arg(YellowbackFormat::price(c.underwaterAt)));
     if (!confirm(tr("Confirm claim"), text)) return;
     uiClaim->lblClaimHint->setText(tr("Claiming..."));
     ctl->claim(txid, to, minOut, maxBurn,
@@ -2072,8 +2198,14 @@ void YellowbackTab::updateRedeemPage() {
     } else {
         bool isVoid = sel->status == YellowbackRpc::Position::STATUS_VOID;
         uiRedeem->lblBurn->setText(isVoid ? tr("none (VOID vault: Release burns nothing and pays no fee)") : YellowbackFormat::cents(sel->mintedCents));
+        // rpcversion 6 (IT-9): before the lock height the early-redeem fee comes off too (the dialog quotes it exactly)
+        const bool early = !isVoid && ctl->inTermClaims() && ctl->height() + 1 < sel->lockHeight;
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat) %
-            (isVoid ? QString() : tr("  minus the pool fee")));
+            (isVoid ? QString() : early ? tr("  minus the pool fee and the early-redeem fee of %1 (about %2) until height %3")
+                                             .arg(YellowbackFormat::bpsAsShortPercent(YellowbackController::earlyRedeemFeeBpsFor(ctl->params(), sel->termClass)))
+                                             .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), sel->termClass, sel->collateralZat)))
+                                             .arg(sel->lockHeight)
+                                       : tr("  minus the pool fee")));
         bool enough = isVoid || sel->mintedCents <= ctl->confirmedCents();
         uiRedeem->lblRedeemHint->setText(enough ? QString() : tr("You need %1 of confirmed YED to burn but have %2.")
                 .arg(YellowbackFormat::cents(sel->mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())));

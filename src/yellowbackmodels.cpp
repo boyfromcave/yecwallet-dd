@@ -112,6 +112,7 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.noticeHeight  = (int)YellowbackJson::toInt(j, NOTICE_HEIGHT, -1);
     p.emergencyOpenAt = (int)YellowbackJson::toInt(j, EMERGENCY_OPEN_AT, -1);
     p.canNotice     = YellowbackJson::toBool(j, CAN_NOTICE);
+    p.earlyRedeemFeeZat = YellowbackJson::toInt(j, EARLY_REDEEM_FEE_ZAT);
     return p;
 }
 
@@ -160,6 +161,8 @@ YellowbackClaimable YellowbackClaimable::fromJson(const json& j) {
     c.noticed       = YellowbackJson::toBool(j, NOTICED);
     c.noticeHeight  = (int)YellowbackJson::toInt(j, NOTICE_HEIGHT, -1);
     c.emergencyOpenAt = (int)YellowbackJson::toInt(j, EMERGENCY_OPEN_AT, -1);
+    c.claimable     = YellowbackJson::toBool(j, CLAIMABLE, true);
+    c.lockHeight    = (int)YellowbackJson::toInt(j, LOCK_HEIGHT, -1);
     return c;
 }
 
@@ -214,6 +217,12 @@ QString YellowbackFormat::bpsAsMultiplier(qint64 bps) {
 
 QString YellowbackFormat::bpsAsPercent(qint64 bps) {
     return QString::number((double)bps / 100.0, 'f', 2) % " %";
+}
+
+QString YellowbackFormat::bpsAsShortPercent(qint64 bps) {
+    QString n = QString::number((double)bps / 100.0, 'f', 2);
+    while (n.contains('.') && (n.endsWith('0') || n.endsWith('.'))) n.chop(1);
+    return n % " %";
 }
 
 QDateTime YellowbackFormat::estimateDate(int height, int currentHeight) {
@@ -310,9 +319,32 @@ QString YellowbackFormat::blocksAndDuration(int blocks) {
     return QObject::tr("%1 block(s), ~%2").arg(blocks).arg(duration((qint64)blocks * YellowbackRpc::SECONDS_PER_BLOCK));
 }
 
-QString YellowbackPositionsModel::actBy(const YellowbackPosition& p, int currentHeight) {
+bool YellowbackPositionsModel::nearThreshold(const YellowbackPosition& p, qint64 pClaimMicroUsd) {
+    if (p.status != YellowbackRpc::Position::STATUS_ACTIVE || p.claimable || p.underwaterAt <= 0 || pClaimMicroUsd <= 0) return false;
+    return (__int128)pClaimMicroUsd * 10000 < (__int128)p.underwaterAt * (10000 + WARN_MARGIN_BPS);
+}
+
+void YellowbackPositionsModel::setRules(bool inTermClaims, qint64 claimThresholdBps) {
+    if (inTerm == inTermClaims && thetaBps == claimThresholdBps) return;
+    inTerm = inTermClaims; thetaBps = claimThresholdBps > 0 ? claimThresholdBps : 11000;
+    if (!modeldata->isEmpty()) emit dataChanged(index(0, 0), index(modeldata->size() - 1, ColumnCount - 1));
+}
+
+QString YellowbackPositionsModel::actBy(const YellowbackPosition& p, int currentHeight, bool inTerm, qint64 pClaimMicroUsd) {
     using namespace YellowbackRpc::Position;
     if (currentHeight <= 0) return QString("-");
+    if (inTerm && p.status == STATUS_ACTIVE) {
+        // rpcversion 6 (in-term claims, IT-2 / IT-8): the threshold decides at every height; the owner may redeem at any height
+        const QString at = p.underwaterAt >= 0 ? YellowbackFormat::price(p.underwaterAt) : QObject::tr("(undefined)");
+        if (p.claimable)
+            return QObject::tr("CLAIMABLE NOW: anyone may close it by paying its debt; redeem now to stop it");
+        if (nearThreshold(p, pClaimMicroUsd))
+            return QObject::tr("WARNING: claimable if the claim price falls below %1 (now %2): redeem to stop it").arg(at).arg(YellowbackFormat::price(pClaimMicroUsd));
+        if (currentHeight < p.lockHeight)
+            return QObject::tr("redeemable at any time (early-redeem fee for %1); claimable below %2")
+                .arg(YellowbackFormat::blocksAndDuration(p.lockHeight - currentHeight)).arg(at);
+        return QObject::tr("redeemable, no early-redeem fee; claimable below %1").arg(at);
+    }
     if (p.status == STATUS_VOID) {
         if (currentHeight < p.lockHeight) return QObject::tr("locked; release in %1").arg(YellowbackFormat::blocksAndDuration(p.lockHeight - currentHeight));
         if (currentHeight < p.claimHeight) return QObject::tr("RELEASE NOW: open to anyone in %1").arg(YellowbackFormat::blocksAndDuration(p.claimHeight - currentHeight));
@@ -408,6 +440,12 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
         // The rows that need the owner's attention, loud enough to find in a long list: a vault
         // under a claim notice, or past its claim height while active, is exposed (red); one in
         // its grace window is the owner's to redeem now (orange). Closed rows stay plain.
+        if (p.status == STATUS_ACTIVE && inTerm) {
+            // rpcversion 6: red when claimable now or noticed, orange while the claim price nears the threshold
+            if (p.claimable || p.noticed)        return QBrush(QColor(255, 210, 210));
+            if (nearThreshold(p, pClaim))         return QBrush(QColor(255, 232, 190));
+            return QVariant();
+        }
         if (p.status == STATUS_ACTIVE) {
             if (p.noticed || (currentHeight > 0 && currentHeight >= p.claimHeight)) return QBrush(QColor(255, 210, 210));
             if (currentHeight > 0 && currentHeight >= p.lockHeight)              return QBrush(QColor(255, 232, 190));
@@ -420,10 +458,15 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
     if (role == Qt::ForegroundRole) {
         QBrush b;
         if (index.column() == Ratio && p.status == STATUS_ACTIVE) {
-            // the claim threshold is 110 %; below 150 % a further fall of a quarter reaches it
+            // red under the claim threshold θ; orange within WARN_MARGIN_BPS above it
             const qint64 r = ratioBps(p, pFast > 0 ? pFast : pClaim);
-            if (r >= 0 && r < 11000)      { b.setColor(Qt::red); return b; }
-            if (r >= 0 && r < 15000)      { b.setColor(QColor(200, 100, 0)); return b; }
+            if (r >= 0 && r < thetaBps)   { b.setColor(Qt::red); return b; }
+            if (r >= 0 && r < thetaBps * (10000 + WARN_MARGIN_BPS) / 10000) { b.setColor(QColor(200, 100, 0)); return b; }
+        }
+        if (index.column() == ActBy && p.status == STATUS_ACTIVE && inTerm) {
+            if (p.claimable)                { b.setColor(Qt::red); return b; }
+            if (nearThreshold(p, pClaim))   { b.setColor(QColor(200, 100, 0)); return b; }
+            return QVariant();
         }
         if (index.column() == ActBy && p.status == STATUS_ACTIVE && currentHeight > 0 && currentHeight >= p.lockHeight) { b.setColor(Qt::red); return b; }
         if (p.status == STATUS_VOID || p.status == STATUS_CLAIMING) b.setColor(Qt::red);
@@ -441,7 +484,7 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             }
             case Minted:       return YellowbackFormat::cents(p.mintedCents);
             case Collateral:   return YellowbackFormat::zec(p.collateralZat);
-            case ActBy:        return actBy(p, currentHeight);
+            case ActBy:        return actBy(p, currentHeight, inTerm, pClaim);
             case Ratio: {
                 if (p.status != STATUS_ACTIVE) return QString("-");
                 const qint64 r = ratioBps(p, pFast > 0 ? pFast : pClaim);
@@ -453,8 +496,8 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             case ClaimHeight:  return YellowbackFormat::heightWithEstimate(p.claimHeight, currentHeight);
             case Claimable: {
                 if (p.status != STATUS_ACTIVE) return QString("-");
-                if (p.claimable) return tr("YES");
-                if (currentHeight > 0 && currentHeight < p.claimHeight) return tr("not before %1").arg(p.claimHeight);
+                if (p.claimable) return inTerm ? tr("YES, claimable now") : tr("YES");
+                if (!inTerm && currentHeight > 0 && currentHeight < p.claimHeight) return tr("not before %1").arg(p.claimHeight);
                 if (p.noticed && p.emergencyOpenAt >= 0 && currentHeight > 0 && currentHeight < p.emergencyOpenAt) return tr("notice: opens at %1").arg(p.emergencyOpenAt);
                 return p.underwaterAt >= 0 ? tr("no (claim price above %1)").arg(YellowbackFormat::price(p.underwaterAt)) : tr("no");
             }
@@ -477,6 +520,12 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
     if (role == Qt::ToolTipRole) {
         switch (index.column()) {
             case ActBy:
+                if (inTerm)
+                    return tr("What you must do with this vault. You can redeem it at any time by paying back its YED; before its lock height that also costs an early-redeem fee. "
+                              "Anyone may close it, in term too, once its collateral is worth less than %1 of its debt at the claim price, i.e. once the claim price falls below %2. "
+                              "The row turns orange while the claim price is within %3 above that figure, and red once the vault is claimable: redeeming stops it. Durations assume 75 s per block.")
+                              .arg(YellowbackFormat::bpsAsShortPercent(thetaBps)).arg(p.underwaterAt >= 0 ? YellowbackFormat::price(p.underwaterAt) : tr("(undefined)"))
+                              .arg(YellowbackFormat::bpsAsShortPercent(WARN_MARGIN_BPS));
                 return tr("What you must do with this vault and by when, from its heights alone. Before the lock height nothing can move it, in either direction. "
                           "From the lock height you can redeem it; from the claim height anyone can claim it if it is underwater. Durations assume 75 s per block.");
             case Ratio: {
@@ -484,15 +533,18 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 return pFast > 0 || pClaim > 0
                     ? tr("Collateral at the latest price (%1 per YEC) over the %2 of YED this vault backs: the market view, which moves first. "
                          "A claim is judged at the claim price (%3 per YEC), a slower, higher figure by design, at which this vault's ratio is %4. "
-                         "Past the claim height the vault can be claimed once its ratio at the claim price is under 110 %%, i.e. once the claim price drops below %5.")
+                         "%6 the vault can be claimed once its ratio at the claim price is under %7, i.e. once the claim price drops below %5.")
                           .arg(YellowbackFormat::price(pFast > 0 ? pFast : pClaim)).arg(YellowbackFormat::cents(p.mintedCents))
                           .arg(pClaim > 0 ? YellowbackFormat::price(pClaim) : tr("undefined"))
                           .arg(atClaim >= 0 ? YellowbackFormat::bpsAsPercent(atClaim) : tr("undefined"))
                           .arg(p.underwaterAt >= 0 ? YellowbackFormat::price(p.underwaterAt) : tr("(undefined)"))
+                          .arg(inTerm ? tr("At any height") : tr("Past the claim height")).arg(YellowbackFormat::bpsAsShortPercent(thetaBps))
                     : tr("No price is defined at the tip, so the ratio cannot be judged.");
             }
             case UnderwaterBelow:
-                return tr("The claim price below which this vault is underwater (collateral worth less than 110 %% of its debt) and, past its claim height, claimable by anyone who burns the debt.");
+                return inTerm
+                    ? tr("The claim price below which this vault is claimable (collateral worth less than %1 of its debt): from then on anyone who pays the debt may close it, in term too.").arg(YellowbackFormat::bpsAsShortPercent(thetaBps))
+                    : tr("The claim price below which this vault is underwater (collateral worth less than %1 of its debt) and, past its claim height, claimable by anyone who burns the debt.").arg(YellowbackFormat::bpsAsShortPercent(thetaBps));
             case Status:
                 if (p.status == STATUS_VOID)
                     return YellowbackFormat::voidReason(p.voidReason.isEmpty() ? tr("(no reason returned)") : p.voidReason);
@@ -513,8 +565,10 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                           .arg(YellowbackFormat::cents(p.mintedCents));
             case Claimable:
                 return p.underwaterAt >= 0
-                    ? tr("Past the claim height, anyone may burn the vault's debt and take its collateral once the claim price falls below %1 per YEC.")
-                          .arg(YellowbackFormat::price(p.underwaterAt))
+                    ? (inTerm ? tr("At any height, anyone may pay the vault's debt and close it once the claim price falls below %1 per YEC; you then receive the collateral worth more than %2 of the debt, which at the threshold is usually nothing.")
+                                    .arg(YellowbackFormat::price(p.underwaterAt)).arg(YellowbackFormat::bpsAsShortPercent(thetaBps))
+                              : tr("Past the claim height, anyone may burn the vault's debt and take its collateral once the claim price falls below %1 per YEC.")
+                                    .arg(YellowbackFormat::price(p.underwaterAt)))
                     : tr("A VOID vault (recorded before the vault upgrade) carries no debt and can never be claimed for one. Release its collateral.");
             case Unbacked:
                 return tr("\"yes\" means this vault was closed without burning its debt; the YED minted against it are no longer backed. No rule can produce such a close since the vault upgrade.");
@@ -557,7 +611,7 @@ QVariant YellowbackPositionsModel::headerData(int section, Qt::Orientation orien
 
 YellowbackClaimableModel::YellowbackClaimableModel(QObject* parent) : QAbstractTableModel(parent) {
     headers << tr("Vault") << tr("Owner") << tr("Collateral") << tr("YED to burn") << tr("Fee")
-            << tr("Claim height") << tr("Underwater below") << tr("Claim price now");
+            << tr("Claim height") << tr("Underwater below") << tr("Claim price now") << tr("State");
     modeldata = new QList<YellowbackClaimable>();
 }
 
@@ -571,6 +625,12 @@ void YellowbackClaimableModel::setNewData(const QList<YellowbackClaimable>& rows
     *modeldata = rows;
     currentHeight = height;
     endResetModel();
+}
+
+int YellowbackClaimableModel::claimableCount() const {
+    int n = 0;
+    for (auto& c : *modeldata) if (c.claimable) n++;
+    return n;
 }
 
 const YellowbackClaimable* YellowbackClaimableModel::rowAt(int row) const {
@@ -608,12 +668,24 @@ QVariant YellowbackClaimableModel::data(const QModelIndex& index, int role) cons
             case Fee:          return YellowbackFormat::zec(c.feeZat);
             case ClaimHeight:  return QString::number(c.claimHeight);
             case UnderwaterAt: return YellowbackFormat::price(c.underwaterAt);
-            case PClaim:       return YellowbackFormat::price(c.pClaim);
+            case PClaim:       return c.pClaim > 0 ? YellowbackFormat::price(c.pClaim) : tr("undefined");
+            case State:
+                if (!c.claimable) return tr("not claimable: above %1").arg(YellowbackFormat::price(c.underwaterAt));
+                return c.lockHeight >= 0 && currentHeight > 0 && currentHeight < c.lockHeight ? tr("claimable now (in term)") : tr("claimable now");
         }
+    }
+
+    if (role == Qt::ForegroundRole && !c.claimable) {
+        QBrush b; b.setColor(Qt::gray); return b;   // rpcversion 6: listed, but a claim would be refused
     }
 
     if (role == Qt::ToolTipRole) {
         switch (index.column()) {
+            case State:
+                return c.claimable
+                    ? tr("The vault's collateral is under the claim threshold at the claim price: a claim that pays its debt is accepted now.")
+                    : tr("Listed because its claim branch is open, but its collateral is above the claim threshold: a claim is refused until the claim price falls below %1.")
+                          .arg(YellowbackFormat::price(c.underwaterAt));
             case Burn:
                 return tr("A claim must burn exactly the vault's debt (its minted YED) from your own YED.");
             case Fee:

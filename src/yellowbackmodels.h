@@ -53,6 +53,7 @@ struct YellowbackPosition {
     int     noticeHeight    = -1;      // v3: null (-1) unless noticed
     int     emergencyOpenAt = -1;      // v3: the first reference height an emergency claim may cite; null (-1) unless noticed
     bool    canNotice       = false;   // v3, listpositions only: this node could post a notice now
+    qint64  earlyRedeemFeeZat = 0;     // rpcversion 6 (IT-9), listpositions only: a redeem now pays it on top of FEE-1
 
     static YellowbackPosition fromJson(const json& j);
     QString vaultName() const { return txid % ":" % QString::number(vout); }
@@ -77,6 +78,9 @@ struct YellowbackClaimable {
     bool    noticed         = false;
     int     noticeHeight    = -1;
     int     emergencyOpenAt = -1;
+    // rpcversion 6 (IT-7): in-term rows are listed too; claimable false = above the threshold (claim refused)
+    bool    claimable       = true;    // a row from before rpcversion 6 was listed only when claimable
+    int     lockHeight      = -1;      // tip < lockHeight: a claim in term
 
     static YellowbackClaimable fromJson(const json& j);
     QString txid() const { return vault.section(':', 0, 0); }
@@ -151,6 +155,7 @@ namespace YellowbackFormat {
     QString priceOrUndefined(const json& j, const char* key);   // "undefined" for null (§4.8)
     QString bpsAsMultiplier(qint64 bps);                   // 10000 -> "1.00x"
     QString bpsAsPercent(qint64 bps);                      // 49750 -> "497.50 %"
+    QString bpsAsShortPercent(qint64 bps);                 // 12500 -> "125 %", 250 -> "2.5 %" (the promise's own form)
     QString heightWithEstimate(int height, int currentHeight);
     QString duration(qint64 seconds);                 // "2 d 3 h", "4 h 5 m", "12 m"
     QString blocksAndDuration(int blocks);            // "48 block(s), ~1 h 0 m" at 75 s per block
@@ -195,8 +200,19 @@ public:
     void setPrices(qint64 pFastMicroUsd, qint64 pClaimMicroUsd);
     /** A vault's collateral ratio at `priceMicroUsd`, in bps; -1 when undefined (no debt, no price). */
     static qint64 ratioBps(const YellowbackPosition& p, qint64 priceMicroUsd);
-    /** The Act-by cell: what the owner must do and by when, from the heights alone. */
-    static QString actBy(const YellowbackPosition& p, int currentHeight);
+    /** The Act-by cell: what the owner must do and by when. Under in-term claims (rpcversion 6,
+     *  `inTerm`) the danger is the threshold, not a height: the cell says "claimable now", warns
+     *  while the claim price `pClaim` (µUSD, 0 = unknown) is near the vault's underwaterAt
+     *  (nearThreshold), and otherwise names the price; without it, the heights alone. */
+    static QString actBy(const YellowbackPosition& p, int currentHeight, bool inTerm = false, qint64 pClaimMicroUsd = 0);
+    /** How close the claim price may come to a vault's claimable-at price (underwaterAt) before the
+     *  wallet warns: within 25 % above it (a fall of a fifth reaches it). */
+    static constexpr qint64 WARN_MARGIN_BPS = 2500;
+    /** An ACTIVE, not yet claimable vault whose claim price is within WARN_MARGIN_BPS above its
+     *  underwaterAt; false when either price is unknown. Pure. */
+    static bool nearThreshold(const YellowbackPosition& p, qint64 pClaimMicroUsd);
+    /** rpcversion 6: the network's rule set (yed_getinfo.params.inTermClaims, claimThresholdBps). */
+    void setRules(bool inTermClaims, qint64 claimThresholdBps);
     const YellowbackPosition* positionAt(int row) const;
     QList<YellowbackPosition> redeemable() const;
 
@@ -211,6 +227,8 @@ private:
     int                     currentHeight = 0;
     qint64                  pFast         = 0;      // µUSD; 0 = unknown
     qint64                  pClaim        = 0;      // µUSD; 0 = unknown
+    bool                    inTerm        = false;  // rpcversion 6: params.inTermClaims
+    qint64                  thetaBps      = 11000;  // params.claimThresholdBps; 11000 before rpcversion 6
     bool                    loading       = true;
 };
 
@@ -243,11 +261,14 @@ public:
         ClaimHeight,
         UnderwaterAt,
         PClaim,
+        State,           // rpcversion 6: "claimable now" | "not claimable: above $x" (claimable: false, IT-7)
         ColumnCount
     };
 
     void setNewData(const QList<YellowbackClaimable>& rows, int currentHeight);
     const YellowbackClaimable* rowAt(int row) const;
+    /** The listed rows a claim would be accepted for (claimable: true). */
+    int claimableCount() const;
 
     int      rowCount(const QModelIndex& parent) const override;
     int      columnCount(const QModelIndex& parent) const override;

@@ -184,12 +184,29 @@ public:
     /** The persistent warning for one vault: an ACTIVE vault from claimHeight − 1 day on (redeem or
      *  renew before the claim height), a VOID one likewise (release); empty otherwise. Pure. */
     static QString deadlineWarning(const YellowbackPosition& p, int height);
-    /** Every owned vault's deadlineWarning at the index height, for the tab's banner. */
+    /** rpcversion 6 (in-term claims, IT-8): the persistent warning for one ACTIVE vault under the
+     *  threshold rule: claimable now, or the claim price `pClaim` (µUSD) within
+     *  YellowbackPositionsModel::WARN_MARGIN_BPS above its underwaterAt; empty otherwise. Pure. */
+    static QString thresholdWarning(const YellowbackPosition& p, qint64 pClaimMicroUsd);
+    /** Every owned vault's deadlineWarning at the index height (thresholdWarning under in-term
+     *  claims), for the tab's banner. */
     QStringList deadlineWarnings() const;
     /** The lock length a renewal of `p` re-mints with: the vault's own (lockHeight − refHeight)
      *  when an enabled class still takes it, else the shortest enabled one; 0 when none. */
     int renewLockBlocks(const YellowbackPosition& p) const;
 
+    // ── rpcversion 6: in-term claims (docs/plans/yellowback-in-term-claims-plan.md IT-7..IT-9) ─
+    bool    inTermClaims() const;                  // params.inTermClaims
+    qint64  claimThresholdBps() const;             // params.claimThresholdBps (θ); 11000 when absent
+    qint64  claimPriceNow() const;                 // yed_getstats.pClaim, 0 when undefined
+    /** IT-9: params.earlyRedeemFeeBps of a term class ("A" | "B" | "C"); 0 when unknown. Pure. */
+    static qint64 earlyRedeemFeeBpsFor(const json& params, const QString& termClass);
+    /** IT-9: collateral · earlyRedeemFeeBps / 10⁴ (floor, no minimum), the node's EarlyRedeemFeeZat. */
+    static qint64 earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 collateralZat);
+    /** What is wrong with a yed_estimateredeem reply for vault `p` (H-9.3): the vault, the burn,
+     *  the collateral, the class's fee rate, and the fee = FEE-1 + the early-redeem fee when early
+     *  (both 0 under FEE-0). Empty when every figure checks out. Pure. */
+    static QStringList checkEstimateRedeem(const json& params, const YellowbackPosition& p, const json& estimate);
     // ── v3 attestation layer (plan §4.8), pure functions of the replies so the QTest reads them ──
     // The arming banner: "UNARMED" / "TRIGGERED at h, arms at h'" / "ARMED", or the disabled
     // sentence when `required` is false. Empty until the node has answered.
@@ -250,6 +267,7 @@ public:
     void mint(qint64 cents, int lockBlocks, const QString& from, qint64 maxCollateralZat, OkFn ok, ErrFn err);   // from: "" | ys1... (I2)
     void send(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
     void redeem(const QString& vaultTxid, const QString& to, OkFn ok, ErrFn err);     // to: "" | s1... | ys1... (I2)
+    void estimateRedeem(const QString& vaultTxid, OkFn ok, ErrFn err);                // rpcversion 6 (IT-9): yed_estimateredeem
     // maxBurnCents (rpcversion 4, H-9.3): the most YED the claim may burn (claim-burn-above-max beyond it).
     void claim(const QString& vaultTxid, const QString& to, qint64 minOutZat, qint64 maxBurnCents, OkFn ok, ErrFn err);
     void claimNotice(const QString& vaultTxid, OkFn ok, ErrFn err);                   // v3: yed_claimnotice (NOT-1)

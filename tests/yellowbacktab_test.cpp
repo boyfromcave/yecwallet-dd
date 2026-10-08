@@ -44,7 +44,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 5, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 6, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
       "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
@@ -55,20 +55,30 @@ static json infoActive() {
       "attest": {"status": "ARMED", "triggerHeight": 300, "armHeight": 308, "seatedCount": 3, "poolSize": 9,
                  "poolFresh": 3, "carrierMode": "scriptsig", "required": true, "armed": true},
       "params": {"startHeight": 103, "attestorSetId": "5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", "claimDelay": 10,
-                 "sigmaRefBps": 0, "supplyCapBps": 0, "refLag": 2,
+                 "sigmaRefBps": 0, "sigmaMultMaxBps": 10000, "supplyCapBps": 0, "refLag": 2,
+                 "inTermClaims": true, "claimThresholdBps": 12500, "earlyRedeemFeeBps": [500, 250, 100],
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
                  "tokenValueZat": 10000, "feeZat": 1000,
                  "windows": {"fast": 8, "mid": 24, "slow": 64},
                  "minFill": {"fast": 4, "mid": 16, "slow": 43},
-                 "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000},
-                             {"class": "B", "minBlocks": 97, "maxBlocks": 144, "baseRatioBps": 40000},
-                             {"class": "C", "minBlocks": 145, "maxBlocks": 240, "baseRatioBps": 30000}],
+                 "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000, "earlyRedeemFeeBps": 500},
+                             {"class": "B", "minBlocks": 97, "maxBlocks": 144, "baseRatioBps": 40000, "earlyRedeemFeeBps": 250},
+                             {"class": "C", "minBlocks": 145, "maxBlocks": 240, "baseRatioBps": 30000, "earlyRedeemFeeBps": 100}],
                  "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000, "preferredPayee": null, "preferredAttestor": null},
                  "attest": {"required": true, "mSelect": 2, "kSlack": 1, "nSlots": 5, "divergeBpsAttest": 1500, "armDelay": 8,
                             "armMin": 3, "emergencyPersist": 4, "emergencyRatioBps": 10500, "emergencyNoticeTtl": 64,
                             "carrierMode": "scriptsig", "attestFeeBps": 2500, "attestMaxAge": 8,
                             "bondMinZat": 1000000000, "bondMinLock": 200, "bondMaturity": 8}}
     })");
+}
+
+// rpcversion 6 with the in-term rule switched off (inTermClaims false, θ 110 %): the code paths the
+// wallet keeps for a vault judged by its heights, exercised by the cases written before in-term claims
+static json infoLegacy() {
+    json i = infoActive();
+    i["params"]["inTermClaims"] = false;
+    i["params"]["claimThresholdBps"] = 11000;
+    return i;
 }
 
 static json statsOpen() {
@@ -312,6 +322,7 @@ struct Harness {
     YellowbackController ctl{nullptr, nullptr};
     FakeRpc              rpc;
     bool                 answer = true;
+    bool                 inTerm = true;  // feedActive(): infoActive() (in-term claims) or infoLegacy()
     QStringList          confirms;       // the confirmation texts shown, in order
     QStringList          notices;        // "title|text" of every notice
     QStringList          errorNotices;   // the texts of the error notices
@@ -335,7 +346,7 @@ struct Harness {
     }
     void feedActive(int height = 331, const json& positions = json(nullptr), const json& claimable = json(nullptr),
                     qint64 balanceCents = 500000) {
-        json info = infoActive();
+        json info = inTerm ? infoActive() : infoLegacy();
         info["height"] = height; info["chainHeight"] = height;
         ctl.feed(info, statsOpen(), activationActive(), balanceReply(balanceCents), positions, claimable, json(nullptr));
         // the refresh an action triggers on success reads the same replies back
@@ -610,23 +621,23 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsFive() {
-        // the vault upgrade (upgrade plan §15.10): rpcversion 5 removes the enforcement machinery and the sweep
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 5);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 5);
+    void contractVersionIsSix() {
+        // in-term claims (in-term plan §4.1): rpcversion 6 lists in-term claimable rows and quotes the early-redeem fee
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 6);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 6);
     }
 
-    // The rpcversion 5 handshake: 5 is accepted, 4 (the hardening node before the vault upgrade)
-    // and 6 are refused with both numbers named, and nothing is enabled until they match.
-    void handshakeAcceptsRpcVersionFiveOnly() {
-        for (int v : { 4, 6 }) {
+    // The rpcversion 6 handshake: 6 is accepted, 5 (the vault upgrade before in-term claims)
+    // and 7 are refused with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionSixOnly() {
+        for (int v : { 5, 7 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("version 5"));
+            QVERIFY(h.label("lblBanner").contains("version 6"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -772,7 +783,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 5"));
+        QVERIFY(h.label("lblBanner").contains("version 6"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -955,7 +966,7 @@ private slots:
 
     void vaultsRenderActiveRow() {
         Harness h;
-        h.feed(infoActive(), statsOpen(), activationActive(), json::array({positionActive()}));
+        h.feed(infoLegacy(), statsOpen(), activationActive(), json::array({positionActive()}));
         auto m = h.ctl.positionsModel();
         QCOMPARE(m->rowCount(QModelIndex()), 1);
         QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::DisplayRole).toString(), QString("ACTIVE"));
@@ -1139,7 +1150,7 @@ private slots:
     // "I don't actually see a collateral ratio for my specific position"
     void vaultsShowRatioAndUnderwaterPrice() {
         Harness h;
-        h.feed(infoActive(), statsOpen(), activationActive(), json::array({positionActive()}));
+        h.feed(infoLegacy(), statsOpen(), activationActive(), json::array({positionActive()}));
         auto m = h.ctl.positionsModel();
         const YellowbackPosition pos = YellowbackPosition::fromJson(positionActive());
         const qint64 bps = YellowbackPositionsModel::ratioBps(pos, 2000000);       // statsOpen()'s pClaim
@@ -1152,7 +1163,7 @@ private slots:
             QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::ForegroundRole).value<QBrush>().color(), QColor(Qt::red));
         // no claim price: the column says so rather than inventing a number
         json stats = statsOpen(); stats["pClaim"] = nullptr; stats["pFast"] = nullptr;
-        h.feed(infoActive(), stats, activationActive(), json::array({positionActive()}));
+        h.feed(infoLegacy(), stats, activationActive(), json::array({positionActive()}));
         QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Ratio), Qt::DisplayRole).toString().contains("no price"));
     }
 
@@ -1208,8 +1219,9 @@ private slots:
     // "difficult to read each row to understand which vault I needed to act on first"
     void vaultsActByAndHighlight() {
         Harness h;
+        h.inTerm = false;                                            // the heights rule; in-term: vaultsInTermThresholdWarning
         json p = positionActive();                                   // lock 380, claim 404
-        h.feed(infoActive(), statsOpen(), activationActive(), json::array({p}));   // height 331
+        h.feed(infoLegacy(), statsOpen(), activationActive(), json::array({p}));   // height 331
         auto m = h.ctl.positionsModel();
         auto cell = [&](int col, int role = Qt::DisplayRole) { return m->data(m->index(0, col), role); };
         QVERIFY2(cell(YellowbackPositionsModel::ActBy).toString().startsWith("locked; redeemable in 49 block"), qPrintable(cell(YellowbackPositionsModel::ActBy).toString()));
@@ -1760,6 +1772,7 @@ private slots:
 
     void mintConfirmationAndCall() {
         Harness h;
+        h.inTerm = false;                                            // the heights rule's copy; in-term: mintConfirmationInTerm
         h.feedActive();
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
         h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
@@ -2012,6 +2025,7 @@ private slots:
 
     void redeemActiveConfirmationAndResult() {
         Harness h;
+        h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
         h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
@@ -2040,6 +2054,7 @@ private slots:
     // it as extraBurnCents, and the dialog says so.
     void redeemShowsExtraBurn() {
         Harness h;
+        h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
         h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
@@ -2054,6 +2069,7 @@ private slots:
 
     void redeemWithoutExtraBurnSaysNothing() {
         Harness h;
+        h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
         h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
@@ -2065,6 +2081,7 @@ private slots:
 
     void redeemWithDestinationFromRedeemPage() {
         Harness h;
+        h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
         h.rpc.errors[YellowbackRpc::GETFEEPAYEE] = "fee-no-eligible-payee: E(R) is empty";
@@ -2094,6 +2111,7 @@ private slots:
 
     void redeemVaultLockedAndNotActiveErrors() {
         Harness h;
+        h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
         h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply();
@@ -2931,6 +2949,7 @@ private slots:
 
         // The banner carries it above every page (regtest: GRACE 24, so 381 is inside the day)
         Harness h;
+        h.inTerm = false;                                            // in-term: the threshold warning instead (vaultsInTermThresholdWarning)
         h.feedActive(381, json::array({positionActive()}));
         QCOMPARE(h.ctl.deadlineWarnings().size(), 1);
         QVERIFY(h.visible("lblBanner"));
@@ -3175,8 +3194,9 @@ private slots:
             QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
             QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
         }
-        {   // Redeem with an inflated fee
+        {   // Redeem with an inflated fee (yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee)
             Harness h;
+            h.inTerm = false;
             json row = positionActive(); row["canRedeem"] = true;
             h.feedActive(381, json::array({row}));
             json f = feePayeeReply(VAULT_ZAT); f["feeZat"] = 20000000000;
@@ -3196,6 +3216,7 @@ private slots:
             QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), 0);
             QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
             Harness early;
+            early.inTerm = false;                                    // under in-term claims the threshold decides at every height
             early.feedActive(400, json(nullptr), json::array({claimableRow()}));
             early.tab.claimVault(YellowbackClaimable::fromJson(claimableRow()));
             QCOMPARE(early.rpc.count(YellowbackRpc::CLAIM), 0);
@@ -3209,6 +3230,214 @@ private slots:
             QVERIFY2(h.label("lblVaultAction").contains("heights for this vault are inconsistent"), qPrintable(h.label("lblVaultAction")));
         }
         QVERIFY(YellowbackController::explainError("claim-burn-above-max: 100100 > 100099").contains("more YED"));
+    }
+
+    // ── rpcversion 6: in-term claims (in-term plan IT-7, IT-8, IT-9; D-IT-15, D-IT-16) ─────────
+
+    // The quote yed_estimateredeem gives for positionActive() at `height` (tip + 1), consistent with
+    // the parameters: FEE-1 plus, before lock height 380, 5 % of the collateral (class A).
+    static json estimateRedeemReply(int height) {
+        const bool early = height < 380;
+        const qint64 earlyFee = early ? VAULT_ZAT * 500 / 10000 : 0;
+        return json{{"vault", "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"}, {"status", "ACTIVE"},
+                    {"termClass", "A"}, {"lockHeight", 380}, {"height", height}, {"early", early}, {"burnedCents", 100000},
+                    {"collateralZat", VAULT_ZAT}, {"feeZat", fee1(VAULT_ZAT) + earlyFee}, {"earlyRedeemFeeBps", 500},
+                    {"earlyRedeemFeeZat", earlyFee}, {"payee", "smQvTmAz2ExamplePayoutAddress1111111"}, {"canRedeem", true}, {"error", ""}};
+    }
+
+    void inTermPromiseIsTheDisclosure() {
+        // IT-8 verbatim (tests/check-rpc-contract.py --spec checks it against the generated spec's §8.1)
+        const QString promise = YellowbackTab::inTermPromise();
+        QVERIFY(promise.startsWith("Your YEC is locked for the term you choose. You can redeem at any time by paying back the YED you minted;"));
+        QVERIFY(promise.contains("an early-redeem fee of 5 %, 2.5 % or 1 % of your collateral for a short, medium or long term."));
+        QVERIFY(promise.contains("If your collateral falls below 125 % of your debt at the attested price, anyone may close your vault by paying your debt;"));
+        QVERIFY(promise.contains("which, at the threshold, is usually nothing."));
+        QVERIFY(promise.endsWith("Before that happens, your wallet will warn you, and redeeming stops it."));
+        const QString about = YellowbackTab::aboutText();
+        QVERIFY(about.contains(promise));
+        QVERIFY(about.contains("between 19 % and 50 % of vaults to be claimed in term"));   // IT-8: stated, not hidden
+        QVERIFY(!about.contains("before the claim height"));                                  // the old collateral sentence is gone
+        QVERIFY(!about.contains("trustless", Qt::CaseInsensitive));
+    }
+
+    void vaultsInTermThresholdWarning() {
+        Harness h;
+        json p = positionActive(); p["canRedeem"] = true;              // in term (lock 380), the owner may redeem (D-IT-15)
+        h.feedActive(331, json::array({p}));
+        auto m = h.ctl.positionsModel();
+        auto cell = [&](int col, int role = Qt::DisplayRole) { return m->data(m->index(0, col), role); };
+        QVERIFY(h.ctl.inTermClaims());
+        QCOMPARE(h.ctl.claimThresholdBps(), (qint64)12500);
+        // far above the threshold (claim price $2.00, claimable below $0.4378): plain, the price named
+        QVERIFY2(cell(YellowbackPositionsModel::ActBy).toString().startsWith("redeemable at any time (early-redeem fee for 49 block"), qPrintable(cell(YellowbackPositionsModel::ActBy).toString()));
+        QVERIFY(cell(YellowbackPositionsModel::ActBy).toString().contains("claimable below $0.4378"));
+        QVERIFY(!cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).isValid());
+        QVERIFY(cell(YellowbackPositionsModel::Claimable).toString().startsWith("no (claim price above $0.4378"));   // no "not before" in term
+        QVERIFY(cell(YellowbackPositionsModel::UnderwaterBelow, Qt::ToolTipRole).toString().contains("125 %"));
+        QVERIFY(h.ctl.deadlineWarnings().isEmpty());                    // no claim-height deadline under in-term claims
+        auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, h.ctl.params(), 2000000);
+        QVERIFY(a.redeem && !a.renew && !a.release);
+        QVERIFY2(a.text.contains("early-redeem fee of 5 % of the collateral (about " % YellowbackFormat::zec(VAULT_ZAT * 500 / 10000) % ")"), qPrintable(a.text));
+        QVERIFY(a.text.contains("if the claim price falls below $0.4378"));
+        // the claim price nears the threshold (within 25 %): orange, and the banner warns
+        json near = statsOpen(); near["pClaim"] = 500000; near["pFast"] = 500000;
+        h.ctl.feed(infoActive(), near, activationActive(), balanceReply(500000), json::array({p}), json(nullptr), json(nullptr));
+        QVERIFY2(cell(YellowbackPositionsModel::ActBy).toString().startsWith("WARNING: claimable if the claim price falls below $0.4378 (now $0.5000)"), qPrintable(cell(YellowbackPositionsModel::ActBy).toString()));
+        QCOMPARE(cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).value<QBrush>().color(), QColor(255, 232, 190));
+        QCOMPARE(h.ctl.deadlineWarnings().size(), 1);
+        QVERIFY2(h.ctl.deadlineWarnings()[0].contains("becomes claimable if the claim price falls below $0.4378"), qPrintable(h.ctl.deadlineWarnings()[0]));
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, h.ctl.params(), 500000);
+        QVERIFY(a.text.contains("WARNING: it becomes claimable"));
+        // claimable now: red, "claimable now", and the warning says redeeming stops it
+        p["claimable"] = true;
+        json low = statsOpen(); low["pClaim"] = 400000; low["pFast"] = 400000;
+        h.ctl.feed(infoActive(), low, activationActive(), balanceReply(500000), json::array({p}), json(nullptr), json(nullptr));
+        QVERIFY(cell(YellowbackPositionsModel::ActBy).toString().startsWith("CLAIMABLE NOW"));
+        QCOMPARE(cell(YellowbackPositionsModel::Claimable).toString(), QString("YES, claimable now"));
+        QCOMPARE(cell(YellowbackPositionsModel::ActBy, Qt::BackgroundRole).value<QBrush>().color(), QColor(255, 210, 210));
+        QVERIFY(h.ctl.deadlineWarnings().value(0).contains("is claimable now"));
+        QVERIFY(h.ctl.deadlineWarnings().value(0).contains("Redeem it now to stop that"));
+        // past the lock height: no early-redeem fee, renew offered again
+        p["claimable"] = false;
+        a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 381, h.ctl.params(), 2000000);
+        QVERIFY(a.redeem && a.renew);
+        QVERIFY(a.text.contains("no early-redeem fee"));
+    }
+
+    void redeemInTermQuotesTheEarlyRedeemFee() {
+        const qint64 earlyFee = VAULT_ZAT * 500 / 10000;
+        {   // in term: the quote first, the early-redeem fee named, the collateral out net of both fees
+            Harness h;
+            json p = positionActive(); p["canRedeem"] = true;
+            h.feedActive(331, json::array({p}));
+            h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = estimateRedeemReply(332);
+            json r = redeemReply(); r["feeZat"] = fee1(VAULT_ZAT) + earlyFee; r["earlyRedeemFeeZat"] = earlyFee;
+            h.rpc.results[YellowbackRpc::REDEEM] = r;
+            h.tab.redeemVault(YellowbackPosition::fromJson(p));
+            QCOMPARE(h.rpc.lastParams(YellowbackRpc::ESTIMATEREDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}));
+            QCOMPARE(h.rpc.count(YellowbackRpc::GETFEEPAYEE), 0);
+            QCOMPARE(h.confirms.size(), 1);
+            const QString& text = h.confirms[0];
+            QVERIFY2(text.contains("Early-redeem fee: " % YellowbackFormat::zec(earlyFee) % " of YEC (5 % of the collateral, class A)"), qPrintable(text));
+            QVERIFY(text.contains("Pool fee: " % YellowbackFormat::zec(fee1(VAULT_ZAT))));
+            QVERIFY(text.contains("Redeeming at or after height 380 pays no early-redeem fee"));
+            QVERIFY(text.contains(YellowbackFormat::zec(VAULT_ZAT - fee1(VAULT_ZAT) - earlyFee)));   // collateral out
+            QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 1);
+            QVERIFY2(h.notices.value(0).contains("of which the early-redeem fee: " % YellowbackFormat::zec(earlyFee)), qPrintable(h.notices.value(0)));
+            QVERIFY(h.copyIsClean());
+            // the Redeem page says the early-redeem fee comes off too
+            auto redeemCollateral = h.tab.page(YellowbackTab::Redeem)->findChild<QLabel*>("lblCollateral");
+            QVERIFY(redeemCollateral != nullptr);
+            QVERIFY2(redeemCollateral->text().contains("early-redeem fee of 5 %"), qPrintable(redeemCollateral->text()));
+        }
+        {   // past the lock height: no early-redeem fee line
+            Harness h;
+            json p = positionActive(); p["canRedeem"] = true;
+            h.feedActive(381, json::array({p}));
+            h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = estimateRedeemReply(382);
+            h.rpc.results[YellowbackRpc::REDEEM] = redeemReply();
+            h.tab.redeemVault(YellowbackPosition::fromJson(p));
+            QCOMPARE(h.confirms.size(), 1);
+            QVERIFY(!h.confirms[0].contains("Early-redeem fee"));
+            QVERIFY(!h.notices.value(0).contains("early-redeem"));
+        }
+        {   // a quote whose early-redeem fee disagrees with the parameters is not shown, nothing is sent (H-9.3)
+            Harness h;
+            json p = positionActive(); p["canRedeem"] = true;
+            h.feedActive(331, json::array({p}));
+            json q = estimateRedeemReply(332); q["earlyRedeemFeeZat"] = earlyFee * 2; q["feeZat"] = fee1(VAULT_ZAT) + earlyFee * 2;
+            h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = q;
+            h.rpc.results[YellowbackRpc::REDEEM] = redeemReply();
+            h.tab.redeemVault(YellowbackPosition::fromJson(p));
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+            QVERIFY2(h.errorNotices.value(0).contains("earlyRedeemFeeZat is"), qPrintable(h.errorNotices.value(0)));
+        }
+        {   // the node would refuse: its identifier is shown, nothing is sent
+            Harness h;
+            json p = positionActive(); p["canRedeem"] = true;
+            h.feedActive(331, json::array({p}));
+            json q = estimateRedeemReply(332); q["canRedeem"] = false; q["error"] = "vault-not-owned";
+            h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = q;
+            h.tab.redeemVault(YellowbackPosition::fromJson(p));
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+            QVERIFY(h.errorNotices.value(0).contains("vault-not-owned"));
+        }
+        {   // no quote, no redeem
+            Harness h;
+            json p = positionActive(); p["canRedeem"] = true;
+            h.feedActive(331, json::array({p}));
+            h.rpc.errors[YellowbackRpc::ESTIMATEREDEEM] = "vault-not-found: no such vault";
+            h.tab.redeemVault(YellowbackPosition::fromJson(p));
+            QCOMPARE(h.confirms.size(), 0);
+            QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+            QVERIFY(h.errorNotices.value(0).contains("could not quote"));
+        }
+        // the pure check
+        YellowbackPosition pos = YellowbackPosition::fromJson(positionActive());
+        QVERIFY(YellowbackController::checkEstimateRedeem(infoActive()["params"], pos, estimateRedeemReply(332)).isEmpty());
+        json fee0 = estimateRedeemReply(332); fee0["feeZat"] = 0; fee0["earlyRedeemFeeZat"] = 0; fee0["payee"] = nullptr;   // FEE-0
+        QVERIFY(YellowbackController::checkEstimateRedeem(infoActive()["params"], pos, fee0).isEmpty());
+        json wrongEarly = estimateRedeemReply(332); wrongEarly["early"] = false;
+        QVERIFY(!YellowbackController::checkEstimateRedeem(infoActive()["params"], pos, wrongEarly).isEmpty());
+        QCOMPARE(YellowbackController::earlyRedeemFeeBpsFor(infoActive()["params"], "B"), (qint64)250);
+        json noRow = infoActive()["params"]; for (auto& c : noRow["classes"]) c.erase("earlyRedeemFeeBps");
+        QCOMPARE(YellowbackController::earlyRedeemFeeBpsFor(noRow, "C"), (qint64)100);     // from the top-level array
+    }
+
+    void claimListHonoursClaimableFalse() {
+        Harness h;
+        json yes = claimableRow(); yes["claimable"] = true; yes["lockHeight"] = 380; yes["claimPath"] = "a";
+        json no = claimableRow();  no["claimable"] = false; no["lockHeight"] = 380; no["claimPath"] = ""; no["underwaterAt"] = 1500000;
+        no["vault"] = "7b2c3d4e5f60718293a4b5c6d7e8f9001a2b3c4d5e6f708192a3b4c5d6e7f809:0";
+        h.feedActive(331, json(nullptr), json::array({yes, no}));
+        auto m = h.ctl.claimableModel();
+        QCOMPARE(m->rowCount(QModelIndex()), 2);
+        QCOMPARE(m->claimableCount(), 1);
+        QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::State), Qt::DisplayRole).toString(), QString("claimable now (in term)"));
+        QCOMPARE(m->data(m->index(1, YellowbackClaimableModel::State), Qt::DisplayRole).toString(), QString("not claimable: above $1.5000"));
+        QCOMPARE(m->data(m->index(1, YellowbackClaimableModel::Vault), Qt::ForegroundRole).value<QBrush>().color(), QColor(Qt::gray));
+        QVERIFY2(h.label("lblClaimHint").startsWith("1 claimable vault(s)"), qPrintable(h.label("lblClaimHint")));
+        QVERIFY(h.label("lblClaimHint").contains("1 more vault(s) are listed above the claim threshold"));
+        h.selectRow("tblClaimable", 1);
+        QVERIFY(!h.button("btnClaim")->isEnabled());
+        h.selectRow("tblClaimable", 0);
+        QVERIFY(h.button("btnClaim")->isEnabled());
+        // a claimable: false row is refused locally, nothing is sent
+        h.tab.claimVault(YellowbackClaimable::fromJson(no));
+        QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), 0);
+        QVERIFY(h.errorNotices.value(0).contains("is not claimable now"));
+        // a claimable row in term passes the plausibility check (no claim-height rule) and says so
+        QVERIFY(YellowbackController::checkClaimable(h.ctl.params(), 331, YellowbackClaimable::fromJson(yes)).isEmpty());
+        h.answer = false;
+        h.tab.claimVault(YellowbackClaimable::fromJson(yes));
+        QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.confirms[0].contains("The vault is in term (lock height 380) and below the claim threshold of 125 %"), qPrintable(h.confirms[0]));
+        // only claimable rows: nothing claimable, both listed rows above the threshold
+        Harness none;
+        none.feedActive(331, json(nullptr), json::array({no}));
+        QVERIFY(none.label("lblClaimHint").startsWith("No vault is claimable at the current claim price. 1 more vault(s)"));
+    }
+
+    void mintConfirmationInTerm() {
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
+        h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(EST_ZAT);
+        h.answer = false;
+        h.mintAmount("1000");
+        h.tab.doMint();
+        QCOMPARE(h.confirms.size(), 1);
+        const QString& text = h.confirms[0];
+        QVERIFY2(text.contains("You can redeem at any time by paying back the $1,000.00 of YED; redeeming before height 377 also costs an early-redeem fee of 5 % of the collateral"), qPrintable(text));
+        QVERIFY(text.contains(YellowbackFormat::zec(EST_ZAT * 500 / 10000)));
+        QVERIFY(text.contains("falls below 125 % of its debt"));
+        QVERIFY(text.contains("usually nothing"));
+        QVERIFY(text.contains("This wallet warns you before that happens, and redeeming stops it."));
+        QVERIFY(text.contains("Back up wallet.dat"));
+        QVERIFY(!text.contains("only your key can spend it before the claim height"));
+        QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
     }
 
     void devnetEndToEnd() {
