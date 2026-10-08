@@ -20,6 +20,12 @@ script asserts:
      namespace marked `// contract: optional <command>.<path>` holds the keys of such an absent
      object; its constants are not looked up either, but the command must exist.
 
+  5. With `--spec <yellowback-spec.md>` (the node's generated doc/yellowback-spec.md of the in-term
+     line, `make spec-in-term`): the collateral bullet of its section 8.1 trust statement (the in-term
+     plan's IT-8 promise, "- Your YEC is locked ...") equals, whitespace-normalised, the string
+     YellowbackTab::inTermPromise() returns in src/yellowbacktab.cpp, so the wallet's disclosure is the
+     promise verbatim.
+
 Exit code 0 when everything matches; 1 with one line per finding otherwise. No dependencies
 beyond the standard library, so the CI job runs it with the platform's python3 and a developer
 with the workspace venv.
@@ -37,6 +43,9 @@ CONTRACT = os.path.join(REPO, "docs", "yellowback-rpc-contract.json")
 RE_VERSION = re.compile(r"constexpr\s+int\s+RPC_VERSION\s*=\s*(\d+)\s*;")
 RE_NAMESPACE = re.compile(r"^\s*namespace\s+(\w+)\s*\{\s*(?://\s*contract:\s*(\S+))?")
 RE_CONST = re.compile(r'constexpr\s+const\s+char\*\s+(\w+)\s*=\s*"([^"]*)"\s*;(.*)$')
+TAB = os.path.join(REPO, "src", "yellowbacktab.cpp")
+PROMISE_OPENING = "Your YEC is locked"
+
 RE_METHOD = re.compile(r'constexpr\s+const\s+char\*\s+\w+\s*=\s*"(yed_\w+)"\s*;')
 
 
@@ -65,8 +74,58 @@ def resolve(contract, marker):
     return node, None
 
 
+def spec_promise(path):
+    """The section 8.1 bullet that opens with PROMISE_OPENING, its continuation lines joined."""
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    in81, out = False, None
+    for line in lines:
+        if line.startswith("### "):
+            in81 = line.startswith("### 8.1")
+            continue
+        if not in81:
+            continue
+        if out is None:
+            if line.startswith("- " + PROMISE_OPENING):
+                out = [line[2:]]
+        elif line.startswith("  ") and line.strip():
+            out.append(line.strip())
+        else:
+            break
+    return " ".join(" ".join(out).split()) if out else None
+
+
+def wallet_promise():
+    """The C++ string literals of YellowbackTab::inTermPromise(), concatenated."""
+    with open(TAB, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"QString\s+YellowbackTab::inTermPromise\(\)\s*\{(.*?)\n\}", text, re.S)
+    if not m:
+        return None
+    lits = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
+    return " ".join("".join(l.replace('\\"', '"') for l in lits).split())
+
+
+def check_spec(path):
+    want, have = spec_promise(path), wallet_promise()
+    if want is None:
+        return ["%s: section 8.1 has no bullet opening %r" % (path, PROMISE_OPENING)]
+    if have is None:
+        return ["%s: no YellowbackTab::inTermPromise()" % TAB]
+    if want != have:
+        return ["the wallet's inTermPromise() differs from %s section 8.1:\n  spec:   %s\n  wallet: %s" % (path, want, have)]
+    return []
+
+
 def main():
     findings = []
+    if len(sys.argv) == 3 and sys.argv[1] == "--spec":
+        findings += check_spec(sys.argv[2])
+        if not findings:
+            print("YellowbackTab::inTermPromise() equals the trust statement of %s (section 8.1)" % sys.argv[2])
+    elif len(sys.argv) != 1:
+        print("usage: check-rpc-contract.py [--spec <yellowback-spec.md>]")
+        return 2
     with open(CONTRACT, encoding="utf-8") as f:
         contract = json.load(f)
     with open(HEADER, encoding="utf-8") as f:

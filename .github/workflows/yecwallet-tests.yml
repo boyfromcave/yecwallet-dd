@@ -23,7 +23,7 @@ name: yecwallet-tests
 # CI changes before they merge. yecwallet-legacy (the pristine v4.5.0 baseline) is never pushed to.
 on:
   push:
-    branches: [ harden/yellowback, upgrade/vault, main, feature/yellowback-price-attest, 'ci/**' ]
+    branches: [ harden/yellowback, upgrade/vault, upgrade/vault-in-term, main, feature/yellowback-price-attest, 'ci/**' ]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -80,6 +80,7 @@ jobs:
           set -euo pipefail
           case "$BRANCH" in
             ci/harden*|harden/yellowback) node=harden/yellowback ;;
+            upgrade/vault-in-term) node=upgrade/vault-in-term ;;
             ci/upgrade*|upgrade/vault)    node=upgrade/vault ;;
             *)                            node=feature/yellowback-price-attest ;;
           esac
@@ -90,6 +91,18 @@ jobs:
           fi
           cmp docs/yellowback-rpc-contract.json "$RUNNER_TEMP/node-contract.json" \
             && echo "docs/yellowback-rpc-contract.json = $NODE_REPO_YCASH_DD@$node doc/yellowback-rpc-contract.json"
+      - name: The disclosure is the in-term promise (the node's generated spec, section 8.1)
+        # In-term claims (rpcversion 6): YellowbackTab::inTermPromise() must equal, verbatim, the IT-8
+        # promise in the node's doc/yellowback-spec.md (`make spec-in-term`). Only the in-term line has it.
+        if: ${{ (github.base_ref || github.ref_name) == 'upgrade/vault-in-term' }}
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/$NODE_REPO_YCASH_DD/upgrade/vault-in-term/doc/yellowback-spec.md"
+          if ! curl -fsSL -o "$RUNNER_TEMP/node-spec.md" "$url"; then
+            echo "::notice::$NODE_REPO_YCASH_DD has no upgrade/vault-in-term spec yet; disclosure check skipped"
+            exit 0
+          fi
+          python3 tests/check-rpc-contract.py --spec "$RUNNER_TEMP/node-spec.md"
 
   qtest:
     runs-on: ubuntu-22.04
@@ -179,6 +192,7 @@ jobs:
           if [ -z "$ref" ]; then
             case "$BRANCH" in
               ci/harden*|harden/yellowback) ref=harden/yellowback ;;
+              upgrade/vault-in-term) ref=upgrade/vault-in-term ;;
               ci/upgrade*|upgrade/vault)    ref=upgrade/vault ;;
               *)                            ref=$record ;;
             esac

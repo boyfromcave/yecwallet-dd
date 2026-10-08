@@ -112,6 +112,27 @@ an underwater vault, after a delay in which a member of the attestor set can can
 at a wrong price. The QTest checks the Overview and every confirmation dialog for this
 (`Harness::copyIsClean`: no "trustless", "federat", "abandon" or "enforcing pool").
 
+**rpcversion 6: in-term claims (branch `upgrade/vault-in-term`; the workspace's
+`docs/plans/yellowback-in-term-claims-plan.md` IT-7..IT-9).** When `yed_getinfo.params.inTermClaims` is
+true the wallet judges a vault by the threshold, not by its heights: the owner may redeem at any
+height, and before the lock height the redeem also pays the early-redeem fee
+(`params.earlyRedeemFeeBps`, 5 / 2.5 / 1 % of the collateral for class A / B / C); anyone may claim the
+vault, in term too, once its collateral is under θ × debt at the claim price (`claimThresholdBps`,
+125 %). On the Vaults page the Act-by cell names the vault's claimable-at price (`underwaterAt`),
+turns orange with a "WARNING" while the tip's claim price is within 25 % above it
+(`YellowbackPositionsModel::WARN_MARGIN_BPS`), and red with "CLAIMABLE NOW" once the node marks it
+claimable; the banner carries the same warning instead of the claim-height deadline, and Renew is
+offered from the lock height (earlier it would pay the early-redeem fee). The Redeem dialog asks the
+node for `yed_estimateredeem` first, recomputes its fee (FEE-1 plus the early-redeem fee, floor, both
+`0` under FEE-0; `checkEstimateRedeem`) and shows the early-redeem fee before the user confirms; a
+quote that fails the check, a refusal the quote announces (`canRedeem: false`) or no quote at all
+sends nothing. The Claim page lists every row `yed_listclaimable` returns but offers Claim only on
+`claimable: true` rows (the others are grey, "not claimable: above $x"). The About text's collateral
+sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()`;
+`tests/check-rpc-contract.py --spec <node>/doc/yellowback-spec.md` checks it against the generated
+spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
+the height-based copy (the QTest's `infoLegacy()` cases).
+
 ## Testing
 
 ```bash
@@ -121,6 +142,7 @@ QT_QPA_PLATFORM=offscreen build/bin/yellowback_test        # offline cases; the 
 QT_QPA_PLATFORM=offscreen build/bin/nodecompat_test        # v4.5.0 / 6.20.0 call shapes (loopback mock ycashd)
 QT_QPA_PLATFORM=offscreen build/bin/nodedatacheck_test     # the data directory upgrade check
 python3 tests/check-rpc-contract.py                        # yellowbackrpc.h vs docs/yellowback-rpc-contract.json
+python3 tests/check-rpc-contract.py --spec ../ycash-dd/doc/yellowback-spec.md   # in-term line: the disclosure is IT-8 verbatim
 grep -rn 'trustless' src/ | { ! grep .; }
 ```
 
