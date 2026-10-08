@@ -3577,9 +3577,10 @@ private slots:
         h.ctl.setPendingPollMs(250);
         h.ctl.onConnected();
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
-        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)5);
+        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)6);
         QVERIFY2(h.ctl.upgradeActive(), "the devnet's vault upgrade is not active");
         QVERIFY(YellowbackJson::has(h.ctl.info(), YellowbackRpc::Info::MINT_REQUIRES_ARMED));
+        QVERIFY2(h.ctl.inTermClaims(), "the devnet's node is not on the in-term line (params.inTermClaims)");
         // devnetEndToEnd mines node 0's untagged blocks to its lock height: let the pools refill the price windows
         for (int i = 0; i < 96 && !h.ctl.mintBlocker(10000).isEmpty(); i++) { mineOne(); h.ctl.refresh(true); }
         for (int i = 0; i <= h.ctl.refLag(); i++) mineOne();
@@ -3616,8 +3617,22 @@ private slots:
         const int lockBlocks = vault.lockHeight - vault.refHeight;
         qInfo("minted vault %s: refHeight %d lockHeight %d claimHeight %d collateral %lld",
               qPrintable(mintTxid), vault.refHeight, vault.lockHeight, vault.claimHeight, (long long)vault.collateralZat);
-        // regtest GRACE is 24 blocks, so the claim height is always inside the one-day warning
-        QVERIFY(!h.ctl.deadlineWarnings().isEmpty());
+        // in-term claims: no claim-height deadline; a vault minted at the devnet's $50 is far above the threshold
+        QVERIFY2(h.ctl.deadlineWarnings().isEmpty(), qPrintable(h.ctl.deadlineWarnings().join("\n")));
+        QVERIFY(vault.underwaterAt > 0 && vault.canRedeem);                       // D-IT-15: the owner may redeem in term
+        // IT-9 against the real node: yed_estimateredeem in term quotes the early-redeem fee, and the
+        // wallet's own recomputation (FEE-1 + earlyRedeemFeeBps[A] of the collateral) agrees with it
+        json quote;
+        QString quoteErr;
+        h.ctl.estimateRedeem(mintTxid, [&](const json& q) { quote = q; }, [&](const QString& e) { quoteErr = e; });
+        QVERIFY2(quoteErr.isEmpty() && quote.is_object(), qPrintable(quoteErr));
+        qInfo("in-term quote: %s", quote.dump().c_str());
+        QVERIFY(YellowbackJson::toBool(quote, YellowbackRpc::EstimateRedeem::EARLY));
+        QVERIFY(YellowbackJson::toBool(quote, YellowbackRpc::EstimateRedeem::CAN_REDEEM));
+        QVERIFY2(YellowbackController::checkEstimateRedeem(h.ctl.params(), vault, quote).isEmpty(),
+                 qPrintable(YellowbackController::checkEstimateRedeem(h.ctl.params(), vault, quote).join("; ")));
+        QCOMPARE(YellowbackJson::toInt(quote, YellowbackRpc::EstimateRedeem::EARLY_REDEEM_FEE_ZAT),
+                 YellowbackController::earlyRedeemFeeZatFor(h.ctl.params(), vault.termClass, vault.collateralZat));
 
         // To the lock height, then Renew
         mineTo(vault.lockHeight);
@@ -3627,7 +3642,7 @@ private slots:
         h.ctl.refresh(true);
         for (int i = 0; i < h.ctl.positionsModel()->rowCount(QModelIndex()); i++)
             if (h.ctl.positionsModel()->positionAt(i)->txid == mintTxid) vault = *h.ctl.positionsModel()->positionAt(i);
-        auto acts = YellowbackTab::vaultActions(vault, h.ctl.height());
+        auto acts = YellowbackTab::vaultActions(vault, h.ctl.height(), h.ctl.params(), h.ctl.claimPriceNow());
         QVERIFY(acts.renew && acts.redeem);
         QVERIFY2(h.ctl.mintBlocker(vault.mintedCents, h.ctl.classForLock(h.ctl.renewLockBlocks(vault)).name).isEmpty(),
                  qPrintable(h.ctl.mintBlocker(vault.mintedCents)));
@@ -3801,7 +3816,7 @@ private slots:
                 dev.settle();
                 h.ctl.refresh(true);
                 for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
-                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid) row = h.ctl.claimableModel()->rowAt(i);
+                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid && h.ctl.claimableModel()->rowAt(i)->claimable) row = h.ctl.claimableModel()->rowAt(i);
             }
             if (row == nullptr) { qWarning("vault %s is not in yed_listclaimable", qPrintable(vaultTxid)); return QString(); }
             h.errorNotices.clear();
@@ -3820,7 +3835,7 @@ private slots:
                 h.ctl.refresh(true);
                 row = nullptr;
                 for (int i = 0; i < h.ctl.claimableModel()->rowCount(QModelIndex()); i++)
-                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid) row = h.ctl.claimableModel()->rowAt(i);
+                    if (h.ctl.claimableModel()->rowAt(i)->txid() == vaultTxid && h.ctl.claimableModel()->rowAt(i)->claimable) row = h.ctl.claimableModel()->rowAt(i);
                 if (row == nullptr) return QString();
             }
             if (!h.errorNotices.isEmpty()) { qWarning("%s", qPrintable(h.errorNotices.join("\n"))); return QString(); }
@@ -4045,9 +4060,10 @@ private slots:
             QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
             h.ctl.refresh(true);
             for (int r = 0; r < h.ctl.claimableModel()->rowCount(QModelIndex()); r++)
-                if (h.ctl.claimableModel()->rowAt(r)->txid() == mintTxid) row = h.ctl.claimableModel()->rowAt(r);
+                // rpcversion 6 (IT-7): the vault is listed from its mint on; wait for its claimable row
+                if (h.ctl.claimableModel()->rowAt(r)->txid() == mintTxid && h.ctl.claimableModel()->rowAt(r)->claimable) row = h.ctl.claimableModel()->rowAt(r);
         }
-        QVERIFY2(row != nullptr, qPrintable("the noticed vault is not in yed_listclaimable after the notice persisted: " %
+        QVERIFY2(row != nullptr, qPrintable("the noticed vault is not claimable in yed_listclaimable after the notice persisted: " %
                                             QString::fromStdString(dev.rpc("yed_listclaimable").dump()) % " at height " % QString::number(height())));
         QCOMPARE(row->claimPath, QString("b"));
         n = h.notices.size();
