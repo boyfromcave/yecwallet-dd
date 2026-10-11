@@ -81,7 +81,7 @@ jobs:
           case "$BRANCH" in
             ci/harden*|harden/yellowback) node=harden/yellowback ;;
             upgrade/vault-in-term) node=upgrade/vault-in-term ;;
-            upgrade/quantum-vaults|q/*) node=upgrade/quantum-vaults ;;
+            ci/q*|upgrade/quantum-vaults|q/*) node=upgrade/quantum-vaults ;;
             ci/upgrade*|upgrade/vault)    node=upgrade/vault ;;
             *)                            node=feature/yellowback-price-attest ;;
           esac
@@ -96,11 +96,12 @@ jobs:
         # In-term claims (rpcversion 6): YellowbackTab::inTermPromise() must equal, verbatim, the IT-8
         # promise in the node's doc/yellowback-spec.md (`make spec-in-term`; the quantum line's
         # `make spec-quantum` keeps the same section 8.1). Only the in-term and quantum lines have it.
-        if: ${{ contains(fromJSON('["upgrade/vault-in-term","upgrade/quantum-vaults"]'), github.base_ref || github.ref_name) }}
+        if: ${{ contains(fromJSON('["upgrade/vault-in-term","upgrade/quantum-vaults"]'), github.base_ref || github.ref_name) || startsWith(github.ref_name, 'ci/q') || startsWith(github.ref_name, 'q/') }}
         env:
           BRANCH: ${{ github.base_ref || github.ref_name }}
         run: |
           set -euo pipefail
+          case "$BRANCH" in ci/q*|q/*) BRANCH=upgrade/quantum-vaults ;; esac
           url="https://raw.githubusercontent.com/$NODE_REPO_YCASH_DD/$BRANCH/doc/yellowback-spec.md"
           if ! curl -fsSL -o "$RUNNER_TEMP/node-spec.md" "$url"; then
             echo "::notice::$NODE_REPO_YCASH_DD has no $BRANCH spec yet; disclosure check skipped"
@@ -197,7 +198,7 @@ jobs:
             case "$BRANCH" in
               ci/harden*|harden/yellowback) ref=harden/yellowback ;;
               upgrade/vault-in-term) ref=upgrade/vault-in-term ;;
-              upgrade/quantum-vaults|q/*) ref=upgrade/quantum-vaults ;;
+              ci/q*|upgrade/quantum-vaults|q/*) ref=upgrade/quantum-vaults ;;
               ci/upgrade*|upgrade/vault)    ref=upgrade/vault ;;
               *)                            ref=$record ;;
             esac
