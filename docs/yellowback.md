@@ -28,9 +28,9 @@ mined.
 
 | Action | Before the confirmation | The call | After |
 |---|---|---|---|
-| **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, the mint gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, `mintableClasses`, cap headroom) and `yed_getinfo.mintRequiresArmed`, class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`), the pool fee and payee from `yed_getfeepayee <refHeight> <requiredZat>` (`feeZat`, `default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none") | `yed_mint <cents> <lockBlocks> [from] "" false <maxCollateralZat>` (`from` = a `ys1…` funding address) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
+| **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, the mint gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, `mintableClasses`, cap headroom) and `yed_getinfo.mintRequiresArmed`, class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`, rpcversion 8: `protocolFeeCents`, `protocolFeeZat`), the payee from `yed_getfeepayee <refHeight>` (`default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none"); the page's fee line from `yed_estimatefee <cents>` | `yed_mint <cents> <lockBlocks> [from] "" false <maxCollateralZat>` (`from` = a `ys1…` funding address) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
 | **Send** (Send page) | prefix check (`ye`/`yt`/`yr` from `yed_getinfo.network`), `s1…`/`ys…`/`z…` refused locally, amount ≥ `MIN_OUTPUT`, confirmed balance, `yed_validateaddress` (`isvalid`, `reason`) | `yed_send <address> <cents>` | `txid`, `changeCents`, `expiryHeight`; a `change-floor` refusal's two workable amounts ("send N cents … or at most M cents") are parsed into the hint |
-| **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, fee and payee from `yed_getfeepayee <tip − refLag> <collateralZat>`, destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
+| **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, the fees and payee from `yed_estimateredeem <vaultTxid>` (rpcversion 8: on every node; `pMint`, `protocolFeeCents`, `protocolFeeZat`, `earlyRedeemFeeCents`, `earlyRedeemFeeZat`), destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
 | **Renew** (Vaults row) | from `lockHeight`, one confirmation for both legs | `yed_redeem`, then, once `yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's lock length (or the shortest enabled one), held to the confirmed `maxCollateralZat` | a notice per leg; a mint that cannot be built (minting paused, price past the cap, the vault claimed instead) stops the renewal and sends nothing else |
 | **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED; a transparent destination | `yed_claim <vaultTxid> [to] "" false <minOutZat> <maxBurnCents>` | the debt is burned and the collateral, less the owner's residual, moves into a claimant intent that waits `CLAIM_DELAY`; the vault is CLAIMING |
 | **Notice** (Vaults row) | a vault below the emergency ratio under the attested prices; anyone may post one (it costs the carrier and a network fee, no YED) | `yed_claimnotice <vaultTxid>` | the carrier, then the notice |
@@ -40,7 +40,7 @@ mined.
 | **Release** (Vaults row, VOID) | a VOID vault (recorded before the vault upgrade; it created no YED), at or past `lockHeight` | `yed_redeem <vaultTxid>` | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
 
 **Who pays the fees** (the node's builder, `ycash-dd/src/yellowback/txbuilder.cpp` on
-`upgrade/vault`): a **mint** pays the pool fee, any attestation fee and the network fee from the
+`upgrade/vault`; "pool fee" is the protocol fee since rpcversion 8): a **mint** pays the pool fee, any attestation fee and the network fee from the
 wallet's own YEC on top of the collateral, which is locked whole (the funding covers every output
 plus the network fee); a **redemption** pays its pool fee and the network fee from the collateral
 (`collateralOut` is the vault value less the fees); a **claim** pays the pool fee, any attestation
@@ -85,9 +85,10 @@ Rules row says it), and information lines (locked YED outputs, the node's own qu
 foot of the Overview. Every page scrolls rather than squeezing its rows. The trust statement is behind
 the ⓘ button at the right of the sub-tabs and in Help > About.
 
-**Plausibility.** Before any confirmation the wallet recomputes from `yed_getinfo.params` the pool
-fee (FEE-1), the attestor fee (AFEE-1), `requiredZat` (and the `4 · FEE_MIN` floor, which is what
-the vault locks and what `maxCollateralZat` caps), `refHeight = tip − REF_LAG` (one block of
+**Plausibility.** Before any confirmation the wallet recomputes from `yed_getinfo.params` the protocol
+fee (FEE-1′, rpcversion 8: the bands of `params.fees.protocol` on the debt, at the estimate's or the vault's
+`pMint`), the early-redeem fee (IT-9′, of the debt at `pMint`), the attestor fee (AFEE-1′), `requiredZat`
+(what the vault locks and what `maxCollateralZat` caps; rpcversion 8 dropped the `4 · FEE_MIN` floor), `refHeight = tip − REF_LAG` (one block of
 slack), `lockHeight = refHeight + lockBlocks`, `claimHeight = lockHeight + GRACE`, the class and
 its ratio, and refuses to send on any mismatch; a claim's figure and `minOutZat` floor are
 `collateral − residual`, and `maxBurnCents` is the debt plus at most the sub-dollar remainder.
@@ -133,6 +134,32 @@ sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()
 `tests/check-rpc-contract.py --spec <node>/doc/yellowback-spec.md` checks it against the generated
 spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
 the height-based copy (the QTest's `infoLegacy()` cases).
+
+**rpcversion 8: the fee structure (branch `q/fees` of `upgrade/quantum-vaults`; the workspace's
+`docs/plans/yellowback-quantum-fees-spec.md` §1–§3 and `yellowback-quantum-fees-rpc-delta.md`, owner decisions
+D-Q-23..D-Q-26).** The wallet requires `rpcversion` 8 (`YellowbackRpc::RPC_VERSION`). What changed:
+- **Protocol fee in dollars.** The fee to a quoting pool is dollars of the debt in marginal bands
+  (`params.fees.protocol.bands`: 1.0 % to $1,000, 0.5 % to $10,000, 0.1 % above; `floorCents` $1), converted to
+  YEC at the vault's stored mint price `pMint` and charged at the mint and again at the redeem (or claim).
+  `YellowbackController::protocolFeeCentsFor` / `protocolFeeZatFor` are the node's `ProtocolFeeCents` /
+  `ProtocolFeeZat`. The Mint page shows it from `yed_estimatefee <cents>` (checked by `checkEstimateFee`) in a
+  "Protocol fee" row; the mint confirmation shows `protocolFeeCents` / `protocolFeeZat` of the estimate, says the
+  redeem pays the same dollars again at the same price, and states the maximum mint ($100,000,
+  `params.maxMintCents`, D-Q-24, every network: the $2,500 H-12 guard is gone).
+- **Early-redeem fee of the debt.** `earlyRedeemFeeBps[class]` of the debt at `pMint` (IT-9′). The Vaults row,
+  the Redeem page and the redeem confirmation show it in dollars and YEC beside the debt and say it disappears
+  at the end of the term (the lockup report's recommendation).
+- **`pMint` on every vault row**, a "Mint price" column and a line in the vault's tooltip; `yed_estimateredeem`
+  must repeat the vault's own `pMint`.
+- **Network fee** in dollars per KB at the attested price (`params.fees.network`: the Yellowback rate
+  `yellowback.zatPerKB`, the flat floor `flatZat`, the cap `yellowback.maxTxFeeZat`):
+  `YellowbackController::networkFeeZatFor` estimates the mint's and the ~8 KB redeem's (display only; the node
+  prices the transaction).
+- **`yed_getfeepayee <refHeight>`** (no collateral, no `feeZat`): the payee only. The redeem and the renew quote
+  `yed_estimateredeem` on every node.
+- **New refusals explained:** `mint-vault-share` (MINT-6b: one mint at most max(10 % of the supply cap, $10,000),
+  also a mint-gate line from `params.supplyCap.maxVaultCents`), `mint-supply-cap`, `bad-mint-fee`,
+  `bad-mint-amount`, matched bare or after `mempool-check-failed:`.
 
 **rpcversion 7: post-quantum vault owners (branch `upgrade/quantum-vaults`; the workspace's
 `docs/plans/yellowback-quantum-spec.md` §6.2 and `docs/plans/yellowback-quantum-clients.md` §2).** Every
