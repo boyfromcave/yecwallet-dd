@@ -23,6 +23,11 @@ vault's YEC becomes worth less than the YED it backs, others can claim it.
   local test network and `contrib/yellowback/devnet/yellowback-devnet wallet` opens this wallet on
   it (the node's [devnet crash course](https://github.com/boyfromcave/ycash-dd/blob/upgrade/vault/doc/yellowback-devnet.md)
   has the details). By hand: `yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`.
+- **Post-quantum line (`upgrade/quantum-vaults`):** every vault's owner key is a post-quantum
+  SLH-DSA key kept in the node's `wallet.dat`, and the wallet needs a ycashd from the same branch
+  (Yellowback RPC version 7). Post-quantum keys protect the authority to redeem a vault; shielded
+  (Sapling) YEC and the attestors' keys are not post-quantum, and no hardware wallet or watch-only
+  wallet supports these keys.
 - **More:** [docs/yellowback.md](docs/yellowback.md), the developer notes for the tab.
 
 # Installation

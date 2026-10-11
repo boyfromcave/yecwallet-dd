@@ -2,7 +2,8 @@
 
 YecWallet's Yellowback tab drives Ycash Yellowback (YED) on a node built from `upgrade/vault`: the
 Ycash vault upgrade (`UPGRADE_VAULT`, branch ID `6d5b7a31`), with YED as the rule module of the
-upgrade's vault primitive. The wallet speaks `rpcversion` 5 only. Yellowback's rules are
+upgrade's vault primitive. On `upgrade/quantum-vaults` the wallet speaks `rpcversion` 7 only (exact
+match: an `rpcversion` 6 node disables the tab and names both numbers). Yellowback's rules are
 consensus wherever the upgrade and the network's YED attestor set are configured, so the wallet
 shows the upgrade's status (`yed_getinfo.upgrade`, `vault_getinfo`) and writes no `ycash.conf`
 key for Yellowback. A `-32601` ("Method not found") from `yed_getinfo` means the node has no vault
@@ -33,7 +34,7 @@ mined.
 | **Renew** (Vaults row) | from `lockHeight`, one confirmation for both legs | `yed_redeem`, then, once `yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's lock length (or the shortest enabled one), held to the confirmed `maxCollateralZat` | a notice per leg; a mint that cannot be built (minting paused, price past the cap, the vault claimed instead) stops the renewal and sends nothing else |
 | **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED; a transparent destination | `yed_claim <vaultTxid> [to] "" false <minOutZat> <maxBurnCents>` | the debt is burned and the collateral, less the owner's residual, moves into a claimant intent that waits `CLAIM_DELAY`; the vault is CLAIMING |
 | **Notice** (Vaults row) | a vault below the emergency ratio under the attested prices; anyone may post one (it costs the carrier and a network fee, no YED) | `yed_claimnotice <vaultTxid>` | the carrier, then the notice |
-| **Release** (Pending claims) | an intent of a CLAIMING vault (`yed_listvaults CLAIMING`, merged into the vault rows) at or past its release height | `vault_release` (the claimant's intent with no recipient argument; the owner's residual with the owner's P2PKH script) | `txid`; the vault becomes CLAIMED |
+| **Release** (Pending claims) | an intent of a CLAIMING vault (`yed_listvaults CLAIMING`, merged into the vault rows) at or past its release height | `vault_release` (the claimant's intent with no recipient argument; the owner's residual with the owner's PQPKH script `20 <ownerHash> 51\|52 c2`, rpcversion 7) | `txid`; the vault becomes CLAIMED |
 | **Cancel wrong-price claim** (Pending claims; only when this wallet holds a current member key of the YED attestor set) | a warning naming the claimant's lost burn and the equivocation risk | `vault_buildcancel`, `set_signcancel`, `vault_send` | the vault is ACTIVE again under the cancel's txid; the signed cancel is kept (`yellowback/signedcancel/<outpoint>`) and only ever re-sent, because two different signed spends of one intent are a provable equivocation |
 | **Register / Heartbeat / Withdraw bond / Report** (Attestors page) | this wallet's member keys of the YED attestor set (`set_getinfo`: current or dormant, last act, bond frozen) | `yed_registerattestor <bond> <lockBlocks>` (a `SET_JOIN`), `set_heartbeat`, `yed_withdrawbond`, `yed_reportequivocation` | `txid` |
 | **Release** (Vaults row, VOID) | a VOID vault (recorded before the vault upgrade; it created no YED), at or past `lockHeight` | `yed_redeem <vaultTxid>` | `burnedCents = 0`, `feeZat = 0`, `payee = null` |
@@ -132,6 +133,39 @@ sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()
 `tests/check-rpc-contract.py --spec <node>/doc/yellowback-spec.md` checks it against the generated
 spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
 the height-based copy (the QTest's `infoLegacy()` cases).
+
+**rpcversion 7: post-quantum vault owners (branch `upgrade/quantum-vaults`; the workspace's
+`docs/plans/yellowback-quantum-spec.md` §6.2 and `docs/plans/yellowback-quantum-clients.md` §2).** Every
+vault's owner is an SLH-DSA-SHA2-128s key the node creates and keeps in `wallet.dat`; `yed_mint` keeps its
+arguments. The node signs everything; the wallet holds no PQ code. What changed in the wallet:
+- **Vault rows:** `ownerPubKey` and `ownerKeyId` are gone; `ownerScheme` (1 = SLH-DSA, 2 = Falcon),
+  `ownerHash` (64 hex, byte order) and the 53-character `ownerAddress` replace them. The Vault tooltip
+  names the owner as "Vault owner (post-quantum, SLH-DSA-SHA2-128s)" and says it is a vault identifier,
+  never a YED receive address (survey C-10).
+- **The owner's residual release** pays `TX_PQPKH(owner)` = `20 <ownerHash> OP_1|OP_2 OP_CHECKPQSIG`
+  (`YellowbackController::pqpkhScriptFor`), always passed to `vault_release`: the node's own recipient
+  search covers only the wallet's P2PKH keys, so even the owner's wallet names the script.
+- **Addresses:** a Yellowback address is exactly 35 (P2PKH) or 53 (PQ) Base58 characters; the old
+  26-40 guard refused every PQ address before `yed_validateaddress` saw it. The mainnet prefix is `yb`
+  (owner decision D-Q-21); `ye` is still accepted on mainnet until the node's Y-B sweep renames it.
+  Plain-YEC PQ addresses (`sq…` / `tq…` / `rq…`, 53 characters, D-Q-20) hold YEC, never YED: the Send page
+  refuses them as Ycash addresses, and the stock wallet's helpers (`Settings::isTAddress`) do not take them.
+- **Receive** asks `yed_getnewaddress` for the holder type (`"p2pkh"` while `params.pq.falconActive` is
+  false, `"pq"` after), never `"pqowner"`, and shows a 53-character reply only once `yed_validateaddress`
+  reports it is not an SLH-DSA key. **Send** refuses an SLH-DSA (owner) recipient, and after Falcon an
+  ordinary P2PKH recipient, which `TOK-PQ` would make an invalid transaction.
+- **Fees and disclosure:** the Overview's Post-quantum row shows `params.pq` (schemes, Falcon state and
+  height, `feeRateZatPerKB`) and the least fee of an owner spend, `max(feeZat, rate × 8.2 KB)` (ycash-dd's
+  wallet fee; ycash6 also applies ZIP-317, so it charges more). The redeem confirmation names that
+  size-priced network fee and the 0.25–0.6 s signing time; the mint confirmation carries the
+  post-quantum disclosure (`YellowbackController::pqDisclosure()`: spend authority only; Sapling,
+  attestors, pools and pre-Falcon holders stay elliptic-curve; no hardware wallet, watch-only or xpub).
+  The early-redeem fee is shown in dollars at the claim price beside the debt, as the price-rise lockup
+  investigation recommends (after a large rise it can exceed the debt; waiting until the lock height
+  removes it).
+- **Contract:** `docs/yellowback-rpc-contract.json` is the node's quantum copy (`make spec-quantum`;
+  `make spec-check-quantum` with `EXTRACT_SPEC_WALLET_DIR` checks it). The release must bundle an
+  rpcversion-7 `ycashd` (`build.sh --package --ycashd`): node and wallet move in lockstep (survey C-11).
 
 ## Testing
 
