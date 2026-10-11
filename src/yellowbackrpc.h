@@ -7,7 +7,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 7, the post-quantum line), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 8, the post-quantum line's fee structure), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -36,8 +36,12 @@ namespace YellowbackRpc {
 // an early-redeem fee before lockHeight, yed_listclaimable lists in-term rows with `claimable`; to 7
 // with post-quantum vault owners, docs/plans/yellowback-quantum-spec.md §6.2 in the workspace: every
 // vault owner is an SLH-DSA key, ownerScheme/ownerHash replace ownerPubKey/ownerKeyId, ownerAddress is
-// the 53-character PQ address, yed_getinfo.params.pq, a MINT payload is version 4).
-constexpr int RPC_VERSION = 7;
+// the 53-character PQ address, yed_getinfo.params.pq, a MINT payload is version 4; to 8 with the
+// fee structure, docs/plans/yellowback-quantum-fees-spec.md §3.4 in the workspace: the protocol fee is
+// dollars of the debt in marginal bands at the vault's stored mint price pMint, the early-redeem fee is
+// of the debt, network fees are dollars per KB at the attested price, params.feeMinZat/feeBps and
+// yed_getfeepayee's collateralZat/feeZat are gone, yed_estimatefee takes <mintedCents> [priceMicroUsd]).
+constexpr int RPC_VERSION = 8;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -48,7 +52,8 @@ constexpr const char* GETVAULT            = "yed_getvault";
 constexpr const char* LISTCLAIMABLE       = "yed_listclaimable";
 constexpr const char* GETTXINFO           = "yed_gettxinfo";
 constexpr const char* ESTIMATECOLLATERAL  = "yed_estimatecollateral";
-constexpr const char* GETFEEPAYEE         = "yed_getfeepayee";
+constexpr const char* GETFEEPAYEE         = "yed_getfeepayee";     // rpcversion 8: <refHeight> [selectorHex], no fee
+constexpr const char* ESTIMATEFEE         = "yed_estimatefee";     // rpcversion 8: the protocol fee of a debt, in dollars and YEC
 constexpr const char* GETPRICE            = "yed_getprice";          // v3: xMint/xClaim, armed, attestStatus
 constexpr const char* LISTATTESTORS       = "yed_listattestors";     // v3: the Attestors view
 constexpr const char* GETSELECTION        = "yed_getselection";      // v3: "n of m selected attestors reachable"
@@ -147,8 +152,6 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* REF_WINDOW          = "refWindow";
     constexpr const char* GRACE               = "grace";
     constexpr const char* PAYEE_WINDOW        = "payeeWindow";
-    constexpr const char* FEE_MIN_ZAT         = "feeMinZat";       // FEE-1's floor; H-9.3 recomputes the fee from it
-    constexpr const char* FEE_BPS             = "feeBps";
     constexpr const char* TOKEN_VALUE_ZAT     = "tokenValueZat";
     constexpr const char* FEE_ZAT             = "feeZat";       // the network fee, not the pool fee
     constexpr const char* WINDOWS             = "windows";
@@ -167,6 +170,61 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* PQ                  = "pq";                // the ParamsPq object
     constexpr const char* ADDRESS_VERSION     = "addressVersion";    // hex Base58Check version of a 20-byte YED address (mainnet 1fdd "yb")
     constexpr const char* PQ_ADDRESS_VERSION  = "pqAddressVersion";  // hex version of a 33-byte PQ YED address (mainnet 56ab "yb")
+    // rpcversion 8 (the fee structure, D-Q-23..D-Q-25)
+    constexpr const char* MAX_MINT_CENTS      = "maxMintCents";      // D-Q-24: $100,000
+    constexpr const char* FEES                = "fees";              // the ParamsFees object
+    constexpr const char* SUPPLY_CAP          = "supplyCap";         // the ParamsSupplyCap object (D-Q-25)
+}
+
+// rpcversion 8: yed_getinfo.params.fees, the protocol fee (FEE-1'), the early fee (IT-9') and the network fee policy.
+namespace ParamsFees {   // contract: yed_getinfo.params.fees
+    constexpr const char* PROTOCOL            = "protocol";
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // [A, B, C]: of the debt at pMint, a redeem before lockHeight
+    constexpr const char* NETWORK             = "network";
+}
+
+namespace ParamsFeesProtocol {   // contract: yed_getinfo.params.fees.protocol
+    constexpr const char* BANDS               = "bands";             // marginal brackets, the last with uptoCents null (unbounded)
+    constexpr const char* FLOOR_CENTS         = "floorCents";        // $1 per action (mint, redeem, claim)
+    constexpr const char* ATTEST_FEE_BPS      = "attestFeeBps";      // AFEE-1': the attestors' share of the protocol fee
+    constexpr const char* PRICE_SOURCE        = "priceSource";       // "pMint": the vault's stored mint price
+}
+
+namespace FeeBand {   // contract: yed_getinfo.params.fees.protocol.bands[]
+    constexpr const char* UPTO_CENTS          = "uptoCents";         // null: unbounded
+    constexpr const char* BPS                 = "bps";
+}
+
+// The network fee: dollars per KB at the attested tip price (fees spec §3.1). A transaction of n bytes pays
+// max(flatZat, zatPerKB × n / 1000), a vault / Yellowback one at most yellowback.maxTxFeeZat.
+namespace ParamsFeesNetwork {   // contract: yed_getinfo.params.fees.network
+    constexpr const char* PRICE_MICRO_USD     = "priceMicroUsd";     // null without an attested price (then the fallback rate)
+    constexpr const char* PRICE_SOURCE        = "priceSource";       // "tip" | "fallback"
+    constexpr const char* PLAIN               = "plain";             // a plain post-quantum transaction ($0.02/KB)
+    constexpr const char* YELLOWBACK          = "yellowback";        // a vault / Yellowback transaction ($0.05/KB)
+    constexpr const char* FLOOR_ZAT_PER_KB    = "floorZatPerKB";
+    constexpr const char* FALLBACK_ZAT_PER_KB = "fallbackZatPerKB";  // -pqfeerate
+    constexpr const char* FLAT_ZAT            = "flatZat";           // the flat floor of one transaction (= params.feeZat)
+    constexpr const char* MAX_TX_FEE_ZAT      = "maxTxFeeZat";       // -maxtxfee
+
+    constexpr const char* SOURCE_TIP          = "tip";               // value
+    constexpr const char* SOURCE_FALLBACK     = "fallback";          // value
+}
+
+namespace NetworkRate {   // contract: yed_getinfo.params.fees.network.yellowback
+    constexpr const char* USD_PER_KB_MICRO    = "usdPerKBMicro";
+    constexpr const char* ZAT_PER_KB          = "zatPerKB";          // the rate at the price, the floor included
+    constexpr const char* MAX_TX_FEE_ZAT      = "maxTxFeeZat";       // yellowback only: the cap of a vault / Yellowback fee
+}
+
+// rpcversion 8 (D-Q-25, MINT-6b): the supply cap's base and the per-vault share limit.
+namespace ParamsSupplyCap {   // contract: yed_getinfo.params.supplyCap
+    constexpr const char* CIRCULATING_ZAT     = "circulatingZat";
+    constexpr const char* PRICE_MICRO_USD     = "priceMicroUsd";     // null when undefined
+    constexpr const char* CAP_CENTS           = "capCents";          // null when undefined
+    constexpr const char* MAX_VAULT_SHARE_BPS = "maxVaultShareBps";  // 1000: one mint at most 10 % of the cap ...
+    constexpr const char* VAULT_SHARE_FLOOR_CENTS = "vaultShareFloorCents"; // ... but always at least $10,000
+    constexpr const char* MAX_VAULT_CENTS     = "maxVaultCents";     // null when the cap is undefined (no limit)
 }
 
 // rpcversion 7: yed_getinfo.params.pq, the post-quantum signature schemes the network accepts.
@@ -276,6 +334,7 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* MINT_HEIGHT       = "mintHeight";
     constexpr const char* REF_HEIGHT        = "refHeight";
     constexpr const char* FEE_PAID_ZAT      = "feePaidZat";
+    constexpr const char* P_MINT            = "pMint";         // rpcversion 8: the stored mint price (µUSD/YEC) every fee of the vault is struck at
     constexpr const char* CLOSE_HEIGHT      = "closeHeight";   // null until CLOSED/CLAIMED
     constexpr const char* CLOSING_TXID      = "closingTxid";   // "" until CLOSED/CLAIMED
     constexpr const char* BURNED_CENTS      = "burnedCents";
@@ -318,7 +377,8 @@ namespace Claimable {   // contract: yed_listclaimable[]
     constexpr const char* OWNER_ADDRESS     = "ownerAddress";
     constexpr const char* COLLATERAL_ZAT    = "collateralZat";
     constexpr const char* MINTED_CENTS      = "mintedCents";   // the burn a claim must carry
-    constexpr const char* FEE_ZAT           = "feeZat";
+    constexpr const char* P_MINT            = "pMint";         // rpcversion 8: the vault's stored mint price
+    constexpr const char* FEE_ZAT           = "feeZat";        // rpcversion 8: FEE-1' of the debt at pMint
     constexpr const char* CLAIM_HEIGHT      = "claimHeight";
     constexpr const char* UNDERWATER_AT     = "underwaterAt";
     constexpr const char* P_CLAIM           = "pClaim";
@@ -387,7 +447,9 @@ namespace Estimate {   // contract: yed_estimatecollateral
     constexpr const char* SOURCE            = "source";        // v3: "x" | "a" | "" (not armed, or a price override)
     constexpr const char* ARMED             = "armed";         // v3
     constexpr const char* BUNDLE_SEQS       = "bundleSeqs";    // v3: the seqs the estimate used
-    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";  // v3: AFEE-1, on top of feeZat
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";  // v3: AFEE-1', on top of the protocol fee
+    constexpr const char* PROTOCOL_FEE_CENTS = "protocolFeeCents"; // rpcversion 8: FEE-1' of the debt in cents
+    constexpr const char* PROTOCOL_FEE_ZAT  = "protocolFeeZat";   // rpcversion 8: the same at pMint; null with pMint
     constexpr const char* DIVERGENCE_BPS    = "divergenceBps"; // v3: |xMint - aMint| / min; null when either is undefined
 
     constexpr const char* SOURCE_X          = "x";             // value
@@ -467,7 +529,6 @@ namespace SelectionRow {   // contract: yed_getselection.selected[]
 // ── yed_getfeepayee result (the mint / redeem confirmation shows the fee and its payee) ────
 namespace FeePayee {   // contract: yed_getfeepayee
     constexpr const char* ELIGIBLE          = "eligible";      // E(refHeight)
-    constexpr const char* FEE_ZAT           = "feeZat";        // FEE-1 for the given collateral
     constexpr const char* DEFAULT           = "default";       // the FEE-W choice
     constexpr const char* PREFERRED         = "preferred";     // optional: the configured preference, when eligible
     constexpr const char* POLICY            = "policy";
@@ -476,6 +537,14 @@ namespace FeePayee {   // contract: yed_getfeepayee
 namespace FeePayeeDefault {   // contract: yed_getfeepayee.default
     constexpr const char* PAYOUT_ADDRESS    = "payoutAddress";
     constexpr const char* WEIGHT            = "weight";
+}
+
+// rpcversion 8: yed_estimatefee <mintedCents> [priceMicroUsd], the protocol fee of a debt.
+namespace EstimateFee {   // contract: yed_estimatefee
+    constexpr const char* FEE_CENTS         = "feeCents";      // FEE-1' by the bands, the $1 floor included
+    constexpr const char* FEE_ZAT           = "feeZat";        // at pMint; null when no price is defined
+    constexpr const char* P_MINT            = "pMint";         // the estimate's price; null when undefined
+    constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";  // AFEE-1''s share of feeZat; null with it
 }
 
 // ── yed_mint result ────────────────────────────────────────────────────────────────────────
@@ -535,8 +604,12 @@ namespace EstimateRedeem {   // contract: yed_estimateredeem
     constexpr const char* EARLY             = "early";         // height < lockHeight on an ACTIVE vault
     constexpr const char* BURNED_CENTS      = "burnedCents";
     constexpr const char* COLLATERAL_ZAT    = "collateralZat";
-    constexpr const char* FEE_ZAT           = "feeZat";        // the whole fee output: FEE-1 plus the early-redeem fee (0 under FEE-0)
-    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps";
+    constexpr const char* P_MINT            = "pMint";         // rpcversion 8: the vault's stored mint price, every fee's price
+    constexpr const char* PROTOCOL_FEE_CENTS = "protocolFeeCents"; // rpcversion 8: FEE-1' of the debt in cents
+    constexpr const char* PROTOCOL_FEE_ZAT  = "protocolFeeZat";   // rpcversion 8: the same at pMint (0 under FEE-0)
+    constexpr const char* FEE_ZAT           = "feeZat";        // the whole fee output: the protocol fee plus the early-redeem fee (0 under FEE-0)
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // rpcversion 8: of the debt
+    constexpr const char* EARLY_REDEEM_FEE_CENTS = "earlyRedeemFeeCents"; // rpcversion 8: the early fee in dollars (0 when none is due)
     constexpr const char* EARLY_REDEEM_FEE_ZAT = "earlyRedeemFeeZat";
     constexpr const char* PAYEE             = "payee";         // null when no pool is eligible
     constexpr const char* CAN_REDEEM        = "canRedeem";
@@ -698,6 +771,7 @@ namespace Errors {   // contract: errors
     constexpr const char* MINTPOL_CAP           = "mintpol-cap";
     constexpr const char* MINT_UNSATISFIABLE    = "mint-unsatisfiable";
     constexpr const char* MINT_BAD_LOCK         = "mint-bad-lock";
+    constexpr const char* BAD_MINT_AMOUNT       = "bad-mint-amount";        // rpcversion 8: outside [MIN_MINT, params.maxMintCents] ($100,000)
     constexpr const char* MINTPOL_UNARMED       = "mintpol-unarmed";        // hardening H-1: mintRequiresArmed and the reference height not ARMED
     // The caps the wallet sends from its confirmation dialog (audit F-1, hardening H-9.3): yed_mint's
     // 6th argument maxCollateralZat, yed_claim's 5th argument minOutZat and 6th maxBurnCents
@@ -745,6 +819,12 @@ namespace RpcErrors {
     // yed_registerattestor since P4-b (the doc names them; the contract's error table does not)
     constexpr const char* REGISTER_NEEDS_ADMISSION = "register-needs-admission";
     constexpr const char* NO_ATTESTOR_SET   = "yellowback-no-attestor-set";
+    // rpcversion 8: the module's mint verdicts the wallet explains. The doc names them (MINT-6, MINT-6b) but
+    // the contract's error table does not list them; they reach the wallet bare (a builder refusal) or after
+    // mempool-check-failed:, so the wallet matches them anywhere in the message.
+    constexpr const char* MINT_SUPPLY_CAP   = "mint-supply-cap";
+    constexpr const char* MINT_VAULT_SHARE  = "mint-vault-share";
+    constexpr const char* BAD_MINT_FEE      = "bad-mint-fee";      // MINT-8': the fee output below FEE-1'
 }
 
 // ── Display constants ─────────────────────────────────────────────────────────────────────
@@ -752,8 +832,7 @@ namespace RpcErrors {
 // has answered. SECONDS_PER_BLOCK is display-only (estimated dates).
 constexpr int    SECONDS_PER_BLOCK   = 75;
 constexpr qint64 MIN_MINT_CENTS      = 10000;     // $100 (§3.1 MIN_MINT)
-constexpr qint64 MAX_MINT_CENTS      = 1000000;   // $10,000 (§3.1 MAX_MINT; regtest)
-constexpr qint64 MAX_MINT_CENTS_GUARDED = 250000; // $2,500 on mainnet and testnet (hardening H-12; not reported by yed_getinfo)
+constexpr qint64 MAX_MINT_CENTS      = 10000000;  // $100,000 (D-Q-24, every network; yed_getinfo.params.maxMintCents wins)
 constexpr qint64 MIN_OUTPUT_CENTS    = 100;       // $1 change floor (§3.1 MIN_OUTPUT)
 // v3: an attestation travels through RPC as 74 bytes of hex (yed_reportequivocation's arguments).
 constexpr int ATTESTATION_HEX_LENGTH = 148;

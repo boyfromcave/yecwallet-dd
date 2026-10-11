@@ -38,6 +38,7 @@ struct YellowbackPosition {
     int     mintHeight      = 0;
     int     refHeight       = 0;
     qint64  feePaidZat      = 0;
+    qint64  pMint           = 0;       // rpcversion 8: the stored mint price (µUSD/YEC) every fee of the vault is struck at; 0 when absent
     int     closeHeight     = -1;      // null until CLOSED/CLAIMED
     QString closingTxid;               // "" until CLOSED/CLAIMED
     qint64  burnedCents     = 0;
@@ -53,7 +54,7 @@ struct YellowbackPosition {
     int     noticeHeight    = -1;      // v3: null (-1) unless noticed
     int     emergencyOpenAt = -1;      // v3: the first reference height an emergency claim may cite; null (-1) unless noticed
     bool    canNotice       = false;   // v3, listpositions only: this node could post a notice now
-    qint64  earlyRedeemFeeZat = 0;     // rpcversion 6 (IT-9), listpositions only: a redeem now pays it on top of FEE-1
+    qint64  earlyRedeemFeeZat = 0;     // rpcversion 6 (IT-9), listpositions only: a redeem now pays it on top of the protocol fee (rpcversion 8: of the debt at pMint)
 
     static YellowbackPosition fromJson(const json& j);
     /** "SLH-DSA-SHA2-128s" | "FN-DSA-512" | "scheme <n>": the owner's post-quantum signature scheme. */
@@ -70,7 +71,8 @@ struct YellowbackClaimable {
     QString ownerAddress;
     qint64  collateralZat   = 0;
     qint64  mintedCents     = 0;   // the burn a claim must carry
-    qint64  feeZat          = 0;
+    qint64  pMint           = 0;   // rpcversion 8: the vault's stored mint price (µUSD/YEC)
+    qint64  feeZat          = 0;   // rpcversion 8: FEE-1' of the debt at pMint
     int     claimHeight     = 0;
     qint64  underwaterAt    = 0;
     qint64  pClaim          = 0;
@@ -192,6 +194,7 @@ public:
         Unbacked,
         ClaimState,      // rpcversion 5: "claimed, releases at h" while CLAIMING; "-" otherwise
         Notice,          // v3: "noticed, emergency claim from <h>" | "notice possible" | "-"
+        MintPrice,       // rpcversion 8: the vault's stored pMint, the price its protocol and early fees are charged at
         Vault,
         ColumnCount
     };

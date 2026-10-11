@@ -863,11 +863,11 @@ QList<QPair<QString, double>> YellowbackController::transparentAddresses() const
 
 // ── Protocol parameters ───────────────────────────────────────────────────────────────────
 
-// MIN_MINT / MAX_MINT / MIN_OUTPUT are §3.1 constants the v2 contract does not report; the
-// compiled-in values stand (the node refuses out-of-range amounts anyway).
+// MIN_MINT / MIN_OUTPUT are §3.1 constants the contract does not report; the compiled-in values stand
+// (the node refuses out-of-range amounts anyway). rpcversion 8 (D-Q-24): MAX_MINT is params.maxMintCents,
+// $100,000 on every network (hardening H-12's $2,500 launch guard is reversed).
 qint64 YellowbackController::minMintCents() const   { return YellowbackRpc::MIN_MINT_CENTS; }
-// H-12: MAX_MINT is $2,500 on mainnet and testnet for the first parameter lifetime; regtest keeps $10,000.
-qint64 YellowbackController::maxMintCents() const   { return net == "regtest" || net.isEmpty() ? YellowbackRpc::MAX_MINT_CENTS : YellowbackRpc::MAX_MINT_CENTS_GUARDED; }
+qint64 YellowbackController::maxMintCents() const   { return maxMintCentsIn(paramsJson); }
 qint64 YellowbackController::minOutputCents() const { return YellowbackRpc::MIN_OUTPUT_CENTS; }
 int    YellowbackController::refLag() const         { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_LAG, 0); }
 int    YellowbackController::refWindow() const      { return (int)YellowbackJson::toInt(paramsJson, YellowbackRpc::Params::REF_WINDOW, 0); }
@@ -1053,6 +1053,12 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
         if (cents < minMintCents() || cents > maxMintCents())
             return tr("A mint must be between %1 and %2.")
                     .arg(YellowbackFormat::cents(minMintCents())).arg(YellowbackFormat::cents(maxMintCents()));
+        // rpcversion 8 (MINT-6b, D-Q-23a): one mint's debt is at most max(10 % of the supply cap, $10,000)
+        const qint64 maxVault = maxVaultCentsIn(paramsJson);
+        if (maxVault >= 0 && cents > maxVault)
+            return tr("One mint may create at most %1 of YED now (a tenth of the supply cap, never less than %2): split the amount over several vaults (mint-vault-share).")
+                    .arg(YellowbackFormat::cents(maxVault))
+                    .arg(YellowbackFormat::cents(YellowbackJson::toInt(YellowbackJson::obj(paramsJson, Params::SUPPLY_CAP), ParamsSupplyCap::VAULT_SHARE_FLOOR_CENTS, 1000000)));
         if (YellowbackJson::has(statsJson, Stats::SUPPLY_CAP_CENTS)) {
             qint64 capC   = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CAP_CENTS);
             qint64 supply = YellowbackJson::toInt(statsJson, Stats::SUPPLY_CENTS);
@@ -1287,8 +1293,13 @@ void YellowbackController::getVault(const QString& txid, OkFn ok, ErrFn err) {
     call(YellowbackRpc::GETVAULT, json::array({txid.toStdString()}), ok, err);
 }
 
-void YellowbackController::getFeePayee(int refHeight, qint64 collateralZat, OkFn ok, ErrFn err) {
-    call(YellowbackRpc::GETFEEPAYEE, json::array({refHeight, collateralZat}), ok, err);
+void YellowbackController::getFeePayee(int refHeight, OkFn ok, ErrFn err) {
+    // rpcversion 8: yed_getfeepayee <refHeight> [selectorHex]; the fee comes from the estimate RPCs
+    call(YellowbackRpc::GETFEEPAYEE, json::array({refHeight}), ok, err);
+}
+
+void YellowbackController::estimateFee(qint64 mintedCents, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::ESTIMATEFEE, json::array({mintedCents}), ok, err);
 }
 
 YellowbackController::TermClass YellowbackController::classForLock(int lockBlocks) const {
@@ -1345,19 +1356,84 @@ QString YellowbackController::mintClassNote() const {
 
 static constexpr qint64 ZAT_PER_YEC = 100000000;
 
-qint64 YellowbackController::feeZatFor(const json& params, qint64 collateralZat) {
+static const json& feesProtocol(const json& params) {
     using namespace YellowbackRpc;
-    const qint64 feeMin = YellowbackJson::toInt(params, Params::FEE_MIN_ZAT, 0);
-    const qint64 feeBps = std::max<qint64>(0, YellowbackJson::toInt(params, Params::FEE_BPS, 0));
-    const __int128 f = (__int128)std::max<qint64>(0, collateralZat) * feeBps / 10000;
-    return std::max<qint64>(feeMin, (qint64)f);
+    return YellowbackJson::obj(YellowbackJson::obj(params, Params::FEES), ParamsFees::PROTOCOL);
+}
+
+qint64 YellowbackController::protocolFeeUnitsFor(const json& params, qint64 debtCents) {
+    using namespace YellowbackRpc;
+    if (debtCents <= 0) return 0;
+    const json& protocol = feesProtocol(params);
+    qint64 units = 0, lo = 0;
+    if (protocol.is_object() && protocol.find(ParamsFeesProtocol::BANDS) != protocol.end() && protocol[ParamsFeesProtocol::BANDS].is_array())
+        for (const auto& band : protocol[ParamsFeesProtocol::BANDS]) {
+            const bool unbounded = YellowbackJson::isNull(band, FeeBand::UPTO_CENTS) || !YellowbackJson::has(band, FeeBand::UPTO_CENTS);
+            const qint64 hi = unbounded ? 0 : YellowbackJson::toInt(band, FeeBand::UPTO_CENTS);
+            const qint64 inBand = (unbounded ? debtCents : std::min(debtCents, hi)) - lo;
+            if (inBand <= 0) break;
+            units += inBand * std::max<qint64>(0, YellowbackJson::toInt(band, FeeBand::BPS));
+            if (unbounded) break;
+            lo = hi;
+        }
+    return std::max(units, std::max<qint64>(0, YellowbackJson::toInt(protocol, ParamsFeesProtocol::FLOOR_CENTS)) * 10000);
+}
+
+qint64 YellowbackController::protocolFeeCentsFor(const json& params, qint64 debtCents) {
+    return (protocolFeeUnitsFor(params, debtCents) + 9999) / 10000;
+}
+
+qint64 YellowbackController::protocolFeeZatFor(const json& params, qint64 debtCents, qint64 pMint) {
+    if (pMint <= 0) return -1;
+    const __int128 num = (__int128)protocolFeeUnitsFor(params, debtCents) * 100000000;
+    return (qint64)((num + pMint - 1) / pMint);
 }
 
 qint64 YellowbackController::attestFeeZatFor(const json& params, qint64 feeZat) {
     using namespace YellowbackRpc;
-    const qint64 bps = YellowbackJson::toInt(YellowbackJson::obj(params, Params::ATTEST), ParamsAttest::ATTEST_FEE_BPS, 0);
+    // rpcversion 8: params.fees.protocol.attestFeeBps; params.attest.attestFeeBps is the same value
+    const json& protocol = feesProtocol(params);
+    const qint64 bps = YellowbackJson::has(protocol, ParamsFeesProtocol::ATTEST_FEE_BPS)
+        ? YellowbackJson::toInt(protocol, ParamsFeesProtocol::ATTEST_FEE_BPS)
+        : YellowbackJson::toInt(YellowbackJson::obj(params, Params::ATTEST), ParamsAttest::ATTEST_FEE_BPS, 0);
     if (feeZat <= 0 || bps <= 0) return 0;
     return (qint64)((__int128)feeZat * bps / 10000);
+}
+
+qint64 YellowbackController::maxMintCentsIn(const json& params) {
+    const qint64 v = YellowbackJson::toInt(params, YellowbackRpc::Params::MAX_MINT_CENTS, 0);
+    return v > 0 ? v : YellowbackRpc::MAX_MINT_CENTS;
+}
+
+qint64 YellowbackController::maxVaultCentsIn(const json& params) {
+    using namespace YellowbackRpc;
+    const json& sc = YellowbackJson::obj(params, Params::SUPPLY_CAP);
+    if (!YellowbackJson::has(sc, ParamsSupplyCap::MAX_VAULT_CENTS) || YellowbackJson::isNull(sc, ParamsSupplyCap::MAX_VAULT_CENTS)) return -1;
+    return YellowbackJson::toInt(sc, ParamsSupplyCap::MAX_VAULT_CENTS, -1);
+}
+
+qint64 YellowbackController::networkFeeZatFor(const json& params, qint64 bytes, bool yellowback) {
+    using namespace YellowbackRpc;
+    const json& network = YellowbackJson::obj(YellowbackJson::obj(params, Params::FEES), ParamsFees::NETWORK);
+    if (network.empty()) {   // a node without params.fees: the rpcversion-7 rule, -pqfeerate by size over the flat fee
+        const qint64 floor = YellowbackJson::toInt(params, Params::FEE_ZAT, 1000);
+        return std::max(floor, (pqFeeRateIn(params) * bytes + 999) / 1000);
+    }
+    const json& rate = YellowbackJson::obj(network, yellowback ? ParamsFeesNetwork::YELLOWBACK : ParamsFeesNetwork::PLAIN);
+    const qint64 perKB = std::max(YellowbackJson::toInt(rate, NetworkRate::ZAT_PER_KB),
+                                  YellowbackJson::toInt(network, ParamsFeesNetwork::FLOOR_ZAT_PER_KB));
+    const qint64 flat = YellowbackJson::toInt(network, ParamsFeesNetwork::FLAT_ZAT, YellowbackJson::toInt(params, Params::FEE_ZAT, 1000));
+    qint64 fee = std::max(flat, (qint64)((__int128)perKB * std::max<qint64>(0, bytes) / 1000));
+    if (yellowback) {
+        const qint64 cap = YellowbackJson::toInt(rate, NetworkRate::MAX_TX_FEE_ZAT, 0);
+        if (cap > 0) fee = std::min(fee, std::max(cap, flat));
+    }
+    return fee;
+}
+
+QString YellowbackController::dollarsAndYec(qint64 cents, qint64 zat, qint64 pMint) {
+    if (pMint <= 0 || zat < 0) return YellowbackFormat::cents(cents);
+    return tr("%1 (%2 at the vault's mint price %3)").arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(zat)).arg(YellowbackFormat::price(pMint));
 }
 
 qint64 YellowbackController::requiredZatFor(qint64 cents, qint64 minRatioBps, qint64 pMint) {
@@ -1369,9 +1445,11 @@ qint64 YellowbackController::requiredZatFor(qint64 cents, qint64 minRatioBps, qi
     return (qint64)r;
 }
 
-qint64 YellowbackController::mintCollateralZatFor(const json& params, qint64 requiredZat) {
+qint64 YellowbackController::mintCollateralZatFor(const json&, qint64 requiredZat) {
+    // rpcversion 8 (MINT-5', D-Q-23): the 4 · FEE_MIN floor is gone, so the vault locks the requirement
+    // (already rounded up to 1,000 zat): requiredZatFloored = requiredZat
     if (requiredZat < 0) return -1;
-    qint64 c = std::max(requiredZat, 4 * YellowbackJson::toInt(params, YellowbackRpc::Params::FEE_MIN_ZAT, 0));
+    qint64 c = requiredZat;
     if (c % 1000 != 0) c += 1000 - c % 1000;
     return c;
 }
@@ -1416,26 +1494,53 @@ QStringList YellowbackController::checkEstimate(const json& params, int indexHei
     mismatch(tr("minRatioBps"), YellowbackJson::toInt(e, Estimate::MIN_RATIO_BPS, -1), minRatio);
     if (!YellowbackJson::isNull(e, Estimate::REQUIRED_ZAT)) {
         const qint64 required = YellowbackJson::toInt(e, Estimate::REQUIRED_ZAT);
-        mismatch(tr("requiredZat"), required, requiredZatFor(cents, minRatio, YellowbackJson::toInt(e, Estimate::P_MINT, -1)));
-        // AFEE-1 on FEE-1 of the requirement, and only when a bundle was used (armed)
+        const qint64 pMint = YellowbackJson::toInt(e, Estimate::P_MINT, -1);
+        mismatch(tr("requiredZat"), required, requiredZatFor(cents, minRatio, pMint));
+        // rpcversion 8: FEE-1' of the debt in dollars, and in YEC at the estimate's pMint (the price the vault stores)
+        mismatch(tr("protocolFeeCents"), YellowbackJson::toInt(e, Estimate::PROTOCOL_FEE_CENTS, -1), protocolFeeCentsFor(params, cents));
+        const qint64 feeZat = protocolFeeZatFor(params, cents, pMint);
+        mismatch(tr("protocolFeeZat"), YellowbackJson::toInt(e, Estimate::PROTOCOL_FEE_ZAT, -1), feeZat);
+        // AFEE-1' on the protocol fee, and only when a bundle was used (armed)
         if (YellowbackJson::has(e, Estimate::ATTEST_FEE_ZAT)) {
             const qint64 af = YellowbackJson::toInt(e, Estimate::ATTEST_FEE_ZAT);
             const bool bundle = !YellowbackJson::strings(e, Estimate::BUNDLE_SEQS).isEmpty() ||
                                 (e.is_object() && e.find(Estimate::BUNDLE_SEQS) != e.end() && e[Estimate::BUNDLE_SEQS].is_array() && !e[Estimate::BUNDLE_SEQS].empty());
-            mismatch(tr("attestFeeZat"), af, bundle ? attestFeeZatFor(params, feeZatFor(params, required)) : 0);
+            mismatch(tr("attestFeeZat"), af, bundle ? attestFeeZatFor(params, feeZat) : 0);
         }
     }
     return bad;
 }
 
+QStringList YellowbackController::checkEstimateFee(const json& params, qint64 cents, const json& e) {
+    using namespace YellowbackRpc;
+    QStringList bad;
+    const qint64 feeCents = YellowbackJson::toInt(e, EstimateFee::FEE_CENTS, -1);
+    if (feeCents != protocolFeeCentsFor(params, cents))
+        bad << tr("the protocol fee is %1 where the fee bands give %2 for a debt of %3")
+                   .arg(YellowbackFormat::cents(feeCents)).arg(YellowbackFormat::cents(protocolFeeCentsFor(params, cents))).arg(YellowbackFormat::cents(cents));
+    if (YellowbackJson::isNull(e, EstimateFee::P_MINT)) return bad;
+    const qint64 fee = protocolFeeZatFor(params, cents, YellowbackJson::toInt(e, EstimateFee::P_MINT));
+    if (YellowbackJson::toInt(e, EstimateFee::FEE_ZAT, -1) != fee)
+        bad << tr("the protocol fee is %1 where %2 at the mint price gives %3")
+                   .arg(YellowbackFormat::zec(YellowbackJson::toInt(e, EstimateFee::FEE_ZAT, -1))).arg(YellowbackFormat::cents(feeCents)).arg(YellowbackFormat::zec(fee));
+    if (YellowbackJson::toInt(e, EstimateFee::ATTEST_FEE_ZAT, -1) != attestFeeZatFor(params, fee))
+        bad << tr("the attestation fee is %1 where AFEE-1' gives %2")
+                   .arg(YellowbackFormat::zec(YellowbackJson::toInt(e, EstimateFee::ATTEST_FEE_ZAT, -1))).arg(YellowbackFormat::zec(attestFeeZatFor(params, fee)));
+    return bad;
+}
+
 QStringList YellowbackController::checkClaimable(const json& params, int indexHeight, const YellowbackClaimable& c) {
     QStringList bad;
-    const qint64 fee = feeZatFor(params, c.collateralZat);
+    // rpcversion 8 (RED-3'): the claim pays FEE-1' of the debt at the vault's stored pMint
+    const qint64 fee = protocolFeeZatFor(params, c.mintedCents, c.pMint);
     if (c.feeZat != fee)
-        bad << tr("the pool fee is %1 where FEE-1 of the collateral gives %2").arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::zec(fee));
+        bad << tr("the protocol fee is %1 where %2 of the debt %3 at the vault's mint price %4 gives %5")
+                   .arg(YellowbackFormat::zec(c.feeZat)).arg(YellowbackFormat::cents(protocolFeeCentsFor(params, c.mintedCents)))
+                   .arg(YellowbackFormat::cents(c.mintedCents)).arg(c.pMint > 0 ? YellowbackFormat::price(c.pMint) : tr("(undefined)"))
+                   .arg(fee < 0 ? tr("nothing") : YellowbackFormat::zec(fee));
     const qint64 af = attestFeeZatFor(params, fee);
     if (c.attestFeeZat != 0 && c.attestFeeZat != af)
-        bad << tr("the attestation fee is %1 where AFEE-1 gives %2").arg(YellowbackFormat::zec(c.attestFeeZat)).arg(YellowbackFormat::zec(af));
+        bad << tr("the attestation fee is %1 where AFEE-1' gives %2").arg(YellowbackFormat::zec(c.attestFeeZat)).arg(YellowbackFormat::zec(af));
     // rpcversion 5 (U-23, finding 33): the claimant intent carries the collateral less the RED-5
     // residual; the fees come from the claimant's own YEC, not from the collateral
     if (c.residualZat < 0 || c.collateralZat - c.residualZat <= 0)
@@ -1471,9 +1576,7 @@ qint64 YellowbackController::pqFeeRateIn(const json& params) {
 }
 
 qint64 YellowbackController::pqOwnerSpendFeeZatFor(const json& params) {
-    const qint64 floor = YellowbackJson::toInt(params, YellowbackRpc::Params::FEE_ZAT, 1000);
-    const qint64 bySize = (pqFeeRateIn(params) * PQ_OWNER_SPEND_BYTES + 999) / 1000;
-    return std::max(floor, bySize);
+    return networkFeeZatFor(params, PQ_OWNER_SPEND_BYTES, true);
 }
 
 QString YellowbackController::receiveAddressTypeFor(const json& params) {
@@ -1506,8 +1609,16 @@ QString YellowbackController::describePq(const json& params) {
         line += tr("YED holders use ordinary addresses until Falcon (FN-DSA-512) activates at height %1.").arg(height);
     else
         line += tr("YED holders use ordinary (elliptic-curve) addresses; no Falcon activation height is set.");
+    const json& network = YellowbackJson::obj(YellowbackJson::obj(params, Params::FEES), ParamsFees::NETWORK);
+    const qint64 ybRate = YellowbackJson::toInt(YellowbackJson::obj(network, ParamsFeesNetwork::YELLOWBACK), NetworkRate::ZAT_PER_KB);
+    const qint64 ybUsd  = YellowbackJson::toInt(YellowbackJson::obj(network, ParamsFeesNetwork::YELLOWBACK), NetworkRate::USD_PER_KB_MICRO);
     const qint64 rate = pqFeeRateIn(params);
-    if (rate > 0)
+    if (!network.empty() && ybRate > 0)
+        line += " " % tr("Network fees are charged in dollars per KB at the attested price (%1 per KB for vault and YED transactions, %2 zat per KB now): "
+                         "a redeem, which carries the ~8 KB owner signature, costs about %3.")
+                          .arg(ybUsd > 0 ? QString("$%1").arg((double)ybUsd / 1e6, 0, 'f', 2) : tr("a fixed rate")).arg(ybRate)
+                          .arg(YellowbackFormat::zec(pqOwnerSpendFeeZatFor(params)));
+    else if (rate > 0)
         line += " " % tr("Network fees grow with size (%1 zat per KB): a redeem, which carries the ~8 KB owner signature, costs at least %2.")
                           .arg(rate).arg(YellowbackFormat::zec(pqOwnerSpendFeeZatFor(params)));
     return line;
@@ -1527,11 +1638,24 @@ qint64 YellowbackController::zatToCents(qint64 zat, qint64 priceMicroUsd) {
     return (qint64)std::llround((long double)zat * (long double)priceMicroUsd / 1e12L);
 }
 
-QString YellowbackController::earlyFeeInDollars(qint64 feeZat, qint64 priceMicroUsd, qint64 debtCents) {
-    const qint64 cents = zatToCents(feeZat, priceMicroUsd);
-    if (cents < 0) return QString();
-    return tr(", worth %1 at the claim price %2, against a debt of %3")
-        .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::price(priceMicroUsd)).arg(YellowbackFormat::cents(debtCents));
+QString YellowbackController::earlyFeeInDollars(qint64 earlyCents, qint64 earlyZat, qint64 bps, qint64 pMint, qint64 debtCents, int lockHeight) {
+    QString line = tr("%1 of the %2 debt (%3)").arg(YellowbackFormat::cents(earlyCents)).arg(YellowbackFormat::cents(debtCents))
+                       .arg(YellowbackFormat::bpsAsShortPercent(bps));
+    if (pMint > 0 && earlyZat >= 0)
+        line += tr(", %1 at the vault's mint price %2").arg(YellowbackFormat::zec(earlyZat)).arg(YellowbackFormat::price(pMint));
+    return line % tr("; it disappears at the end of the term (height %1)").arg(lockHeight);
+}
+
+QString YellowbackController::redeemFeesText(const json& params, const YellowbackPosition& p, bool early) {
+    QString out = tr("the protocol fee of %1").arg(dollarsAndYec(protocolFeeCentsFor(params, p.mintedCents),
+                                                                 protocolFeeZatFor(params, p.mintedCents, p.pMint), p.pMint));
+    if (early) {
+        const qint64 bps = earlyRedeemFeeBpsFor(params, p.termClass);
+        out += tr(" and the early-redeem fee of %1").arg(earlyFeeInDollars(earlyRedeemFeeCentsFor(params, p.termClass, p.mintedCents),
+                                                                         earlyRedeemFeeZatFor(params, p.termClass, p.mintedCents, p.pMint),
+                                                                         bps, p.pMint, p.mintedCents, p.lockHeight));
+    }
+    return out;
 }
 
 qint64 YellowbackController::earlyRedeemFeeBpsFor(const json& params, const QString& termClass) {
@@ -1549,10 +1673,17 @@ qint64 YellowbackController::earlyRedeemFeeBpsFor(const json& params, const QStr
     return 0;
 }
 
-qint64 YellowbackController::earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 collateralZat) {
+qint64 YellowbackController::earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 debtCents, qint64 pMint) {
     const qint64 bps = earlyRedeemFeeBpsFor(params, termClass);
-    if (collateralZat <= 0 || bps <= 0) return 0;
-    return (qint64)((__int128)collateralZat * bps / 10000);
+    if (debtCents <= 0 || bps <= 0 || pMint <= 0) return 0;
+    const __int128 num = (__int128)debtCents * bps * 100000000;
+    return (qint64)((num + pMint - 1) / pMint);
+}
+
+qint64 YellowbackController::earlyRedeemFeeCentsFor(const json& params, const QString& termClass, qint64 debtCents) {
+    const qint64 bps = earlyRedeemFeeBpsFor(params, termClass);
+    if (debtCents <= 0 || bps <= 0) return 0;
+    return (debtCents * bps + 9999) / 10000;
 }
 
 QStringList YellowbackController::checkEstimateRedeem(const json& params, const YellowbackPosition& p, const json& e) {
@@ -1571,12 +1702,20 @@ QStringList YellowbackController::checkEstimateRedeem(const json& params, const 
     if (YellowbackJson::toBool(e, EstimateRedeem::EARLY) != early)
         bad << tr("early is %1 for height %2 and lock height %3").arg(YellowbackJson::toBool(e, EstimateRedeem::EARLY) ? "true" : "false").arg(height).arg(p.lockHeight);
     mismatch(tr("earlyRedeemFeeBps"), YellowbackJson::toInt(e, EstimateRedeem::EARLY_REDEEM_FEE_BPS, -1), earlyRedeemFeeBpsFor(params, p.termClass));
+    // rpcversion 8: every fee is struck at the vault's stored pMint, which the quote repeats
+    const qint64 pMint = YellowbackJson::toInt(e, EstimateRedeem::P_MINT, -1);
+    if (p.pMint > 0) mismatch(tr("pMint"), pMint, p.pMint);
     const qint64 fee = YellowbackJson::toInt(e, EstimateRedeem::FEE_ZAT, -1);
     const qint64 earlyFee = YellowbackJson::toInt(e, EstimateRedeem::EARLY_REDEEM_FEE_ZAT, -1);
     if (fee == 0 && earlyFee == 0) return bad;              // FEE-0: no pool eligible, no fee output at all
-    const qint64 localEarly = early ? earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat) : 0;
+    mismatch(tr("protocolFeeCents"), YellowbackJson::toInt(e, EstimateRedeem::PROTOCOL_FEE_CENTS, -1), protocolFeeCentsFor(params, p.mintedCents));
+    const qint64 localFee = protocolFeeZatFor(params, p.mintedCents, pMint);
+    mismatch(tr("protocolFeeZat"), YellowbackJson::toInt(e, EstimateRedeem::PROTOCOL_FEE_ZAT, -1), localFee);
+    const qint64 localEarly = early ? earlyRedeemFeeZatFor(params, p.termClass, p.mintedCents, pMint) : 0;
     mismatch(tr("earlyRedeemFeeZat"), earlyFee, localEarly);
-    mismatch(tr("feeZat"), fee, feeZatFor(params, p.collateralZat) + localEarly);
+    mismatch(tr("earlyRedeemFeeCents"), YellowbackJson::toInt(e, EstimateRedeem::EARLY_REDEEM_FEE_CENTS, -1),
+             early ? earlyRedeemFeeCentsFor(params, p.termClass, p.mintedCents) : 0);
+    mismatch(tr("feeZat"), fee, localFee + localEarly);
     return bad;
 }
 
@@ -1695,6 +1834,16 @@ QString YellowbackController::explainError(const QString& e) {
                       "Choose the lock length of a class the node names, or a smaller amount.");
         return tr("Minting is paused: the supply cap is reached.");
     }
+    // rpcversion 8: the module's mint verdicts arrive bare or after mempool-check-failed:, so match them anywhere
+    if (e.contains(RpcErrors::MINT_VAULT_SHARE, Qt::CaseInsensitive))
+        return tr("One mint may create at most a tenth of the supply cap (and always at least $10,000) of YED: mint a smaller amount, or split it over several vaults.");
+    if (e.contains(RpcErrors::MINT_SUPPLY_CAP, Qt::CaseInsensitive))
+        return tr("This mint would take YED in circulation above the supply cap (15 % of the value of the circulating YEC), and its class does not reach the floor a mint above the cap needs. "
+                  "Choose a longer lock class, a smaller amount, or wait for redemptions or a higher YEC price.");
+    if (e.contains(RpcErrors::BAD_MINT_FEE, Qt::CaseInsensitive))
+        return tr("The mint's protocol fee output is below the fee its debt owes at the mint price; the node would refuse it. Re-estimate and try again.");
+    if (is(Errors::BAD_MINT_AMOUNT))
+        return tr("A mint must lie between the minimum and the maximum mint ($100,000); the node's message names the bounds.");
     if (is(Errors::MINT_UNSATISFIABLE))
         return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
     if (is(Errors::MINTPOL_UNARMED))
