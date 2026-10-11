@@ -44,7 +44,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 6, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 7, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
       "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
@@ -59,6 +59,7 @@ static json infoActive() {
                  "inTermClaims": true, "claimThresholdBps": 12500, "earlyRedeemFeeBps": [500, 250, 100],
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
                  "tokenValueZat": 10000, "feeZat": 1000,
+                 "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100},
                  "windows": {"fast": 8, "mid": 24, "slow": 64},
                  "minFill": {"fast": 4, "mid": 16, "slow": 43},
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000, "earlyRedeemFeeBps": 500},
@@ -100,8 +101,8 @@ static json activationActive() {
 static json positionActive() {
     return json::parse(R"({
       "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "vout": 0, "status": "ACTIVE",
-      "ownerPubKey": "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
-      "ownerKeyId": "1f2e3d4c5b6a79880706050403020100f1e2d3c4", "ownerAddress": "yrExampleOwnerAddress111111111111111",
+      "ownerScheme": 1, "ownerHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "ownerAddress": "yr2Qe7xCExamplePQOwnerAddress111111111111111111111cND",
       "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 25125628141, "collateral": 251.25628141,
       "mintedCents": 100000, "mintHeight": 332, "refHeight": 329, "feePaidZat": 62814071, "closeHeight": null,
       "closingTxid": "", "burnedCents": 0, "unbacked": false, "claimable": false, "underwaterAt": 437800,
@@ -112,6 +113,8 @@ static json positionActive() {
 
 // rpcversion 5: a vault under a claim (yed_listvaults "CLAIMING" row): the claimant's intent at the
 // claim's output 0 and the owner's residual at output 1, both releasable at height + CLAIM_DELAY (10)
+// the owner's TX_PQPKH of positionActive(): 20 <ownerHash> OP_1 OP_CHECKPQSIG (quantum spec §2.1, §3.3)
+static const char* PQPKH_OWNER = "20a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9051c2";
 static const char* CLAIM_TXID = "c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1c1a1";
 static json claimingVault(int claimHeight = 405, bool residual = true) {
     json v = positionActive();
@@ -295,7 +298,7 @@ static json balanceReply(qint64 confirmed) {
 }
 
 // A base58 regtest Yellowback address (no 0, O, I, l) for the send cases.
-static const char* RECIPIENT = "yrEx1mp1eRece1verAddress1111111111";
+static const char* RECIPIENT = "yrEx1mp1eRece1verAddress11111111111";   // 35 characters, as every P2PKH Yellowback address
 
 // The fake Connection (N28): every method answers from a table, and every call is recorded.
 struct FakeRpc {
@@ -621,23 +624,23 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsSix() {
-        // in-term claims (in-term plan §4.1): rpcversion 6 lists in-term claimable rows and quotes the early-redeem fee
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 6);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 6);
+    void contractVersionIsSeven() {
+        // post-quantum owners (quantum spec §6.2): ownerScheme/ownerHash replace ownerPubKey/ownerKeyId
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 7);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 7);
     }
 
-    // The rpcversion 6 handshake: 6 is accepted, 5 (the vault upgrade before in-term claims)
-    // and 7 are refused with both numbers named, and nothing is enabled until they match.
-    void handshakeAcceptsRpcVersionSixOnly() {
-        for (int v : { 5, 7 }) {
+    // The rpcversion 7 handshake: 7 is accepted, 6 (in-term claims with elliptic-curve owners)
+    // and 8 are refused with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionSevenOnly() {
+        for (int v : { 6, 8 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("version 6"));
+            QVERIFY(h.label("lblBanner").contains("version 7"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -783,7 +786,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 6"));
+        QVERIFY(h.label("lblBanner").contains("version 7"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -1494,11 +1497,17 @@ private slots:
     }
 
     // vault_release: our claimant intent with no recipient (the node finds this wallet's script);
-    // the residual of somebody else's vault with the owner's P2PKH script from ownerKeyId
+    // the residual with the owner's PQPKH script from ownerHash and ownerScheme (rpcversion 7, F-3)
     void releaseClaimRequestShapes() {
-        QCOMPARE(YellowbackController::p2pkhScriptForKeyId("1f2e3d4c5b6a79880706050403020100f1e2d3c4"),
-                 QString("76a914c4d3e2f1000102030405060788796a5b4c3d2e1f88ac"));      // CKeyID::GetHex is byte-reversed
-        QVERIFY(YellowbackController::p2pkhScriptForKeyId("xyz").isEmpty());
+        QCOMPARE(YellowbackController::pqpkhScriptFor("a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", 1),
+                 QString(PQPKH_OWNER));                                                 // ownerHash is in byte order
+        QCOMPARE(YellowbackController::pqpkhScriptFor("A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7E8F90", 2),
+                 QString("20a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9052c2"));   // Falcon: OP_2
+        QCOMPARE(QString(PQPKH_OWNER).length(), 70);                                       // TX_PQPKH is 35 bytes
+        QVERIFY(YellowbackController::pqpkhScriptFor("xyz", 1).isEmpty());
+        QVERIFY(YellowbackController::pqpkhScriptFor("1f2e3d4c5b6a79880706050403020100f1e2d3c4", 1).isEmpty());   // a 20-byte key id
+        QVERIFY(YellowbackController::pqpkhScriptFor("a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", 0).isEmpty());
+        QVERIFY(YellowbackController::pqpkhScriptFor("a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", 3).isEmpty());
         Harness h;
         h.feedActive(414);
         json tx = txMint(); tx["type"] = "claim"; tx["txid"] = CLAIM_TXID; tx["height"] = 405;
@@ -1514,7 +1523,7 @@ private slots:
         QCOMPARE(h.rpc.lastParams("vault_release"), json::array({std::string(CLAIM_TXID) + ":0"}));
         QVERIFY(h.notices.last().startsWith("Release sent|txid a11ce"));
         h.tab.releaseClaim(*h.ctl.pendingClaimsModel()->rowAt(1));
-        QCOMPARE(h.rpc.lastParams("vault_release"), json::array({std::string(CLAIM_TXID) + ":1", "76a914c4d3e2f1000102030405060788796a5b4c3d2e1f88ac"}));
+        QCOMPARE(h.rpc.lastParams("vault_release"), json::array({std::string(CLAIM_TXID) + ":1", PQPKH_OWNER}));
         QVERIFY(h.confirms.last().contains("to the vault owner"));
         // before release height: nothing is sent
         Harness early;
@@ -2009,6 +2018,166 @@ private slots:
         h.tab.doSend();
         QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
         QVERIFY(h.label("lblSendHint").contains("Ycash address"));
+    }
+
+    // ── rpcversion 7: post-quantum owners (quantum spec §4, §6.2; clients survey §2) ─────────
+
+    // The first filter before yed_validateaddress: exactly 35 (P2PKH) or 53 (PQ) Base58 characters with
+    // the network's prefix; mainnet is "yb" (D-Q-21) and, until the node's Y-B sweep, "ye" too.
+    void addressGuardAcceptsP2pkhAndPqLengths() {
+        auto make = [](const QString& prefix, int length) { return prefix + QString(length - prefix.length(), QChar('1')); };
+        for (const QString net : { "main", "test", "regtest" }) {
+            const QString pre = YellowbackController::addressPrefixOn(net);
+            QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 35)));
+            QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 53)));
+            QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, "  " + make(pre, 53) + " "));   // trimmed
+            for (int bad : { 26, 34, 36, 40, 41, 52, 54, 60 })
+                QVERIFY2(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, bad)), qPrintable(QString("%1 length %2").arg(net).arg(bad)));
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 53)));   // plain-YEC PQ
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 52) + "l"));    // not Base58
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 52) + "0"));
+            // sq…/tq…/rq… are plain YEC, never YED, and the Send page refuses them as Ycash addresses
+            QVERIFY(YellowbackController::isPqYecAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 53)));
+            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 35)));
+            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(pre, 53)));
+        }
+        QCOMPARE(YellowbackController::addressPrefixOn("main"), QString("yb"));
+        QCOMPARE(YellowbackController::addressPrefixOn("test"), QString("yt"));
+        QCOMPARE(YellowbackController::addressPrefixOn("regtest"), QString("yr"));
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", make("ye", 53)));        // until the Y-B sweep
+        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("test", make("ye", 35)));
+        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("regtest", make("yt", 53)));
+        // the spec's own extreme PQ addresses (quantum spec §4) pass the mainnet filter
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "ye3SZot1kepFFNT7S9eGf61sufuSARvXG4VZQ4WqPqJKrosTayohv"));
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "yeC2CP3NepyAPLy8ChifYtByPvLdpGLnzDwBXcyBVKn5a6CXWeucQ"));
+        // the stock wallet's helpers never take a PQ address for one of theirs
+        for (const QString& a : { make("yr", 53), make("rq", 53), make("sq", 53), make("yb", 53) }) {
+            QVERIFY(!Settings::isTAddress(a));
+            QVERIFY(!Settings::isZAddress(a));
+            QVERIFY(!Settings::isValidAddress(a));
+        }
+        Harness h;
+        h.feedActive();
+        QVERIFY(h.ctl.isPqYellowbackAddress(make("yr", 53)));
+        QVERIFY(!h.ctl.isPqYellowbackAddress(RECIPIENT));
+        QVERIFY(h.ctl.isShieldedAddress(make("rq", 53)));
+        h.sendTo(make("rq", 53), "123");
+        h.tab.doSend();
+        QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 0);
+        QVERIFY(h.label("lblSendHint").contains("Ycash address"));
+        // a 53-character PQ address reaches the node's yed_validateaddress (the 26-40 guard refused it)
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", make("yr", 53).toStdString()}, {"type", "pq"}, {"pqscheme", 2}, {"ismine", false}};
+        h.rpc.results[YellowbackRpc::SEND] = json{{"txid", "5e1d"}, {"changeCents", 0}, {"expiryHeight", 351}};
+        h.sendTo(make("yr", 53), "123");
+        h.tab.doSend();
+        QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
+        QCOMPARE(h.rpc.count(YellowbackRpc::SEND), 1);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SEND), json::array({make("yr", 53).toStdString(), 12300}));
+    }
+
+    // C-10: a vault owner's SLH-DSA address is never a YED recipient; TOK-PQ: after Falcon no P2PKH holder
+    void sendRefusesOwnerAddressAndOldHolderAfterFalcon() {
+        const std::string owner = "yr2Qe7xCExamp1ePQwnerAddress1111111111111111111111cND";
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", owner}, {"type", "pq"}, {"pqscheme", 1}, {"ismine", true}};
+        h.sendTo(QString::fromStdString(owner), "123");
+        h.tab.doSend();
+        QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
+        QCOMPARE(h.rpc.count(YellowbackRpc::SEND), 0);
+        QVERIFY(h.confirms.isEmpty());
+        QVERIFY2(h.label("lblSendHint").startsWith("Refused: That is a vault owner's post-quantum address"), qPrintable(h.label("lblSendHint")));
+        // pure: what is refused before and after Falcon
+        const json p2pkh = {{"isvalid", true}, {"type", "p2pkh"}}, falcon = {{"isvalid", true}, {"type", "pq"}, {"pqscheme", 2}};
+        const json slh = {{"isvalid", true}, {"type", "pq"}, {"pqscheme", 1}};
+        QVERIFY(YellowbackController::yedRecipientRefusal(p2pkh, false).isEmpty());
+        QVERIFY(YellowbackController::yedRecipientRefusal(falcon, false).isEmpty());
+        QVERIFY(YellowbackController::yedRecipientRefusal(falcon, true).isEmpty());
+        QVERIFY(!YellowbackController::yedRecipientRefusal(slh, false).isEmpty());
+        QVERIFY(!YellowbackController::yedRecipientRefusal(slh, true).isEmpty());
+        QVERIFY(YellowbackController::yedRecipientRefusal(p2pkh, true).contains("Falcon"));
+        // after Falcon an ordinary P2PKH recipient is refused before yed_send
+        Harness f;
+        json info = infoActive(); info["params"]["pq"]["falconActive"] = true; info["params"]["pq"]["schemes"] = json::array({1, 2});
+        info["params"]["pq"]["falconHeight"] = 300;
+        f.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json(nullptr), json(nullptr), json(nullptr));
+        QVERIFY(f.ctl.falconActive());
+        f.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", RECIPIENT}, {"type", "p2pkh"}, {"ismine", false}};
+        f.sendTo(RECIPIENT, "123");
+        f.tab.doSend();
+        QCOMPARE(f.rpc.count(YellowbackRpc::SEND), 0);
+        QVERIFY(f.label("lblSendHint").contains("Falcon"));
+    }
+
+    // Receive asks for the holder type explicitly (p2pkh before Falcon, pq after) and never shows an
+    // SLH-DSA (owner) address, even when the node returns one
+    void receiveAsksHolderTypeAndNeverShowsOwnerKey() {
+        const std::string falconAddr = "yr9Fa1conHo1derAddress1111111111111111111111111111AB";
+        {
+            Harness h;
+            h.feedActive();
+            h.rpc.results[YellowbackRpc::GETNEWADDRESS] = RECIPIENT;
+            h.button("btnNewAddress")->click();
+            QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETNEWADDRESS), json::array({"p2pkh"}));
+            QCOMPARE(h.label("lblAddress"), QString(RECIPIENT));
+            QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 0);
+            // a node that answers with an SLH-DSA key: validated, and not shown
+            h.rpc.results[YellowbackRpc::GETNEWADDRESS] = falconAddr + "C";
+            h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"type", "pq"}, {"pqscheme", 1}, {"ismine", true}};
+            h.button("btnNewAddress")->click();
+            QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
+            QCOMPARE(h.label("lblAddress"), QString(RECIPIENT));                 // unchanged
+            QVERIFY2(h.label("lblReceiveStatus").startsWith("Not shown"), qPrintable(h.label("lblReceiveStatus")));
+        }
+        {
+            Harness f;
+            json info = infoActive(); info["params"]["pq"]["falconActive"] = true;
+            f.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json(nullptr), json(nullptr), json(nullptr));
+            f.rpc.results[YellowbackRpc::GETNEWADDRESS] = falconAddr + "C";
+            f.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"type", "pq"}, {"pqscheme", 2}, {"ismine", true}};
+            f.button("btnNewAddress")->click();
+            QCOMPARE(f.rpc.lastParams(YellowbackRpc::GETNEWADDRESS), json::array({"pq"}));
+            QCOMPARE(f.label("lblAddress"), QString::fromStdString(falconAddr + "C"));
+            QVERIFY(f.label("lblReceiveStatus").contains("post-quantum (Falcon)"));
+        }
+        QCOMPARE(QString::fromStdString(falconAddr + "C").length(), 53);
+    }
+
+    // params.pq on the Overview, the size-priced owner-spend fee, and the PQ owner fields of a vault row
+    void pqParamsOwnerFieldsAndFees() {
+        const json params = infoActive()["params"];
+        QVERIFY(!YellowbackController::falconActiveIn(params));
+        QCOMPARE(YellowbackController::pqFeeRateIn(params), (qint64)100);
+        QCOMPARE(YellowbackController::pqOwnerSpendFeeZatFor(params), (qint64)1000);   // max(1000, 100 × 8.2) at 1× the floor (C-5)
+        json p3 = params; p3["pq"]["feeRateZatPerKB"] = 300;
+        QCOMPARE(YellowbackController::pqOwnerSpendFeeZatFor(p3), (qint64)2460);        // 300 × 8,200 / 1,000
+        QCOMPARE(YellowbackController::pqFeeRateIn(json::object()), (qint64)0);
+        QCOMPARE(YellowbackController::receiveAddressTypeFor(params), QString("p2pkh"));
+        const QString pq = YellowbackController::describePq(params);
+        QVERIFY2(pq.contains("SLH-DSA-SHA2-128s") && pq.contains("no Falcon activation height") && pq.contains("100 zat per KB"), qPrintable(pq));
+        QVERIFY(YellowbackController::describePq(json::object()).isEmpty());
+        json f = params; f["pq"]["falconActive"] = true; f["pq"]["falconHeight"] = 300;
+        QVERIFY(YellowbackController::describePq(f).contains("active since height 300"));
+        Harness h;
+        h.feedActive(331, json::array({positionActive()}));
+        QVERIFY2(h.label("lblPostQuantum").contains("Post-quantum: every vault's owner key is SLH-DSA-SHA2-128s"), qPrintable(h.label("lblPostQuantum")));
+        // the row: ownerScheme / ownerHash / the 53-character ownerAddress, labelled as a vault owner
+        const YellowbackPosition row = YellowbackPosition::fromJson(positionActive());
+        QCOMPARE(row.ownerScheme, 1);
+        QCOMPARE(row.ownerHash, QString("a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"));
+        QCOMPARE(row.ownerAddress.length(), 53);
+        QCOMPARE(row.ownerSchemeName(), QString("SLH-DSA-SHA2-128s"));
+        auto m = h.ctl.positionsModel();
+        const QString tip = m->data(m->index(0, YellowbackPositionsModel::Vault), Qt::ToolTipRole).toString();
+        QVERIFY2(tip.contains("Vault owner (post-quantum, SLH-DSA-SHA2-128s): " % row.ownerAddress), qPrintable(tip));
+        QVERIFY(tip.contains("not a YED receive address"));
+        QVERIFY(!tip.contains("Owner key"));
+        // the early-redeem fee in dollars beside the debt (lockup investigation recommendation)
+        QCOMPARE(YellowbackController::zatToCents(100000000, 2000000), (qint64)200);          // 1 YEC at $2.00
+        QCOMPARE(YellowbackController::zatToCents(2100000000000000LL, 4294967295LL), (qint64)9019431319500LL);   // no overflow at PRICE_MAX
+        QCOMPARE(YellowbackController::zatToCents(100000000, 0), (qint64)-1);
+        QVERIFY(YellowbackController::earlyFeeInDollars(1, 0, 100).isEmpty());
+        QCOMPARE(YellowbackController::earlyFeeInDollars(125000000, 2000000, 100000), QString(", worth $2.50 at the claim price $2.0000, against a debt of $1,000.00"));
     }
 
     void sendInsufficientYed() {
@@ -3277,7 +3446,7 @@ private slots:
         QVERIFY(h.ctl.deadlineWarnings().isEmpty());                    // no claim-height deadline under in-term claims
         auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, h.ctl.params(), 2000000);
         QVERIFY(a.redeem && !a.renew && !a.release);
-        QVERIFY2(a.text.contains("early-redeem fee of 5 % of the collateral (about " % YellowbackFormat::zec(VAULT_ZAT * 500 / 10000) % ")"), qPrintable(a.text));
+        QVERIFY2(a.text.contains("early-redeem fee of 5 % of the collateral (about " % YellowbackFormat::zec(VAULT_ZAT * 500 / 10000) % ", worth $25.13 at the claim price $2.0000, against a debt of $1,000.00)"), qPrintable(a.text));
         QVERIFY(a.text.contains("if the claim price falls below $0.4378"));
         // the claim price nears the threshold (within 25 %): orange, and the banner warns
         json near = statsOpen(); near["pClaim"] = 500000; near["pFast"] = 500000;
@@ -3318,7 +3487,10 @@ private slots:
             QCOMPARE(h.rpc.count(YellowbackRpc::GETFEEPAYEE), 0);
             QCOMPARE(h.confirms.size(), 1);
             const QString& text = h.confirms[0];
-            QVERIFY2(text.contains("Early-redeem fee: " % YellowbackFormat::zec(earlyFee) % " of YEC (5 % of the collateral, class A)"), qPrintable(text));
+            QVERIFY2(text.contains("Early-redeem fee: " % YellowbackFormat::zec(earlyFee) % " of YEC (5 % of the collateral, class A, worth "), qPrintable(text));
+            QVERIFY(text.contains("against a debt of $1,000.00), because"));
+            QVERIFY(text.contains("Network fee: at least " % YellowbackFormat::zec(1000) % " of YEC"));   // rpcversion 7: grows with size
+            QVERIFY(text.contains("about 8 KB"));
             QVERIFY(text.contains("Pool fee: " % YellowbackFormat::zec(fee1(VAULT_ZAT))));
             QVERIFY(text.contains("Redeeming at or after height 380 pays no early-redeem fee"));
             QVERIFY(text.contains(YellowbackFormat::zec(VAULT_ZAT - fee1(VAULT_ZAT) - earlyFee)));   // collateral out
@@ -3437,6 +3609,13 @@ private slots:
         QVERIFY(text.contains("This wallet warns you before that happens, and redeeming stops it."));
         QVERIFY(text.contains("Back up wallet.dat"));
         QVERIFY(!text.contains("only your key can spend it before the claim height"));
+        // rpcversion 7: the post-quantum disclosure (quantum plan §6) and the early-redeem fee in dollars
+        QVERIFY(text.contains(YellowbackController::pqDisclosure()));
+        QVERIFY(text.contains("SLH-DSA-SHA2-128s"));
+        QVERIFY(text.contains("Sapling"));
+        QVERIFY(text.contains("No hardware wallet, watch-only wallet or xpub"));
+        QVERIFY(text.contains("0.25-0.6 s"));
+        QVERIFY2(text.contains("worth $") && text.contains("against a debt of $1,000.00"), qPrintable(text));
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
     }
 

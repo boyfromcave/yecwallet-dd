@@ -7,7 +7,7 @@
 
 #include <QtGlobal>
 
-// The Yellowback RPC contract (rpcversion 6, the in-term claims line), as the wallet depends on it.
+// The Yellowback RPC contract (rpcversion 7, the post-quantum line), as the wallet depends on it.
 //
 // Every yed_* method name, every result field and every error identifier the wallet reads is
 // declared here and nowhere else, so the wallet can be reconciled against
@@ -33,8 +33,11 @@ namespace YellowbackRpc {
 // upgrade plan §15.10: the enforcement machinery, the sweep and VOID are gone, a claim is an intent;
 // to 6 with in-term claims, docs/plans/yellowback-in-term-claims-plan.md §4.1 in the workspace: a
 // vault is claimable in term once under the claim threshold, the owner redeems at any height and pays
-// an early-redeem fee before lockHeight, yed_listclaimable lists in-term rows with `claimable`).
-constexpr int RPC_VERSION = 6;
+// an early-redeem fee before lockHeight, yed_listclaimable lists in-term rows with `claimable`; to 7
+// with post-quantum vault owners, docs/plans/yellowback-quantum-spec.md §6.2 in the workspace: every
+// vault owner is an SLH-DSA key, ownerScheme/ownerHash replace ownerPubKey/ownerKeyId, ownerAddress is
+// the 53-character PQ address, yed_getinfo.params.pq, a MINT payload is version 4).
+constexpr int RPC_VERSION = 7;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -160,6 +163,22 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* CLAIM_THRESHOLD_BPS = "claimThresholdBps"; // θ: RED-4 (12500 = 125 %)
     constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // [A, B, C]: of the collateral, a redeem before lockHeight
     constexpr const char* SIGMA_MULT_MAX_BPS  = "sigmaMultMaxBps";   // 10000: the volatility multiplier is pinned at 1
+    // rpcversion 7 (post-quantum owners, quantum spec §6.2)
+    constexpr const char* PQ                  = "pq";                // the ParamsPq object
+}
+
+// rpcversion 7: yed_getinfo.params.pq, the post-quantum signature schemes the network accepts.
+namespace ParamsPq {   // contract: yed_getinfo.params.pq
+    constexpr const char* SCHEMES             = "schemes";           // [1] (SLH-DSA-SHA2-128s), [1, 2] once Falcon (FN-DSA-512) is active
+    constexpr const char* FALCON_ACTIVE       = "falconActive";      // YED holders must be Falcon PQ addresses from then on (TOK-PQ)
+    constexpr const char* FALCON_HEIGHT       = "falconHeight";      // -1 while no height is set
+    constexpr const char* FEE_RATE_ZAT_PER_KB = "feeRateZatPerKB";   // the node's -pqfeerate: fees grow with a transaction's size
+}
+
+// rpcversion 7: the post-quantum scheme identifiers (ownerScheme, yed_validateaddress.pqscheme).
+namespace PqScheme {
+    constexpr int SLH_DSA_SHA2_128S = 1;   // vault owners: a ~7.9 KB signature, signed by the node in ~0.25-0.6 s
+    constexpr int FN_DSA_512        = 2;   // YED holders once Falcon is active: a ~1.6 KB signature
 }
 
 // v3: yed_getinfo.params.attest, the values the Mint page and the Attestors view derive from.
@@ -242,9 +261,9 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* TXID              = "txid";
     constexpr const char* VOUT              = "vout";
     constexpr const char* STATUS            = "status";        // ACTIVE | CLAIMING | CLOSED | CLAIMED (| VOID before the upgrade)
-    constexpr const char* OWNER_PUBKEY      = "ownerPubKey";
-    constexpr const char* OWNER_KEY_ID      = "ownerKeyId";
-    constexpr const char* OWNER_ADDRESS     = "ownerAddress";
+    constexpr const char* OWNER_SCHEME      = "ownerScheme";   // rpcversion 7: PqScheme (1 = SLH-DSA); replaces ownerPubKey
+    constexpr const char* OWNER_HASH        = "ownerHash";     // rpcversion 7: SHA256(scheme || pk), 64 hex in byte order; replaces ownerKeyId
+    constexpr const char* OWNER_ADDRESS     = "ownerAddress";  // rpcversion 7: the 53-character PQ address: a vault identifier, never a YED receive address
     constexpr const char* TERM_CLASS        = "termClass";     // "A" | "B" | "C"
     constexpr const char* LOCK_HEIGHT       = "lockHeight";
     constexpr const char* CLAIM_HEIGHT      = "claimHeight";
@@ -481,6 +500,7 @@ namespace MintResult {   // contract: yed_mint
     constexpr const char* BUNDLE_SEQS       = "bundleSeqs";
     constexpr const char* ATTEST_FEE_ZAT    = "attestFeeZat";
     constexpr const char* ATTEST_PAYEE      = "attestPayee";   // the bondKeyAddress paid; null under AFEE-0
+    constexpr const char* OWNER_ADDRESS     = "ownerAddress";  // rpcversion 7: the new vault's PQ owner (53 characters)
 }
 
 // ── yed_send result ────────────────────────────────────────────────────────────────────────
@@ -632,10 +652,25 @@ namespace EquivocationResult {   // contract: yed_reportequivocation
 namespace ValidateAddress {   // contract: yed_validateaddress
     constexpr const char* ISVALID           = "isvalid";
     constexpr const char* ADDRESS           = "address";
-    constexpr const char* KEYID             = "keyid";
+    constexpr const char* TYPE              = "type";          // rpcversion 7: "p2pkh" | "pq"
+    constexpr const char* PQSCHEME          = "pqscheme";      // optional, rpcversion 7: present only when type is "pq"
+    constexpr const char* KEYID             = "keyid";         // rpcversion 7: for a PQ address the pqkeyid (scheme || hash, 66 hex)
     constexpr const char* ISMINE            = "ismine";
     constexpr const char* TRANSPARENT_ADDRESS = "transparentAddress";
     constexpr const char* REASON            = "reason";        // not-a-yellowback-address when !isvalid
+
+    constexpr const char* TYPE_P2PKH        = "p2pkh";         // value
+    constexpr const char* TYPE_PQ           = "pq";            // value
+}
+
+// rpcversion 7: yed_getnewaddress's optional argument. The wallet sends none: the node's default
+// follows the holder policy (P2PKH while Falcon is inactive, a Falcon PQ address once active). It
+// never asks for "pqowner": a vault owner key is not a YED receive address (clients survey C-10).
+// The values are yed_validateaddress's `type` values plus "pqowner".
+namespace NewAddressType {   // contract: yed_validateaddress
+    constexpr const char* P2PKH             = "p2pkh";         // value
+    constexpr const char* PQ                = "pq";            // value
+    constexpr const char* PQ_OWNER          = "pqowner";       // value
 }
 
 // ── Error identifiers the wallet recognises (the first token of error.message) ────────────

@@ -27,9 +27,9 @@ struct YellowbackPosition {
     QString txid;
     int     vout            = 0;
     QString status;             // ACTIVE | CLAIMING | CLOSED | CLAIMED (| VOID, indexed before the upgrade)
-    QString ownerPubKey;
-    QString ownerAddress;
-    QString ownerKeyId;
+    int     ownerScheme     = 0;       // rpcversion 7: YellowbackRpc::PqScheme (1 = SLH-DSA); 0 when absent
+    QString ownerHash;                 // rpcversion 7: SHA256(scheme || pk), 64 hex in byte order
+    QString ownerAddress;              // rpcversion 7: the 53-character PQ owner address (a vault identifier, not a YED address)
     QString termClass;          // A | B | C
     int     lockHeight      = 0;
     int     claimHeight     = 0;
@@ -56,6 +56,8 @@ struct YellowbackPosition {
     qint64  earlyRedeemFeeZat = 0;     // rpcversion 6 (IT-9), listpositions only: a redeem now pays it on top of FEE-1
 
     static YellowbackPosition fromJson(const json& j);
+    /** "SLH-DSA-SHA2-128s" | "FN-DSA-512" | "scheme <n>": the owner's post-quantum signature scheme. */
+    QString ownerSchemeName() const;
     QString vaultName() const { return txid % ":" % QString::number(vout); }
     /** The claimant intent while CLAIMING; nullptr otherwise. */
     const YellowbackIntent* claimantIntent() const;

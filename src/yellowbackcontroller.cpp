@@ -322,12 +322,13 @@ int YellowbackController::setCancelThreshold() const {
     return (int)YellowbackJson::toInt(setJson, VaultRpc::Set::CANCEL_THRESHOLD, 1);
 }
 
-QString YellowbackController::p2pkhScriptForKeyId(const QString& keyIdHex) {
-    static const QRegularExpression hex40("^[0-9a-fA-F]{40}$");
-    if (!hex40.match(keyIdHex).hasMatch()) return QString();
-    QString internal;
-    for (int i = 38; i >= 0; i -= 2) internal += keyIdHex.mid(i, 2);    // uint160::GetHex prints the bytes reversed
-    return "76a914" % internal.toLower() % "88ac";
+QString YellowbackController::pqpkhScriptFor(const QString& ownerHashHex, int scheme) {
+    // TX_PQPKH (quantum spec §2.1, F-1): 0x20 <keyHash:32> OP_1|OP_2 OP_CHECKPQSIG, 35 bytes. ownerHash is
+    // printed in byte order (HexStr), so it goes into the script as it is.
+    static const QRegularExpression hex64("^[0-9a-fA-F]{64}$");
+    if (!hex64.match(ownerHashHex).hasMatch()) return QString();
+    if (scheme != YellowbackRpc::PqScheme::SLH_DSA_SHA2_128S && scheme != YellowbackRpc::PqScheme::FN_DSA_512) return QString();
+    return "20" % ownerHashHex.toLower() % (scheme == YellowbackRpc::PqScheme::FN_DSA_512 ? "52" : "51") % "c2";
 }
 
 // A claim this wallet made: a "claim" row, or a "claimed" row in which this wallet spent YED (the
@@ -711,22 +712,64 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
 // ── Addresses ─────────────────────────────────────────────────────────────────────────────
 
 QString YellowbackController::addressPrefix() const {
-    if (net == "test")    return "yt";
-    if (net == "regtest") return "yr";
-    return "ye";
+    return addressPrefixOn(net);
 }
 
-bool YellowbackController::looksLikeYellowbackAddress(const QString& addr) const {
+// D-Q-21 (owner, 2026-10-10): the mainnet YED prefix on the post-quantum line is "yb" (20-byte 0x1FDD,
+// PQ 0x56AB); testnet "yt" and regtest "yr" are unchanged.
+QString YellowbackController::addressPrefixOn(const QString& network) {
+    if (network == "test")    return "yt";
+    if (network == "regtest") return "yr";
+    return "yb";
+}
+
+// A first filter before yed_validateaddress, which stays the authority. A Yellowback address is
+// Base58Check of a 2-byte version and either a 20-byte key id (35 characters, P2PKH) or, since
+// rpcversion 7, scheme || 32-byte key hash (53 characters, quantum spec §4). Every other length is
+// refused, so a 36-52 or 54+ character string never reaches the node. On mainnet the node still
+// renders "ye" until the Y-B sweep (plan §8.1) lands, so "ye" is accepted beside "yb" until then.
+bool YellowbackController::looksLikeYellowbackAddressOn(const QString& network, const QString& addr) {
     QString a = addr.trimmed();
-    if (a.length() < 26 || a.length() > 40) return false;
-    if (!a.startsWith(addressPrefix())) return false;
+    if (a.length() != P2PKH_ADDRESS_LENGTH && a.length() != PQ_ADDRESS_LENGTH) return false;
+    if (!a.startsWith(addressPrefixOn(network)) && !(network == "main" && a.startsWith("ye"))) return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
 }
 
+bool YellowbackController::looksLikeYellowbackAddress(const QString& addr) const {
+    return looksLikeYellowbackAddressOn(net, addr);
+}
+
+bool YellowbackController::isPqYellowbackAddress(const QString& addr) const {
+    return looksLikeYellowbackAddress(addr) && addr.trimmed().length() == PQ_ADDRESS_LENGTH;
+}
+
+// D-Q-20: a plain-YEC post-quantum address (the node encodes it for its PQ coins, e.g. a vault owner's
+// residual): "sq" / "tq" / "rq", 53 characters. It holds YEC, never YED, and the node does not decode it
+// as a recipient or a funding source yet, so the wallet only displays it.
+QString YellowbackController::pqYecPrefixOn(const QString& network) {
+    if (network == "test")    return "tq";
+    if (network == "regtest") return "rq";
+    return "sq";
+}
+
+bool YellowbackController::isPqYecAddressOn(const QString& network, const QString& addr) {
+    QString a = addr.trimmed();
+    if (a.length() != PQ_ADDRESS_LENGTH) return false;
+    if (!a.startsWith(pqYecPrefixOn(network))) return false;
+    static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
+    return base58.match(a).hasMatch();
+}
+
+bool YellowbackController::isPqYecAddress(const QString& addr) const {
+    return isPqYecAddressOn(net, addr);
+}
+
 bool YellowbackController::isShieldedAddress(const QString& addr) const {
     QString a = addr.trimmed();
-    // Ycash: s1.../s3... transparent, ys.../ytestsapling... Sapling, z... Sprout. None can hold YED.
+    // Ycash: s1.../s3... transparent, ys.../ytestsapling... Sapling, z... Sprout, and (D-Q-20) the plain-YEC
+    // post-quantum sq.../tq.../rq.... None can hold YED.
+    if (isPqYecAddress(a)) return true;
     return a.startsWith("s1") || a.startsWith("s3") || a.startsWith("ys") ||
            a.startsWith("ytestsapling") || a.startsWith("z");
 }
@@ -997,8 +1040,9 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
 
 // ── Typed calls ───────────────────────────────────────────────────────────────────────────
 
+// rpcversion 7: the holder type is named explicitly (receiveAddressTypeFor), never "pqowner" (C-10)
 void YellowbackController::getNewAddress(OkFn ok, ErrFn err) {
-    call(YellowbackRpc::GETNEWADDRESS, json(nullptr), ok, err);
+    call(YellowbackRpc::GETNEWADDRESS, json::array({receiveAddressTypeFor(paramsJson).toStdString()}), ok, err);
 }
 
 void YellowbackController::validateAddress(const QString& addr, OkFn ok, ErrFn err) {
@@ -1366,6 +1410,80 @@ qint64 YellowbackController::claimThresholdBps() const {
 
 qint64 YellowbackController::claimPriceNow() const {
     return YellowbackJson::isNull(statsJson, YellowbackRpc::Stats::P_CLAIM) ? 0 : YellowbackJson::toInt(statsJson, YellowbackRpc::Stats::P_CLAIM);
+}
+
+// ── rpcversion 7: post-quantum owners ─────────────────────────────────────────────────────
+
+bool YellowbackController::falconActiveIn(const json& params) {
+    return YellowbackJson::toBool(YellowbackJson::obj(params, YellowbackRpc::Params::PQ), YellowbackRpc::ParamsPq::FALCON_ACTIVE);
+}
+
+qint64 YellowbackController::pqFeeRateIn(const json& params) {
+    return std::max<qint64>(0, YellowbackJson::toInt(YellowbackJson::obj(params, YellowbackRpc::Params::PQ), YellowbackRpc::ParamsPq::FEE_RATE_ZAT_PER_KB));
+}
+
+qint64 YellowbackController::pqOwnerSpendFeeZatFor(const json& params) {
+    const qint64 floor = YellowbackJson::toInt(params, YellowbackRpc::Params::FEE_ZAT, 1000);
+    const qint64 bySize = (pqFeeRateIn(params) * PQ_OWNER_SPEND_BYTES + 999) / 1000;
+    return std::max(floor, bySize);
+}
+
+QString YellowbackController::receiveAddressTypeFor(const json& params) {
+    return falconActiveIn(params) ? YellowbackRpc::NewAddressType::PQ : YellowbackRpc::NewAddressType::P2PKH;
+}
+
+QString YellowbackController::yedRecipientRefusal(const json& v, bool falconActive) {
+    using namespace YellowbackRpc::ValidateAddress;
+    const QString type = YellowbackJson::toStr(v, TYPE);
+    if (type == TYPE_PQ && YellowbackJson::toInt(v, PQSCHEME) == YellowbackRpc::PqScheme::SLH_DSA_SHA2_128S)
+        return tr("That is a vault owner's post-quantum address (SLH-DSA), a vault identifier, not a YED receive address: "
+                  "YED there would cost an 8 KB signature to move again. Ask the recipient for the address on their Receive page.");
+    if (type == TYPE_P2PKH && falconActive)
+        return tr("Since Falcon activation YED can only be held by post-quantum (Falcon) addresses, and this is an older address: "
+                  "the network would refuse the transfer. Ask the recipient for a new address from their Receive page.");
+    return QString();
+}
+
+QString YellowbackController::describePq(const json& params) {
+    using namespace YellowbackRpc;
+    const json& pq = YellowbackJson::obj(params, Params::PQ);
+    if (pq.empty()) return QString();
+    const bool falcon = YellowbackJson::toBool(pq, ParamsPq::FALCON_ACTIVE);
+    const qint64 height = YellowbackJson::toInt(pq, ParamsPq::FALCON_HEIGHT, -1);
+    QString line = tr("Post-quantum: every vault's owner key is SLH-DSA-SHA2-128s. ");
+    if (falcon)
+        line += tr("Falcon (FN-DSA-512) is active%1: YED is held only by post-quantum addresses.")
+                    .arg(height >= 0 ? tr(" since height %1").arg(height) : QString());
+    else if (height >= 0)
+        line += tr("YED holders use ordinary addresses until Falcon (FN-DSA-512) activates at height %1.").arg(height);
+    else
+        line += tr("YED holders use ordinary (elliptic-curve) addresses; no Falcon activation height is set.");
+    const qint64 rate = pqFeeRateIn(params);
+    if (rate > 0)
+        line += " " % tr("Network fees grow with size (%1 zat per KB): a redeem, which carries the ~8 KB owner signature, costs at least %2.")
+                          .arg(rate).arg(YellowbackFormat::zec(pqOwnerSpendFeeZatFor(params)));
+    return line;
+}
+
+QString YellowbackController::pqDisclosure() {
+    return tr("Post-quantum: the vault's owner key is a post-quantum key (SLH-DSA-SHA2-128s) that your node creates and keeps in wallet.dat. "
+              "Back up wallet.dat after this mint: the key exists only in that file. It protects the authority to redeem the vault. It does not make the rest of Ycash post-quantum: "
+              "shielded (Sapling) YEC, the attestors' and pools' keys, and YED holder addresses before Falcon activation remain elliptic-curve. "
+              "No hardware wallet, watch-only wallet or xpub supports post-quantum keys. Signing as the owner takes your node about 0.25-0.6 s, "
+              "and the ~8 KB signature makes a redeem's network fee larger.");
+}
+
+qint64 YellowbackController::zatToCents(qint64 zat, qint64 priceMicroUsd) {
+    if (priceMicroUsd <= 0) return -1;
+    // zat / 10^8 YEC × µUSD / 10^6 × 100 cents = zat × µUSD / 10^12 (long double: zat × µUSD overflows int64)
+    return (qint64)std::llround((long double)zat * (long double)priceMicroUsd / 1e12L);
+}
+
+QString YellowbackController::earlyFeeInDollars(qint64 feeZat, qint64 priceMicroUsd, qint64 debtCents) {
+    const qint64 cents = zatToCents(feeZat, priceMicroUsd);
+    if (cents < 0) return QString();
+    return tr(", worth %1 at the claim price %2, against a debt of %3")
+        .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::price(priceMicroUsd)).arg(YellowbackFormat::cents(debtCents));
 }
 
 qint64 YellowbackController::earlyRedeemFeeBpsFor(const json& params, const QString& termClass) {

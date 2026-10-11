@@ -417,6 +417,9 @@ void YellowbackTab::updateOverview() {
         uiOverview->lblEnforcement->setText(info.is_object() && !info.empty()
             ? (status == Upgrade::STATUS_ACTIVE ? tr("consensus: every full node checks them") : tr("consensus from the upgrade height"))
             : QString("-"));
+        // rpcversion 7: the post-quantum owners, the Falcon state and the size-priced fee (params.pq)
+        const QString pq = YellowbackController::describePq(ctl->params());
+        uiOverview->lblPostQuantum->setText(pq.isEmpty() ? QString("-") : pq);
     }
 
     // Prices: P_mid headline, P_mint / P_claim, σ (§4.8 Overview row); null renders "undefined"
@@ -528,11 +531,26 @@ void YellowbackTab::newReceiveAddress() {
         [=, this](const json& r) {
             QString addr = r.is_string() ? QString::fromStdString(r.get<json::string_t>())
                                          : YellowbackJson::toStr(r, YellowbackRpc::ValidateAddress::ADDRESS);
-            receiveAddress = addr;
-            uiReceive->lblAddress->setText(addr);
-            uiReceive->lblQr->setQrcodeString(addr);
-            uiReceive->lblReceiveStatus->setText(tr("This is a %1 Yellowback address (prefix %2). Send only YED here.")
-                .arg(ctl->network()).arg(ctl->addressPrefix()));
+            auto show = [=, this]() {
+                receiveAddress = addr;
+                uiReceive->lblAddress->setText(addr);
+                uiReceive->lblQr->setQrcodeString(addr);
+                uiReceive->lblReceiveStatus->setText(tr("This is a %1 Yellowback address (prefix %2). Send only YED here.")
+                    .arg(ctl->network()).arg(ctl->addressPrefix()) %
+                    (ctl->isPqYellowbackAddress(addr) ? " " % tr("It is a post-quantum (Falcon) address.") : QString()));
+            };
+            if (!ctl->isPqYellowbackAddress(addr)) { show(); return; }
+            // rpcversion 7 (C-10): a 53-character address is shown only once the node confirms it is not a
+            // vault owner's SLH-DSA key, which must never be offered as a YED receive address
+            ctl->validateAddress(addr,
+                [=, this](const json& v) {
+                    const QString why = YellowbackController::yedRecipientRefusal(v, ctl->falconActive());
+                    if (YellowbackJson::toBool(v, YellowbackRpc::ValidateAddress::ISVALID) && why.isEmpty()) { show(); return; }
+                    uiReceive->lblReceiveStatus->setText(tr("Not shown: the node returned %1, which is not a YED receive address. %2").arg(addr).arg(why));
+                },
+                [=, this](const QString& e) {
+                    uiReceive->lblReceiveStatus->setText(tr("yed_validateaddress failed: ") % e);
+                });
         },
         [=, this](const QString& e) {
             uiReceive->lblReceiveStatus->setText(tr("yed_getnewaddress failed: ") % e);
@@ -601,7 +619,8 @@ void YellowbackTab::setupSend() {
         QString addr = uiSend->txtRecipient->text().trimmed();
         if (addr.isEmpty()) { uiSend->lblSendHint->clear(); return; }
         if (ctl->isShieldedAddress(addr))
-            uiSend->lblSendHint->setText(tr("That is a Ycash address, not a Yellowback address. YED cannot be sent to s1..., ys... or z... addresses; ask the recipient for their Yellowback (%1...) address.").arg(ctl->addressPrefix()));
+            uiSend->lblSendHint->setText(tr("That is a Ycash address, not a Yellowback address. YED cannot be sent to s1..., %2..., ys... or z... addresses; ask the recipient for their Yellowback (%1...) address.")
+                .arg(ctl->addressPrefix()).arg(YellowbackController::pqYecPrefixOn(ctl->network())));
         else if (!ctl->looksLikeYellowbackAddress(addr))
             uiSend->lblSendHint->setText(tr("A %1 Yellowback address starts with %2.").arg(ctl->network()).arg(ctl->addressPrefix()));
         else
@@ -663,6 +682,12 @@ void YellowbackTab::doSend() {
             if (!YellowbackJson::toBool(v, YellowbackRpc::ValidateAddress::ISVALID)) {
                 uiSend->lblSendHint->setText(tr("The node rejected this address: %1")
                     .arg(YellowbackJson::toStr(v, YellowbackRpc::ValidateAddress::REASON, tr("invalid"))));
+                return;
+            }
+            // rpcversion 7: never to a vault owner's SLH-DSA address (C-10); after Falcon, only to a PQ holder (TOK-PQ)
+            const QString refusal = YellowbackController::yedRecipientRefusal(v, ctl->falconActive());
+            if (!refusal.isEmpty()) {
+                uiSend->lblSendHint->setText(tr("Refused: ") % refusal);
                 return;
             }
             QString text = tr("Send %1 of YED to\n%2\n\nThe YEC network fee is paid from your transparent YEC. "
@@ -728,7 +753,7 @@ void YellowbackTab::setupMint() {
     uiMint->lblGate->setVisible(false);
     uiMint->lblClassNote->setVisible(false);
     uiMint->btnMint->setEnabled(false);
-    uiMint->lblMintPageStatus->setText(tr("Your own node builds, signs and sends the mint. Back up wallet.dat afterwards: the vault's key exists only there."));
+    uiMint->lblMintPageStatus->setText(tr("Your own node builds, signs and sends the mint. Back up wallet.dat afterwards: the vault's post-quantum owner key exists only there."));
 }
 
 void YellowbackTab::updateMintClasses() {
@@ -981,8 +1006,7 @@ void YellowbackTab::doMint() {
                                   "Funded from: %13.\n\n"
                                   "Every full node checks, as Ycash consensus rules, that the collateral cannot leave the vault before its lock height, that only your key can spend it before the claim height, "
                                   "and that it is released only against the burn of %1 of YED. After the claim height anyone may claim the vault if it is underwater, "
-                                  "after a delay in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"
-                                  "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file."))
+                                  "after a delay in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"))
                     .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(collateral))
                     .arg(lockBlocks).arg(termClass).arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
                     .arg(lockHeight).arg(YellowbackFormat::estimateDate(lockHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"))
@@ -996,12 +1020,15 @@ void YellowbackTab::doMint() {
                                "you then receive whatever collateral is worth more than %5 of the debt, which at the threshold is usually nothing. "
                                "This wallet warns you before that happens, and redeeming stops it. "
                                "Every full node checks these rules as Ycash consensus rules, and that only your key can redeem the vault; a claim waits out a delay "
-                               "in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"
-                               "Back up wallet.dat after this mint: the vault's key is created now and exists only in that file.")
+                               "in which a member of the attestor set can cancel a claim made at a wrong price.\n\n")
                         .arg(YellowbackFormat::cents(cents)).arg(lockHeight)
                         .arg(YellowbackFormat::bpsAsShortPercent(YellowbackController::earlyRedeemFeeBpsFor(ctl->params(), termClass)))
-                        .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), termClass, collateral)))
+                        .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), termClass, collateral)) %
+                             YellowbackController::earlyFeeInDollars(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), termClass, collateral),
+                                                                     ctl->claimPriceNow(), cents))
                         .arg(YellowbackFormat::bpsAsShortPercent(ctl->claimThresholdBps()));
+                // rpcversion 7: the post-quantum owner key (quantum plan §6 disclosures)
+                text += YellowbackController::pqDisclosure();
                 if (!confirm(tr("Confirm mint"), text)) {
                     updateMintGate();
                     uiMint->lblMintPageStatus->clear();
@@ -1197,7 +1224,9 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
         if (height < p.lockHeight)
             a.text += " " % tr("Before lock height %1 (~%2) a redeem also pays the early-redeem fee of %3 of the collateral (about %4).")
                                 .arg(p.lockHeight).arg(lockDate).arg(YellowbackFormat::bpsAsShortPercent(feeBps))
-                                .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat)));
+                                .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat)) %
+                                     YellowbackController::earlyFeeInDollars(YellowbackController::earlyRedeemFeeZatFor(params, p.termClass, p.collateralZat),
+                                                                             pClaim, p.mintedCents));
         else
             a.text += " " % tr("Its term has ended: no early-redeem fee. Renew redeems it and mints %1 again in a new vault, in one confirmation.").arg(YellowbackFormat::cents(p.mintedCents));
         if (p.claimable)
@@ -1439,11 +1468,14 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
         run(tr("Redeem vault %1.\n\n"
                "Burn: %2 of YED from this wallet (%3 confirmed).\n"
                "%4\n"
-               "Collateral out: about %5 of YEC to %6.\n\n"
+               "Collateral out: about %5 of YEC to %6.\n"
+               "Network fee: at least %7 of YEC from your YEC. It grows with the transaction's size, and the vault's post-quantum owner signature "
+               "makes this one about 8 KB; your node signs it in about 0.25-0.6 s.\n\n"
                "Your own node builds the transaction, checks it against the Yellowback consensus rules, signs it and sends it; "
                "nothing is committed if that check fails.")
             .arg(p.txid).arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
-            .arg(feeLine).arg(YellowbackFormat::zec(p.collateralZat - feeZat)).arg(dest));
+            .arg(feeLine).arg(YellowbackFormat::zec(p.collateralZat - feeZat)).arg(dest)
+            .arg(YellowbackFormat::zec(YellowbackController::pqOwnerSpendFeeZatFor(ctl->params()))));
     };
     if (inTerm) {
         // rpcversion 6 (IT-9): the node's own quote of this redeem, early-redeem fee included, before the
@@ -1470,10 +1502,11 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
                     : tr("Pool fee: %1 of YEC from the collateral to the pool %2.").arg(YellowbackFormat::zec(fee - early)).arg(payee);
                 if (YellowbackJson::toBool(q, EstimateRedeem::EARLY))
                     feeLine += "\n" % (early > 0
-                        ? tr("Early-redeem fee: %1 of YEC (%2 of the collateral, class %3), because the vault's term runs to height %4; it goes to the same pool. "
+                        ? tr("Early-redeem fee: %1 of YEC (%2 of the collateral, class %3%5), because the vault's term runs to height %4; it goes to the same pool. "
                              "Redeeming at or after height %4 pays no early-redeem fee.")
                               .arg(YellowbackFormat::zec(early)).arg(YellowbackFormat::bpsAsShortPercent(YellowbackJson::toInt(q, EstimateRedeem::EARLY_REDEEM_FEE_BPS)))
                               .arg(p.termClass).arg(p.lockHeight)
+                              .arg(YellowbackController::earlyFeeInDollars(early, ctl->claimPriceNow(), p.mintedCents))
                         : tr("Early-redeem fee: none (no pool is eligible for a fee)."));
                 ask(fee, feeLine);
             },
@@ -1560,7 +1593,7 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
                                         "which the redeem pays back into, and pays its own pool fee.\n\n"
                                         "These are two transactions. If the mint cannot be built when the redeem confirms (minting paused, or the price moved past the cap), "
                                         "the vault stays redeemed, nothing else is sent, and the wallet tells you. "
-                                        "Back up wallet.dat after the renewal: the new vault's key exists only there.")
+                                        "Back up wallet.dat after the renewal: the new vault's post-quantum owner key exists only there.")
                     .arg(p.txid).arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(feeLine)
                     .arg(YellowbackFormat::zec(p.collateralZat - redeemFee)).arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(maxCollateral))
                     .arg(lockBlocks).arg(cls)
@@ -1962,7 +1995,7 @@ void YellowbackTab::updatePendingClaims() {
     const bool matured = height + 1 >= c->intent.releaseHeight;
     const bool residual = c->intent.role == ROLE_RESIDUAL;
     // A claimant intent pays the claimant's key (only that wallet knows the script); the residual pays
-    // the owner, whose P2PKH script anyone can derive from the vault's ownerKeyId
+    // the owner, whose PQPKH script anyone can derive from the vault's ownerHash and ownerScheme
     const bool canRelease = matured && (residual || c->mineClaim);
     const bool canCancel = attestor && !residual && !matured;
     btnReleaseClaim->setEnabled(actionsEnabled && canRelease);
@@ -1996,11 +2029,12 @@ void YellowbackTab::releaseClaim(const YellowbackPendingClaim& c) {
         return;
     }
     // vault_release finds the claimant's script among this wallet's keys; the residual's recipient is
-    // the owner's P2PKH script, passed explicitly unless this wallet owns the vault
+    // the owner's PQPKH script (rpcversion 7, quantum spec §3.3), always passed explicitly: the node's
+    // own search covers only this wallet's P2PKH keys, so even the owner's wallet must name it
     QString script;
-    if (residual && !c.mineVault) {
-        script = YellowbackController::p2pkhScriptForKeyId(c.vault.ownerKeyId);
-        if (script.isEmpty()) { notice(tr("Release"), tr("The node reported no owner key id for vault %1.").arg(c.vault.vaultName()), true); return; }
+    if (residual) {
+        script = YellowbackController::pqpkhScriptFor(c.vault.ownerHash, c.vault.ownerScheme);
+        if (script.isEmpty()) { notice(tr("Release"), tr("The node reported no post-quantum owner (ownerHash, ownerScheme) for vault %1.").arg(c.vault.vaultName()), true); return; }
     }
     const QString text = residual
         ? tr("Release the owner's residual intent %1 of vault %2 to the vault owner (%3).\n\nThe network fee is paid from your YEC.")
@@ -2203,7 +2237,9 @@ void YellowbackTab::updateRedeemPage() {
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat) %
             (isVoid ? QString() : early ? tr("  minus the pool fee and the early-redeem fee of %1 (about %2) until height %3")
                                              .arg(YellowbackFormat::bpsAsShortPercent(YellowbackController::earlyRedeemFeeBpsFor(ctl->params(), sel->termClass)))
-                                             .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), sel->termClass, sel->collateralZat)))
+                                             .arg(YellowbackFormat::zec(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), sel->termClass, sel->collateralZat)) %
+                                                  YellowbackController::earlyFeeInDollars(YellowbackController::earlyRedeemFeeZatFor(ctl->params(), sel->termClass, sel->collateralZat),
+                                                                                          ctl->claimPriceNow(), sel->mintedCents))
                                              .arg(sel->lockHeight)
                                        : tr("  minus the pool fee")));
         bool enough = isVoid || sel->mintedCents <= ctl->confirmedCents();

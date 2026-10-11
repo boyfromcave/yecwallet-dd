@@ -30,7 +30,7 @@
        <widget class="QLabel" name="lblBackupNag">
         <property name="wordWrap"><bool>true</bool></property>
         <property name="styleSheet"><string notr="true">QLabel { background-color: #f8d7da; color: #58151c; border: 1px solid #e8a0a8; padding: 6px; }</string></property>
-        <property name="text"><string>You minted YED. The vault's owner key lives only in this node's wallet.dat, which is not derived from a seed phrase. Back it up now.</string></property>
+        <property name="text"><string>You minted YED. The vault's post-quantum owner key lives only in this node's wallet.dat, which is not derived from a seed phrase. Back it up now.</string></property>
        </widget>
       </item>
       <item>

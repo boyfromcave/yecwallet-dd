@@ -85,9 +85,9 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.txid          = YellowbackJson::toStr (j, TXID);
     p.vout          = (int)YellowbackJson::toInt(j, VOUT);
     p.status        = YellowbackJson::toStr (j, STATUS);
-    p.ownerPubKey   = YellowbackJson::toStr (j, OWNER_PUBKEY);
+    p.ownerScheme   = (int)YellowbackJson::toInt(j, OWNER_SCHEME);
+    p.ownerHash     = YellowbackJson::toStr (j, OWNER_HASH);
     p.ownerAddress  = YellowbackJson::toStr (j, OWNER_ADDRESS);
-    p.ownerKeyId    = YellowbackJson::toStr (j, OWNER_KEY_ID);
     p.termClass     = YellowbackJson::toStr (j, TERM_CLASS);
     p.lockHeight    = (int)YellowbackJson::toInt(j, LOCK_HEIGHT);
     p.claimHeight   = (int)YellowbackJson::toInt(j, CLAIM_HEIGHT);
@@ -114,6 +114,12 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.canNotice     = YellowbackJson::toBool(j, CAN_NOTICE);
     p.earlyRedeemFeeZat = YellowbackJson::toInt(j, EARLY_REDEEM_FEE_ZAT);
     return p;
+}
+
+QString YellowbackPosition::ownerSchemeName() const {
+    if (ownerScheme == YellowbackRpc::PqScheme::SLH_DSA_SHA2_128S) return "SLH-DSA-SHA2-128s";
+    if (ownerScheme == YellowbackRpc::PqScheme::FN_DSA_512)        return "FN-DSA-512";
+    return QString("scheme %1").arg(ownerScheme);
 }
 
 YellowbackAttestor YellowbackAttestor::fromJson(const json& j) {
@@ -589,7 +595,8 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
                 return tr("Lock height plus the grace period. After it, the vault's claim path opens: anyone who burns the debt can claim the collateral if the vault is underwater; "
                           "the claim is released to them after the claim delay unless an attestor cancels it.");
             case Vault:
-                return QString(p.vaultName() % "\n" % tr("Owner: ") % p.ownerAddress % "\n" % tr("Owner key: ") % p.ownerKeyId %
+                return QString(p.vaultName() % "\n" % tr("Vault owner (post-quantum, %1): ").arg(p.ownerSchemeName()) % p.ownerAddress % "\n" %
+                               tr("This is the vault's identifier, not a YED receive address.") %
                                "\n" % tr("Minted at height %1 (reference height %2), pool fee paid %3")
                                    .arg(p.mintHeight).arg(p.refHeight).arg(YellowbackFormat::zec(p.feePaidZat)));
         }

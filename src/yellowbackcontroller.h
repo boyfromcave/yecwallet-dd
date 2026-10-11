@@ -95,9 +95,20 @@ public:
     int     chainHeight() const { return tipHeight; }
     int     startHeight() const { return indexStartHeight; }
     QString network() const { return net; }       // "main" | "test" | "regtest" (never getinfo.testnet)
-    QString addressPrefix() const;                // ye | yt | yr
+    QString addressPrefix() const;                // yb | yt | yr (D-Q-21: mainnet "yb" on the post-quantum line)
+    static QString addressPrefixOn(const QString& network);
+    static constexpr int P2PKH_ADDRESS_LENGTH = 35;   // Base58Check(version:2 || keyId:20)
+    static constexpr int PQ_ADDRESS_LENGTH    = 53;   // rpcversion 7: Base58Check(version:2 || scheme:1 || keyHash:32)
+    /** 35 or 53 Base58 characters with the network's prefix (mainnet also "ye" until the Y-B sweep);
+     *  yed_validateaddress stays the authority. */
     bool    looksLikeYellowbackAddress(const QString& addr) const;
-    bool    isShieldedAddress(const QString& addr) const;   // s1..., ys..., z... (refused)
+    static bool looksLikeYellowbackAddressOn(const QString& network, const QString& addr);
+    bool    isPqYellowbackAddress(const QString& addr) const;   // a 53-character PQ YED address
+    /** D-Q-20: a plain-YEC post-quantum address (sq... / tq... / rq..., 53 characters); display only. */
+    bool    isPqYecAddress(const QString& addr) const;
+    static bool isPqYecAddressOn(const QString& network, const QString& addr);
+    static QString pqYecPrefixOn(const QString& network);   // sq | tq | rq
+    bool    isShieldedAddress(const QString& addr) const;   // s1..., sq..., ys..., z... (refused)
     const json& info() const { return infoJson; }               // yed_getinfo (whole result)
     const json& stats() const { return statsJson; }             // yed_getstats
     const json& activation() const { return activationJson; }   // yed_getactivation
@@ -121,9 +132,11 @@ public:
     int     setCancelThreshold() const;
     YellowbackPendingClaimsModel* pendingClaimsModel() { return pendingClaims; }
     QList<YellowbackClaimOutcome> claimOutcomes() const { return outcomes.values(); }
-    /** The P2PKH script (hex) of a key id as yed_getvault prints it (CKeyID::GetHex, byte-reversed):
-     *  the residual intent's recipient, which vault_release needs when this wallet is not the owner. */
-    static QString p2pkhScriptForKeyId(const QString& keyIdHex);
+    /** rpcversion 7 (quantum spec §3.3, F-3): the owner's TX_PQPKH script (hex) from yed_getvault's
+     *  ownerHash (64 hex, byte order) and ownerScheme (1 | 2): `20 <hash> 51|52 c2`. The residual
+     *  intent's recipient, which vault_release is always given (the node's own search covers only
+     *  P2PKH keys). "" when either field is malformed. */
+    static QString pqpkhScriptFor(const QString& ownerHashHex, int scheme);
     static bool isOwnClaim(const YellowbackTx& t);   // a claim this wallet made (its YED was burned in it)
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
@@ -203,6 +216,35 @@ public:
     static qint64 earlyRedeemFeeBpsFor(const json& params, const QString& termClass);
     /** IT-9: collateral · earlyRedeemFeeBps / 10⁴ (floor, no minimum), the node's EarlyRedeemFeeZat. */
     static qint64 earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 collateralZat);
+    // ── rpcversion 7: post-quantum owners (quantum spec §6.2) ─────────────────────────────
+    /** params.pq.falconActive: YED holders must be Falcon (FN-DSA-512) PQ addresses from then on (TOK-PQ). */
+    static bool   falconActiveIn(const json& params);
+    bool    falconActive() const { return falconActiveIn(paramsJson); }
+    /** params.pq.feeRateZatPerKB (the node's -pqfeerate); 0 when the node does not report it. */
+    static qint64 pqFeeRateIn(const json& params);
+    /** The approximate size of a transaction carrying one SLH-DSA owner signature (a redeem): the
+     *  7,939-byte owner scriptSig plus the rest of the transaction. Display only. */
+    static constexpr qint64 PQ_OWNER_SPEND_BYTES = 8200;
+    /** The least network fee the node charges a transaction carrying one owner signature:
+     *  max(params.feeZat, feeRateZatPerKB × PQ_OWNER_SPEND_BYTES / 1000) (Q5, ycash-dd's wallet fee;
+     *  ycash6 also applies ZIP-317, which is higher). Display only: the node prices the transaction. */
+    static qint64 pqOwnerSpendFeeZatFor(const json& params);
+    /** The yed_getnewaddress type this wallet asks for: the holder policy (D-Q-2, A-13), "p2pkh" while
+     *  Falcon is inactive and "pq" (a Falcon key) once active. Never "pqowner" (C-10). */
+    static QString receiveAddressTypeFor(const json& params);
+    /** Why a yed_validateaddress reply may not receive YED from this wallet, "" when it may: an SLH-DSA
+     *  PQ address is a vault owner's (C-10), and after Falcon a P2PKH address is no holder (TOK-PQ). */
+    static QString yedRecipientRefusal(const json& validated, bool falconActive);
+    /** The Overview's post-quantum line from params.pq; "" when the node does not report it. */
+    static QString describePq(const json& params);
+    /** The post-quantum disclosure every mint confirmation carries (quantum plan §6). */
+    static QString pqDisclosure();
+    /** A zatoshi amount in cents at a price in µUSD per YEC (display); -1 when the price is undefined. */
+    static qint64 zatToCents(qint64 zat, qint64 priceMicroUsd);
+    /** The early-redeem fee in dollars beside the debt (lockup investigation recommendation):
+     *  ", worth $X at the claim price $P, against a debt of $Y" (after a large price rise the fee can be
+     *  several times the debt; waiting until the lock height removes it); "" when the price is undefined. */
+    static QString earlyFeeInDollars(qint64 feeZat, qint64 priceMicroUsd, qint64 debtCents);
     /** What is wrong with a yed_estimateredeem reply for vault `p` (H-9.3): the vault, the burn,
      *  the collateral, the class's fee rate, and the fee = FEE-1 + the early-redeem fee when early
      *  (both 0 under FEE-0). Empty when every figure checks out. Pure. */
