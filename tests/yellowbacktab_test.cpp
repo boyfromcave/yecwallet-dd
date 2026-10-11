@@ -3727,11 +3727,18 @@ private slots:
             QVERIFY2(v.value("isvalid", false) && v.value("type", std::string()) == "pq" && v.value("pqscheme", 0) == 1, v.dump().c_str());
             QVERIFY(!YellowbackController::yedRecipientRefusal(v, h.ctl.falconActive()).isEmpty());
         }
-        // the Receive page asks for the holder type and shows a 35-character P2PKH address before Falcon
+        // the Receive page asks for the holder type the node's Falcon regime calls for (params.pq.falconActive):
+        // a 53-character FN-DSA-512 holder once Falcon is active (the default devnet, as mainnet: D-Q-2),
+        // a 35-character P2PKH address before it (--pqfalconheight N below N, --no-pqfalcon)
+        const bool falcon = h.ctl.falconActive();
+        QCOMPARE(falcon, (bool)dev.rpc("yed_getinfo")["params"]["pq"].value("falconActive", false));
         h.button("btnNewAddress")->click();
-        QVERIFY2(h.label("lblAddress").size() == 35 && h.ctl.looksLikeYellowbackAddress(h.label("lblAddress")),
+        QVERIFY2(h.label("lblAddress").size() == (falcon ? 53 : 35) && h.ctl.looksLikeYellowbackAddress(h.label("lblAddress")),
                  qPrintable(h.label("lblAddress") % " / " % h.label("lblReceiveStatus")));
-        QVERIFY(!h.ctl.falconActive());
+        if (falcon) {
+            json v = dev.rpc("yed_validateaddress", json::array({h.label("lblAddress").toStdString()}));
+            QVERIFY2(v.value("isvalid", false) && v.value("type", std::string()) == "pq" && v.value("pqscheme", 0) == 2, v.dump().c_str());
+        }
         QVERIFY2(h.label("lblPostQuantum").contains("SLH-DSA-SHA2-128s"), qPrintable(h.label("lblPostQuantum")));
 
         // Send $40 to a fresh own Yellowback address (change $60 is above the floor)
