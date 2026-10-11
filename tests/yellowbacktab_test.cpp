@@ -59,7 +59,8 @@ static json infoActive() {
                  "inTermClaims": true, "claimThresholdBps": 12500, "earlyRedeemFeeBps": [500, 250, 100],
                  "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
                  "tokenValueZat": 10000, "feeZat": 1000,
-                 "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100},
+                 "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100, "plainAddressVersion": "4c51"},
+                 "addressVersion": "2002", "pqAddressVersion": "5710",
                  "windows": {"fast": 8, "mid": 24, "slow": 64},
                  "minFill": {"fast": 4, "mid": 16, "slow": 43},
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000, "earlyRedeemFeeBps": 500},
@@ -2023,7 +2024,8 @@ private slots:
     // ── rpcversion 7: post-quantum owners (quantum spec §4, §6.2; clients survey §2) ─────────
 
     // The first filter before yed_validateaddress: exactly 35 (P2PKH) or 53 (PQ) Base58 characters with
-    // the network's prefix; mainnet is "yb" (D-Q-21) and, until the node's Y-B sweep, "ye" too.
+    // the prefix the node's version bytes give (params.addressVersion / pqAddressVersion), else the
+    // network's compiled-in one; mainnet is "yb" (D-Q-21).
     void addressGuardAcceptsP2pkhAndPqLengths() {
         auto make = [](const QString& prefix, int length) { return prefix + QString(length - prefix.length(), QChar('1')); };
         for (const QString net : { "main", "test", "regtest" }) {
@@ -2044,12 +2046,21 @@ private slots:
         QCOMPARE(YellowbackController::addressPrefixOn("main"), QString("yb"));
         QCOMPARE(YellowbackController::addressPrefixOn("test"), QString("yt"));
         QCOMPARE(YellowbackController::addressPrefixOn("regtest"), QString("yr"));
-        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", make("ye", 53)));        // until the Y-B sweep
+        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("main", make("ye", 53)));       // the Y-B sweep: "ye" is gone
+        // the prefix from the version bytes (quantum spec §4, D-Q-20, D-Q-21): the interval's lowest value
+        const QList<std::tuple<QString, int, QString>> versions = {
+            {"1fdd", 20, "yb"}, {"56ab", 33, "yb"}, {"2007", 20, "yt"}, {"571e", 33, "yt"}, {"2002", 20, "yr"}, {"5710", 33, "yr"},
+            {"1fe4", 20, "ye"}, {"56bf", 33, "ye"}, {"4dd9", 33, "sq"}, {"4f61", 33, "tq"}, {"4c51", 33, "rq"} };
+        for (const auto& [v, n, want] : versions)
+            QVERIFY2(YellowbackController::prefixForVersion(v, n) == want, qPrintable(v % " -> " % YellowbackController::prefixForVersion(v, n)));
+        QVERIFY(YellowbackController::prefixForVersion("", 20).isEmpty());
+        QVERIFY(YellowbackController::prefixForVersion("1fd", 20).isEmpty());
+        QVERIFY(YellowbackController::prefixForVersion("zz00", 20).isEmpty());
         QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("test", make("ye", 35)));
         QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("regtest", make("yt", 53)));
         // the spec's own extreme PQ addresses (quantum spec §4) pass the mainnet filter
-        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "ye3SZot1kepFFNT7S9eGf61sufuSARvXG4VZQ4WqPqJKrosTayohv"));
-        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "yeC2CP3NepyAPLy8ChifYtByPvLdpGLnzDwBXcyBVKn5a6CXWeucQ"));
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressWith("ye", "ye", "ye3SZot1kepFFNT7S9eGf61sufuSARvXG4VZQ4WqPqJKrosTayohv"));
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressWith("ye", "ye", "yeC2CP3NepyAPLy8ChifYtByPvLdpGLnzDwBXcyBVKn5a6CXWeucQ"));
         // the stock wallet's helpers never take a PQ address for one of theirs
         for (const QString& a : { make("yr", 53), make("rq", 53), make("sq", 53), make("yb", 53) }) {
             QVERIFY(!Settings::isTAddress(a));
@@ -2063,6 +2074,19 @@ private slots:
             QVERIFY2(!Settings::isPQTAddress(a), qPrintable(a));
         Harness h;
         h.feedActive();
+        QCOMPARE(h.ctl.p2pkhPrefix(), QString("yr"));
+        QCOMPARE(h.ctl.pqPrefix(), QString("yr"));
+        QCOMPARE(h.ctl.plainPqPrefix(), QString("rq"));
+        {   // a node reporting the mainnet versions on regtest data: the reported bytes win over the network name
+            Harness m;
+            json info = infoActive(); info["params"]["addressVersion"] = "1fdd"; info["params"]["pqAddressVersion"] = "56ab";
+            info["params"]["pq"]["plainAddressVersion"] = "4dd9";
+            m.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json(nullptr), json(nullptr), json(nullptr));
+            QCOMPARE(m.ctl.addressPrefix(), QString("yb"));
+            QVERIFY(m.ctl.looksLikeYellowbackAddress(make("yb", 35)) && m.ctl.looksLikeYellowbackAddress(make("yb", 53)));
+            QVERIFY(!m.ctl.looksLikeYellowbackAddress(make("yr", 35)));
+            QVERIFY(m.ctl.isPqYecAddress(make("sq", 53)) && !m.ctl.isPqYecAddress(make("rq", 53)));
+        }
         QVERIFY(h.ctl.isPqYellowbackAddress(make("yr", 53)));
         QVERIFY(!h.ctl.isPqYellowbackAddress(RECIPIENT));
         QVERIFY(h.ctl.isShieldedAddress(make("rq", 53)));

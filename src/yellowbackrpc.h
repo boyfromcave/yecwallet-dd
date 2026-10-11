@@ -165,6 +165,8 @@ namespace Params {   // contract: yed_getinfo.params
     constexpr const char* SIGMA_MULT_MAX_BPS  = "sigmaMultMaxBps";   // 10000: the volatility multiplier is pinned at 1
     // rpcversion 7 (post-quantum owners, quantum spec §6.2)
     constexpr const char* PQ                  = "pq";                // the ParamsPq object
+    constexpr const char* ADDRESS_VERSION     = "addressVersion";    // hex Base58Check version of a 20-byte YED address (mainnet 1fdd "yb")
+    constexpr const char* PQ_ADDRESS_VERSION  = "pqAddressVersion";  // hex version of a 33-byte PQ YED address (mainnet 56ab "yb")
 }
 
 // rpcversion 7: yed_getinfo.params.pq, the post-quantum signature schemes the network accepts.
@@ -173,6 +175,7 @@ namespace ParamsPq {   // contract: yed_getinfo.params.pq
     constexpr const char* FALCON_ACTIVE       = "falconActive";      // YED holders must be Falcon PQ addresses from then on (TOK-PQ)
     constexpr const char* FALCON_HEIGHT       = "falconHeight";      // -1 while no height is set
     constexpr const char* FEE_RATE_ZAT_PER_KB = "feeRateZatPerKB";   // the node's -pqfeerate: fees grow with a transaction's size
+    constexpr const char* PLAIN_ADDRESS_VERSION = "plainAddressVersion"; // hex version of a plain-YEC PQ address (D-Q-20: sq/tq/rq)
 }
 
 // rpcversion 7: the post-quantum scheme identifiers (ownerScheme, yed_validateaddress.pqscheme).

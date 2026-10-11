@@ -620,7 +620,7 @@ void YellowbackTab::setupSend() {
         if (addr.isEmpty()) { uiSend->lblSendHint->clear(); return; }
         if (ctl->isShieldedAddress(addr))
             uiSend->lblSendHint->setText(tr("That is a Ycash address, not a Yellowback address. YED cannot be sent to s1..., %2..., ys... or z... addresses; ask the recipient for their Yellowback (%1...) address.")
-                .arg(ctl->addressPrefix()).arg(YellowbackController::pqYecPrefixOn(ctl->network())));
+                .arg(ctl->addressPrefix()).arg(ctl->plainPqPrefix()));
         else if (!ctl->looksLikeYellowbackAddress(addr))
             uiSend->lblSendHint->setText(tr("A %1 Yellowback address starts with %2.").arg(ctl->network()).arg(ctl->addressPrefix()));
         else

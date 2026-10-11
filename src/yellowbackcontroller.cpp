@@ -712,32 +712,75 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
 // ── Addresses ─────────────────────────────────────────────────────────────────────────────
 
 QString YellowbackController::addressPrefix() const {
-    return addressPrefixOn(net);
+    return p2pkhPrefix();
 }
 
 // D-Q-21 (owner, 2026-10-10): the mainnet YED prefix on the post-quantum line is "yb" (20-byte 0x1FDD,
-// PQ 0x56AB); testnet "yt" and regtest "yr" are unchanged.
+// PQ 0x56AB); testnet "yt" and regtest "yr" are unchanged. The fallback when the node reports no version.
 QString YellowbackController::addressPrefixOn(const QString& network) {
     if (network == "test")    return "yt";
     if (network == "regtest") return "yr";
     return "yb";
 }
 
+QString YellowbackController::prefixForVersion(const QString& versionHex, int payloadBytes) {
+    static const QRegularExpression hex4("^[0-9a-fA-F]{4}$");
+    if (!hex4.match(versionHex).hasMatch() || payloadBytes <= 0) return QString();
+    // Base58 of version || zero payload || zero checksum: the lowest value of the version's interval
+    QByteArray num = QByteArray::fromHex(versionHex.toLatin1());
+    num.append(QByteArray(payloadBytes + 4, '\0'));
+    static const char* alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    QString out;
+    while (!num.isEmpty()) {
+        int rem = 0;
+        QByteArray quot;
+        for (char c : num) {
+            int acc = rem * 256 + (unsigned char)c;
+            if (!quot.isEmpty() || acc / 58 != 0) quot.append((char)(acc / 58));
+            rem = acc % 58;
+        }
+        out.prepend(QChar(alphabet[rem]));
+        num = quot;
+    }
+    return out.left(2);
+}
+
+static QString reportedPrefix(const json& obj, const char* key, int payloadBytes, const QString& fallback) {
+    const QString p = YellowbackController::prefixForVersion(YellowbackJson::toStr(obj, key), payloadBytes);
+    return p.isEmpty() ? fallback : p;
+}
+
+QString YellowbackController::p2pkhPrefix() const {
+    return reportedPrefix(paramsJson, YellowbackRpc::Params::ADDRESS_VERSION, 20, addressPrefixOn(net));
+}
+
+QString YellowbackController::pqPrefix() const {
+    return reportedPrefix(paramsJson, YellowbackRpc::Params::PQ_ADDRESS_VERSION, 33, addressPrefixOn(net));
+}
+
+QString YellowbackController::plainPqPrefix() const {
+    return reportedPrefix(YellowbackJson::obj(paramsJson, YellowbackRpc::Params::PQ), YellowbackRpc::ParamsPq::PLAIN_ADDRESS_VERSION, 33, pqYecPrefixOn(net));
+}
+
 // A first filter before yed_validateaddress, which stays the authority. A Yellowback address is
 // Base58Check of a 2-byte version and either a 20-byte key id (35 characters, P2PKH) or, since
 // rpcversion 7, scheme || 32-byte key hash (53 characters, quantum spec §4). Every other length is
-// refused, so a 36-52 or 54+ character string never reaches the node. On mainnet the node still
-// renders "ye" until the Y-B sweep (plan §8.1) lands, so "ye" is accepted beside "yb" until then.
-bool YellowbackController::looksLikeYellowbackAddressOn(const QString& network, const QString& addr) {
+// refused, so a 36-52 or 54+ character string never reaches the node.
+bool YellowbackController::looksLikeYellowbackAddressWith(const QString& p2pkh, const QString& pq, const QString& addr) {
     QString a = addr.trimmed();
-    if (a.length() != P2PKH_ADDRESS_LENGTH && a.length() != PQ_ADDRESS_LENGTH) return false;
-    if (!a.startsWith(addressPrefixOn(network)) && !(network == "main" && a.startsWith("ye"))) return false;
+    if (a.length() == P2PKH_ADDRESS_LENGTH) { if (!a.startsWith(p2pkh)) return false; }
+    else if (a.length() == PQ_ADDRESS_LENGTH) { if (!a.startsWith(pq)) return false; }
+    else return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
 }
 
+bool YellowbackController::looksLikeYellowbackAddressOn(const QString& network, const QString& addr) {
+    return looksLikeYellowbackAddressWith(addressPrefixOn(network), addressPrefixOn(network), addr);
+}
+
 bool YellowbackController::looksLikeYellowbackAddress(const QString& addr) const {
-    return looksLikeYellowbackAddressOn(net, addr);
+    return looksLikeYellowbackAddressWith(p2pkhPrefix(), pqPrefix(), addr);
 }
 
 bool YellowbackController::isPqYellowbackAddress(const QString& addr) const {
@@ -762,7 +805,10 @@ bool YellowbackController::isPqYecAddressOn(const QString& network, const QStrin
 }
 
 bool YellowbackController::isPqYecAddress(const QString& addr) const {
-    return isPqYecAddressOn(net, addr);
+    QString a = addr.trimmed();
+    if (a.length() != PQ_ADDRESS_LENGTH || !a.startsWith(plainPqPrefix())) return false;
+    static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
+    return base58.match(a).hasMatch();
 }
 
 bool YellowbackController::isShieldedAddress(const QString& addr) const {

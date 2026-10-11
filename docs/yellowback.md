@@ -147,7 +147,9 @@ arguments. The node signs everything; the wallet holds no PQ code. What changed 
   search covers only the wallet's P2PKH keys, so even the owner's wallet names the script.
 - **Addresses:** a Yellowback address is exactly 35 (P2PKH) or 53 (PQ) Base58 characters; the old
   26-40 guard refused every PQ address before `yed_validateaddress` saw it. The mainnet prefix is `yb`
-  (owner decision D-Q-21); `ye` is still accepted on mainnet until the node's Y-B sweep renames it.
+  (owner decision D-Q-21). The prefixes come from the node's own version bytes
+  (`yed_getinfo.params.addressVersion`, `pqAddressVersion`, `pq.plainAddressVersion`;
+  `YellowbackController::prefixForVersion`), with the compiled-in `yb`/`yt`/`yr` and `sq`/`tq`/`rq` as the fallback.
   Plain-YEC PQ addresses (`sq…` / `tq…` / `rq…`, 53 characters, D-Q-20) hold YEC, never YED: the Send page
   refuses them as Ycash addresses, and the stock wallet's helpers (`Settings::isTAddress`) do not take them.
 - **Receive** asks `yed_getnewaddress` for the holder type (`"p2pkh"` while `params.pq.falconActive` is

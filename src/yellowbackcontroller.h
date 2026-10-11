@@ -99,15 +99,26 @@ public:
     static QString addressPrefixOn(const QString& network);
     static constexpr int P2PKH_ADDRESS_LENGTH = 35;   // Base58Check(version:2 || keyId:20)
     static constexpr int PQ_ADDRESS_LENGTH    = 53;   // rpcversion 7: Base58Check(version:2 || scheme:1 || keyHash:32)
-    /** 35 or 53 Base58 characters with the network's prefix (mainnet also "ye" until the Y-B sweep);
-     *  yed_validateaddress stays the authority. */
+    /** 35 or 53 Base58 characters with the prefixes the node reports (else the network's compiled-in
+     *  one); yed_validateaddress stays the authority. */
     bool    looksLikeYellowbackAddress(const QString& addr) const;
     static bool looksLikeYellowbackAddressOn(const QString& network, const QString& addr);
+    /** The same against explicit prefixes: 35 characters with `p2pkhPrefix` or 53 with `pqPrefix`. */
+    static bool looksLikeYellowbackAddressWith(const QString& p2pkhPrefix, const QString& pqPrefix, const QString& addr);
     bool    isPqYellowbackAddress(const QString& addr) const;   // a 53-character PQ YED address
     /** D-Q-20: a plain-YEC post-quantum address (sq... / tq... / rq..., 53 characters); display only. */
     bool    isPqYecAddress(const QString& addr) const;
     static bool isPqYecAddressOn(const QString& network, const QString& addr);
     static QString pqYecPrefixOn(const QString& network);   // sq | tq | rq
+    /** The two leading characters every Base58Check string of `versionHex` (2 bytes) followed by
+     *  `payloadBytes` bytes and the 4-byte checksum starts with (the node chooses versions whose whole
+     *  interval shares one prefix and one length, quantum spec §4); "" for a malformed version. Pure. */
+    static QString prefixForVersion(const QString& versionHex, int payloadBytes);
+    /** The prefixes this node reports (yed_getinfo.params.addressVersion / pqAddressVersion /
+     *  pq.plainAddressVersion), each falling back to the compiled-in one for the network. */
+    QString p2pkhPrefix() const;
+    QString pqPrefix() const;
+    QString plainPqPrefix() const;
     bool    isShieldedAddress(const QString& addr) const;   // s1..., sq..., ys..., z... (refused)
     const json& info() const { return infoJson; }               // yed_getinfo (whole result)
     const json& stats() const { return statsJson; }             // yed_getstats
