@@ -779,7 +779,9 @@ double YellowbackController::yecBalance() const {
     double total = 0.0;
     auto balances = rpc->getModel()->getAllBalances();
     for (auto it = balances.constBegin(); it != balances.constEnd(); ++it)
-        if (Settings::isTAddress(it.key())) total += it.value();
+        // rpcversion 7: a post-quantum coin (an owner's residual, sq.../tq.../rq...) funds a mint like any
+        // transparent coin: the node's builders select and sign it (quantum spec §3.3)
+        if (Settings::isTAddress(it.key()) || Settings::isPQTAddress(it.key())) total += it.value();
     return total;
 }
 

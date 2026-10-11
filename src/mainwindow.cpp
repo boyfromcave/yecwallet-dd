@@ -1289,7 +1289,8 @@ void MainWindow::setupBalancesTab() {
     QObject::connect(ui->balancesTable, &QTableView::doubleClicked, [=, this](auto index) {
         index = index.sibling(index.row(), 0);
         auto addr = AddressBook::addressFromAddressLabel(ui->balancesTable->model()->data(index).toString());
-        
+        if (Settings::isPQTAddress(addr)) return;   // a post-quantum coin: nothing to send from by address (D-Q-20)
+
         fnDoSendFrom(addr);
     });
 
@@ -1311,13 +1312,19 @@ void MainWindow::setupBalancesTab() {
             ui->statusBar->showMessage(tr("Copied to clipboard"), 3 * 1000);
         });
 
-        menu.addAction(tr("Get private key"), [=, this]() {
-            this->exportKeys(addr);
-        });
+        if (Settings::isPQTAddress(addr)) {
+            // Yellowback post-quantum line (D-Q-20): a vault owner's residual paid to its SLH-DSA key. The node
+            // spends it in its own transactions; there is no exportable key and no sending from it by address.
+            menu.addAction(tr("Post-quantum (SLH-DSA) coin: no exportable key; the node spends it"))->setEnabled(false);
+        } else {
+            menu.addAction(tr("Get private key"), [=, this]() {
+                this->exportKeys(addr);
+            });
 
-        menu.addAction("Send from " % addr.left(40) % (addr.size() > 40 ? "..." : ""), [=, this]() {
-            fnDoSendFrom(addr);
-        });
+            menu.addAction("Send from " % addr.left(40) % (addr.size() > 40 ? "..." : ""), [=, this]() {
+                fnDoSendFrom(addr);
+            });
+        }
 
         if (Settings::isTAddress(addr)) {
             auto defaultSapling = rpc->getDefaultSaplingAddress();

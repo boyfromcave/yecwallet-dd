@@ -89,6 +89,11 @@ bool Settings::isZAddress(QString addr) {
     return addr.startsWith("z") || addr.startsWith("y");
 }
 
+bool Settings::isPQTAddress(QString addr) {
+    static const QRegularExpression pqt("^[str]q[1-9A-HJ-NP-Za-km-z]{51}$");
+    return pqt.match(addr).hasMatch();
+}
+
 bool Settings::isTAddress(QString addr) {
     if (!isValidAddress(addr))
         return false;

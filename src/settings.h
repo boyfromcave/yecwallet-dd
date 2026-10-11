@@ -133,6 +133,9 @@ public:
 
     static bool    isZAddress(QString addr);
     static bool    isTAddress(QString addr);
+    // Yellowback post-quantum line (D-Q-20): a plain-YEC PQ address sq... / tq... / rq... (53 characters).
+    // The node encodes it for its PQ coins (a vault owner's residual) but does not decode it yet: display only.
+    static bool    isPQTAddress(QString addr);
 
     static QString getDecimalString(double amt);
     static QString getUSDFormat(double usdAmt);

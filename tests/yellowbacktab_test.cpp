@@ -2056,6 +2056,11 @@ private slots:
             QVERIFY(!Settings::isZAddress(a));
             QVERIFY(!Settings::isValidAddress(a));
         }
+        // ...and recognise a plain-YEC PQ coin (D-Q-20; the devnet's residual paid to rq…) for display only
+        QVERIFY(Settings::isPQTAddress("rq5Lc4rKBUJdgNAmbqFrZKuakMWGjrsQVq3Fn1B4zpGUzd7b1jvvq"));
+        for (const QString& a : { make("sq", 53), make("tq", 53), make("rq", 53) }) QVERIFY(Settings::isPQTAddress(a));
+        for (const QString& a : { make("yr", 53), make("rq", 52), make("rq", 54), QString("smQhW9Jkt9ga962FSNVWWdGcsXjzu4sSCYD"), make("rq", 52) + "0" })
+            QVERIFY2(!Settings::isPQTAddress(a), qPrintable(a));
         Harness h;
         h.feedActive();
         QVERIFY(h.ctl.isPqYellowbackAddress(make("yr", 53)));
@@ -3687,6 +3692,23 @@ private slots:
         QCOMPARE(vault.txid, mintTxid);
         QCOMPARE(vault.status, QString("ACTIVE"));
         QCOMPARE(vault.mintedCents, (qint64)10000);
+        // rpcversion 7: the vault's owner is the node's fresh SLH-DSA key (quantum spec §3.6, §6.2)
+        QCOMPARE(vault.ownerScheme, (int)YellowbackRpc::PqScheme::SLH_DSA_SHA2_128S);
+        QCOMPARE(vault.ownerHash.size(), 64);
+        QCOMPARE(vault.ownerAddress.size(), 53);
+        QVERIFY2(h.ctl.looksLikeYellowbackAddress(vault.ownerAddress), qPrintable(vault.ownerAddress));
+        QVERIFY(!YellowbackController::pqpkhScriptFor(vault.ownerHash, vault.ownerScheme).isEmpty());
+        {   // the owner address validates as this wallet's SLH-DSA key, and the wallet refuses it as a YED recipient (C-10)
+            json v = dev.rpc("yed_validateaddress", json::array({vault.ownerAddress.toStdString()}));
+            QVERIFY2(v.value("isvalid", false) && v.value("type", std::string()) == "pq" && v.value("pqscheme", 0) == 1, v.dump().c_str());
+            QVERIFY(!YellowbackController::yedRecipientRefusal(v, h.ctl.falconActive()).isEmpty());
+        }
+        // the Receive page asks for the holder type and shows a 35-character P2PKH address before Falcon
+        h.button("btnNewAddress")->click();
+        QVERIFY2(h.label("lblAddress").size() == 35 && h.ctl.looksLikeYellowbackAddress(h.label("lblAddress")),
+                 qPrintable(h.label("lblAddress") % " / " % h.label("lblReceiveStatus")));
+        QVERIFY(!h.ctl.falconActive());
+        QVERIFY2(h.label("lblPostQuantum").contains("SLH-DSA-SHA2-128s"), qPrintable(h.label("lblPostQuantum")));
 
         // Send $40 to a fresh own Yellowback address (change $60 is above the floor)
         json addr = dev.rpc("yed_getnewaddress");
@@ -3716,6 +3738,10 @@ private slots:
         QVERIFY(h.notices.size() == noticesBefore + 1 && h.notices.last().startsWith("Redeem sent|"));
         QVERIFY(h.notices.last().contains("YED burned: $100.00"));
         const QString redeemTxid = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
+        {   // rpcversion 7: the owner signed with SLH-DSA, so the redeem carries the ~7.9 KB owner scriptSig
+            json raw = dev.rpc("getrawtransaction", json::array({redeemTxid.toStdString(), 1}));
+            QVERIFY2(raw.value("size", 0) > 7900, qPrintable(QString("redeem size %1").arg(raw.value("size", 0))));
+        }
         dev.rpc("generate", json::array({1}));
         QVERIFY(dev.settle(redeemTxid));
         h.ctl.refresh(true);
@@ -3756,7 +3782,7 @@ private slots:
         h.ctl.setPendingPollMs(250);
         h.ctl.onConnected();
         QVERIFY2(h.ctl.isAvailable(), qPrintable(h.ctl.unavailableReason()));
-        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)6);
+        QCOMPARE(YellowbackJson::toInt(h.ctl.info(), YellowbackRpc::Info::RPCVERSION), (qint64)YellowbackRpc::RPC_VERSION);
         QVERIFY2(h.ctl.upgradeActive(), "the devnet's vault upgrade is not active");
         QVERIFY(YellowbackJson::has(h.ctl.info(), YellowbackRpc::Info::MINT_REQUIRES_ARMED));
         QVERIFY2(h.ctl.inTermClaims(), "the devnet's node is not on the in-term line (params.inTermClaims)");
@@ -4245,6 +4271,7 @@ private slots:
         QVERIFY2(row != nullptr, qPrintable("the noticed vault is not claimable in yed_listclaimable after the notice persisted: " %
                                             QString::fromStdString(dev.rpc("yed_listclaimable").dump()) % " at height " % QString::number(height())));
         QCOMPARE(row->claimPath, QString("b"));
+        const qint64 claimedResidualZat = row->residualZat;    // the row is gone after the next refresh
         n = h.notices.size();
         QVERIFY2(dev.waitFresh(h.ctl.refLag(), [&]() { minePools(1); }), "node 0's attestation pool did not become fresh");
         h.tab.claimVault(*row);
@@ -4254,6 +4281,43 @@ private slots:
         QVERIFY(h.notices.last().startsWith("Claim sent|"));
         QVERIFY2(h.notices.last().contains("claim path: emergency clause (b)"), qPrintable(h.notices.last()));
         QVERIFY(h.copyIsClean());
+
+        // 5. rpcversion 7 (F-3): the owner's residual, when the claim left one, is released through the
+        // Pending claims page to TX_PQPKH(owner) = 20 <ownerHash> 51 c2, the script the wallet derives
+        const YellowbackPendingClaim* residual = nullptr;
+        for (int i = 0; i < 4 && residual == nullptr; i++) {
+            minePools(1); QVERIFY(dev.settle()); h.ctl.refresh(true); QTest::qWait(300);
+            for (int r = 0; r < h.ctl.pendingClaimsModel()->rowCount(QModelIndex()); r++) {
+                const YellowbackPendingClaim* c = h.ctl.pendingClaimsModel()->rowAt(r);
+                if (c != nullptr && c->vault.txid == mintTxid && c->intent.role == YellowbackRpc::PositionIntent::ROLE_RESIDUAL) residual = c;
+            }
+        }
+        if (residual == nullptr) {
+            qWarning("the clause-(b) claim left no residual (residualZat %lld): the PQPKH release is not exercised", (long long)claimedResidualZat);
+        } else {
+            const YellowbackPendingClaim pending = *residual;
+            QCOMPARE(pending.vault.ownerScheme, (int)YellowbackRpc::PqScheme::SLH_DSA_SHA2_128S);
+            while (height() + 1 < pending.intent.releaseHeight) minePools(1);
+            QVERIFY(dev.settle());
+            h.ctl.refresh(true);
+            n = h.notices.size();
+            h.tab.releaseClaim(pending);
+            QVERIFY2(h.errorNotices.isEmpty(), qPrintable(h.errorNotices.join("\n")));
+            QVERIFY2(h.notices.size() == n + 1 && h.notices.last().startsWith("Release sent|"), qPrintable(h.notices.join("\n")));
+            const QString releaseTxid = h.notices.last().section("txid ", 1).section('\n', 0, 0).trimmed();
+            json raw = dev.rpc("getrawtransaction", json::array({releaseTxid.toStdString(), 1}));
+            const std::string spk = raw["vout"][0]["scriptPubKey"].value("hex", std::string());
+            QCOMPARE(QString::fromStdString(spk), YellowbackController::pqpkhScriptFor(pending.vault.ownerHash, pending.vault.ownerScheme));
+            // the release reaches the pools' mempools by relay: mine until one of their blocks carries it
+            auto confirmations = [&]() { json t = dev.rpc("getrawtransaction", json::array({releaseTxid.toStdString(), 1})); return t.value("confirmations", 0); };
+            for (int i = 0; i < 20 && confirmations() < 1; i++) { minePools(1); QTest::qWait(500); }
+            QVERIFY2(confirmations() >= 1, "the residual release was never mined");
+            QVERIFY(dev.settle());
+            h.ctl.refresh(true);
+            YellowbackPosition claimed;
+            h.ctl.getVault(mintTxid, [&](const json& v) { claimed = YellowbackPosition::fromJson(v); }, [](const QString& e) { qWarning("%s", qPrintable(e)); });
+            QVERIFY2(claimed.residualIntent() == nullptr, "the residual intent is still listed after its release");
+        }
         writeMock(priceBefore);
         minePools(70);                                  // a full slow window at the restored price, for the next run
     }
