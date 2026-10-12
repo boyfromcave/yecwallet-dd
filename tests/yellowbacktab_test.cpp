@@ -36,6 +36,7 @@
 #include "yellowbackmodels.h"
 #include "yellowbackcontroller.h"
 #include "yellowbackrpc.h"
+#include "vaultrpc.h"
 #include "settings.h"
 
 using json = nlohmann::json;
@@ -80,7 +81,9 @@ static json infoActive() {
                  "attest": {"required": true, "mSelect": 2, "kSlack": 1, "nSlots": 5, "divergeBpsAttest": 1500, "armDelay": 8,
                             "armMin": 3, "emergencyPersist": 4, "emergencyRatioBps": 10500, "emergencyNoticeTtl": 64,
                             "carrierMode": "scriptsig", "attestFeeBps": 2500, "attestMaxAge": 8,
-                            "bondMinZat": 1000000000, "bondMinLock": 200, "bondMaturity": 8}}
+                            "bondMinZat": 250000000, "bondMinFloorZat": 250000000, "bondMinCapZat": 1000000000, "bondShareBps": 500,
+                            "bondMinLock": 0, "bondMaturity": 8, "seats": 15, "seatAgeUnit": 1152, "seatAgeCap": 420480,
+                            "seatMarginBps": 500, "evictMarginBps": 500}}
     })");
 }
 
@@ -187,7 +190,7 @@ static json attestorRow() {
       "bondLocktime": 500, "bondOutpoint": {"txid": "7b2c3d4e5f60718293a4b5c6d7e8f9001a2b3c4d5e6f708192a3b4c5d6e7f809", "vout": 0},
       "bondSpentHeight": null, "bondZat": 1000000000, "flags": {"pool": false, "tier": 0}, "founding": true,
       "lastBundleHeight": 330, "pinned": false, "poolFresh": true, "registerHeight": 280, "seated": true,
-      "seatedSince": 300, "weight": "31000000000"
+      "seatedSince": 300, "weight": "31000000000", "seatWeight": "65801000000000", "evicted": false
     })");
 }
 
@@ -3063,12 +3066,17 @@ private slots:
         h.rpc.results[YellowbackRpc::GETTXINFO] = eqInfo;
         Settings::getInstance()->setYellowbackBackupPending(false);
 
-        // Register (P4-b: a join to the YED attestor set): the dialog states the bond, the lock, the
+        // Register (P4-b: a join to the YED attestor set): the dialog states the bond, the exit delay, the
         // one key that is member, hot, bond and fee key (D-U4), liveness, and the one-key-one-node warning
-        h.tab.registerAttestor("10", 200);
+        h.tab.registerAttestor("10", 0);
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY2(h.confirms[0].startsWith("Join the YED attestor set with this wallet."), qPrintable(h.confirms[0]));
-        QVERIFY2(h.confirms[0].contains("Bond: 10.00000000 of YEC, locked in a bond output until height 721 (200 blocks"), qPrintable(h.confirms[0]));
+        QVERIFY2(h.confirms[0].contains("Bond: 10.00000000 of YEC (the minimum for a join in the next block is " % YellowbackFormat::zec(250000000) % ")"), qPrintable(h.confirms[0]));
+        QVERIFY(h.confirms[0].contains("there is no fixed lock: you can leave the set at any time, and the bond is spendable " % YellowbackFormat::blocksAndDuration(8) % " after you leave or are evicted"));
+        QVERIFY(!h.confirms[0].contains("bond script also carries a locktime"));   // no year lock (bondMinLock 0)
+        QVERIFY(!h.confirms[0].contains("within 10 %"));                          // the cap always qualifies
+        QVERIFY2(h.confirms[0].contains("Seats: the 5 eligible attestors of greatest seat weight"), qPrintable(h.confirms[0]));
+        QVERIFY(h.confirms[0].contains("15 members at most"));
         QVERIFY(h.confirms[0].contains("join act to the set 5e755e755e755e75"));
         QVERIFY(h.confirms[0].contains("at least 8 blocks after the join confirms"));      // params.attest.bondMaturity
         QVERIFY(h.confirms[0].contains("member key, the hot key the agent signs prices with, the bond key and the fee key at once"));
@@ -3076,33 +3084,103 @@ private slots:
         QVERIFY(h.confirms[0].contains("Run the yellowback-attest agent on this node only. One key on two nodes defeats"));
         QVERIFY(h.confirms[0].contains("Back up wallet.dat"));
         QVERIFY(!h.confirms[0].contains("Source tier"));
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"10", 200}));   // the bond as a decimal string (F-8); no flags since P4-b
-        h.tab.registerAttestor("0.12345678", 200);
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"0.12345678", 200}));   // sent as typed, no double rounding
-        QVERIFY(h.confirms.last().contains("Bond: 0.12345678 of YEC"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"10", 0}));   // the bond as a decimal string (F-8); no flags since P4-b
+        h.tab.registerAttestor("12.12345678", 200);
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"12.12345678", 200}));   // sent as typed, no double rounding
+        QVERIFY(h.confirms.last().contains("Bond: 12.12345678 of YEC"));
+        QVERIFY2(h.confirms.last().contains("The bond script also carries a locktime of height 721 (200 blocks"), qPrintable(h.confirms.last()));
         QVERIFY(h.notices.last().startsWith("Join sent|"));
         QVERIFY(h.notices.last().contains("smExampleBondKeyAddr11111111111111111"));
+        QVERIFY(!h.notices.last().contains("near the minimum"));
         QVERIFY(Settings::getInstance()->getYellowbackBackupPending());
+        // D-Q-30: below the cap and within 10 % of bondMinZat, the advice comes before confirming and the node's warning after
+        h.rpc.results[YellowbackRpc::REGISTERATTESTOR]["warning"] = "bond-near-min: 2.60000000 is within 10% of the minimum 2.50000000";
+        h.tab.registerAttestor("2.6", 0);
+        QVERIFY2(h.confirms.last().contains("This bond is within 10 % of the current minimum (" % YellowbackFormat::zec(250000000) % ")"), qPrintable(h.confirms.last()));
+        QVERIFY(h.confirms.last().contains("Post at least " % YellowbackFormat::zec(275000000) % " (10 % headroom), or " % YellowbackFormat::zec(1000000000) % ", which always qualifies"));
+        QVERIFY2(h.notices.last().contains("The node warns that the bond is near the minimum (bond-near-min: 2.60000000"), qPrintable(h.notices.last()));
+        h.rpc.results[YellowbackRpc::REGISTERATTESTOR]["warning"] = "";
+        // ... and below bondMinZat it is refused before any RPC
+        int regs = h.rpc.count(YellowbackRpc::REGISTERATTESTOR);
+        h.tab.registerAttestor("2", 0);
+        QCOMPARE(h.rpc.count(YellowbackRpc::REGISTERATTESTOR), regs);
+        QVERIFY2(h.errorNotices.last().contains("below the minimum for a join in the next block, " % YellowbackFormat::zec(250000000)), qPrintable(h.errorNotices.last()));
+        // The button: one prompt (no lock while bondMinLock is 0), the bond defaults to 10 % headroom rounded up to a whole YEC
+        QStringList prompts;
+        h.tab.inputFn = [&prompts](const QString&, const QString& label, QString* value) { prompts << label % "|" % *value; return true; };
+        QVERIFY(h.button("btnRegister")->isEnabled());
+        h.button("btnRegister")->click();
+        QCOMPARE(prompts.size(), 1);
+        QVERIFY2(prompts[0].startsWith("Bond in YEC (minimum " % YellowbackFormat::zec(250000000) % " for a join in the next block, between "), qPrintable(prompts[0]));
+        QVERIFY(prompts[0].endsWith("|3"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::REGISTERATTESTOR), json::array({"3", 0}));
+        // The banner states the minimum, its floor and cap, and the exit delay
+        QVERIFY2(h.label("lblArming").contains("Bond minimum for a join in the next block: " % YellowbackFormat::zec(250000000)), qPrintable(h.label("lblArming")));
+        QVERIFY(h.label("lblArming").contains("5 % of the YEC locked in YED vaults over 5 seats, never below " % YellowbackFormat::zec(250000000) % " nor above " % YellowbackFormat::zec(1000000000)));
+        QVERIFY(h.label("lblArming").contains("No fixed lock"));
 
-        // Withdraw: offered on the selected row once bondLocktime has passed
+        // A member's bond is held: no Withdraw, refused locally; Leave needs this wallet's active member key
+        h.selectRow("tblAttestors", 0);
+        QVERIFY(!h.button("btnWithdraw")->isEnabled());
+        QVERIFY(!h.button("btnLeave")->isEnabled());                     // this wallet is no member (no set_getinfo yet)
+        QVERIFY(h.button("btnRevive") == nullptr);                       // P4-b: revival is a heartbeat
+        QVERIFY(!h.button("btnHeartbeat")->isEnabled());
+        QVERIFY2(h.label("lblAttestorAction").contains("is a member; its bond of " % YellowbackFormat::zec(1000000000) % " is held"), qPrintable(h.label("lblAttestorAction")));
+        int before = h.rpc.count(YellowbackRpc::WITHDRAWBOND);
+        h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
+        QCOMPARE(h.rpc.count(YellowbackRpc::WITHDRAWBOND), before);
+        QVERIFY(h.notices.last().contains("still a member of the attestor set (ELIGIBLE): leave the set first"));
+        h.tab.leaveAttestorSet(YellowbackAttestor::fromJson(attestorRow()));
+        QCOMPARE(h.rpc.count(VaultRpc::SET_LEAVE), 0);
+        QVERIFY(h.errorNotices.last().contains("does not hold the member key of attestor 1"));
+        // Leave: set_leave on the attestor set with the record's attestorPubKey (= this wallet's member key)
+        h.ctl.feedUpgrade(json(nullptr), attestorSetReply(true));
+        h.rpc.results["set_getinfo"] = attestorSetReply(true);
+        h.rpc.results[VaultRpc::SET_LEAVE] = json::parse(R"({"txid": "1eave1eave", "memberkey": "03b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8e9f0",
+          "exitheight": 521, "bondspendableat": 529})");
+        h.selectRow("tblAttestors", 0);
+        QVERIFY(h.button("btnLeave")->isEnabled());
+        h.button("btnLeave")->click();
+        QVERIFY2(h.confirms.last().startsWith("Leave the YED attestor set as attestor 1 (member key 03b1c2d3e4f50617…)."), qPrintable(h.confirms.last()));
+        QVERIFY(h.confirms.last().contains("becomes spendable at height 529, " % YellowbackFormat::blocksAndDuration(8) % " later"));
+        QVERIFY(h.confirms.last().contains("an equivocation proved against this key still freezes it"));
+        QCOMPARE(h.rpc.lastParams(VaultRpc::SET_LEAVE), json::array({"5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", MEMBER_KEY}));
+        QVERIFY2(h.notices.last().startsWith("Leave sent|txid 1eave1eave"), qPrintable(h.notices.last()));
+        QVERIFY(h.notices.last().contains("exit height 521\nbond spendable from height 529"));
+
+        // Withdraw: a WITHDRAWN (left) record, from statusHeight + bondMaturity
+        json left = attestorRow(); left["status"] = "WITHDRAWN"; left["statusHeight"] = 510; left["seated"] = false;
+        json evicted = left; evicted["seq"] = 6; evicted["evicted"] = true; evicted["statusHeight"] = 515;
+        h.ctl.feedAttest(priceReply(), json::array({left, dormant, evicted}), selectionReply());
         h.selectRow("tblAttestors", 0);
         QVERIFY(h.button("btnWithdraw")->isEnabled());
-        QVERIFY(h.button("btnRevive") == nullptr);                       // P4-b: revival is a heartbeat
-        QVERIFY(!h.button("btnHeartbeat")->isEnabled());                 // this wallet is no member (no set_getinfo yet)
-        QVERIFY(h.label("lblAttestorAction").contains("past its locktime (500)"));
-        h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
+        QVERIFY(!h.button("btnLeave")->isEnabled());
+        QVERIFY2(h.label("lblAttestorAction").contains("left the set at height 510. Its bond of " % YellowbackFormat::zec(1000000000) % " is spendable since height 518"), qPrintable(h.label("lblAttestorAction")));
+        h.tab.withdrawBond(YellowbackAttestor::fromJson(left));
         QVERIFY(h.confirms.last().startsWith("Withdraw the bond of attestor 1."));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::WITHDRAWBOND), json::array({1}));
-        h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()), "smExampleTransparentTwin111111111111");
+        h.tab.withdrawBond(YellowbackAttestor::fromJson(left), "smExampleTransparentTwin111111111111");
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::WITHDRAWBOND), json::array({1, "smExampleTransparentTwin111111111111"}));
         QVERIFY(h.notices.last().startsWith("Withdrawal sent|"));
         QVERIFY(h.notices.last().contains(YellowbackFormat::zec(999990000)));
-        // ... and refused locally before the locktime
-        json locked = attestorRow(); locked["bondLocktime"] = 600;
-        int before = h.rpc.count(YellowbackRpc::WITHDRAWBOND);
+        // ... evicted (no fault), and still in its exit delay: the unlock height is shown and the withdrawal refused locally
+        h.selectRow("tblAttestors", 2);
+        QVERIFY(!h.button("btnWithdraw")->isEnabled());
+        QVERIFY2(h.label("lblAttestorAction").contains("was evicted from the full set by a larger bond at height 515"), qPrintable(h.label("lblAttestorAction")));
+        QVERIFY(h.label("lblAttestorAction").contains("locked until height 523 (the chain is at 520)"));
+        auto am = h.ctl.attestorsModel();
+        QCOMPARE(am->data(am->index(2, YellowbackAttestorsModel::Status), Qt::DisplayRole).toString(), QString("WITHDRAWN (evicted)"));
+        QCOMPARE(am->data(am->index(2, YellowbackAttestorsModel::SeatWeight), Qt::DisplayRole).toString(), YellowbackFormat::zec(65801000000000LL >> 16));
+        before = h.rpc.count(YellowbackRpc::WITHDRAWBOND);
+        h.tab.withdrawBond(YellowbackAttestor::fromJson(evicted));
+        QCOMPARE(h.rpc.count(YellowbackRpc::WITHDRAWBOND), before);
+        QVERIFY(h.notices.last().contains("locked until height 523"));
+        // ... and the bond script's own locktime still applies on top
+        json locked = left; locked["bondLocktime"] = 600;
         h.tab.withdrawBond(YellowbackAttestor::fromJson(locked));
         QCOMPARE(h.rpc.count(YellowbackRpc::WITHDRAWBOND), before);
         QVERIFY(h.notices.last().contains("locked until height 600"));
+        h.ctl.feedAttest(priceReply(), json::array({attestorRow(), dormant}), selectionReply());
 
         // A DORMANT row: a heartbeat by its member key revives it
         h.selectRow("tblAttestors", 1);
@@ -3129,7 +3207,8 @@ private slots:
 
         // The refusals explain themselves
         h.rpc.errors[YellowbackRpc::WITHDRAWBOND] = "attest-key-not-held: bond key";
-        h.tab.withdrawBond(YellowbackAttestor::fromJson(attestorRow()));
+        json gone = attestorRow(); gone["status"] = "WITHDRAWN"; gone["statusHeight"] = 400;
+        h.tab.withdrawBond(YellowbackAttestor::fromJson(gone));
         QVERIFY(h.errorNotices.last().contains("does not hold the key"));
         h.rpc.errors[YellowbackRpc::REGISTERATTESTOR] = "bond-below-min: 9 < 10";
         h.tab.registerAttestor("9", 200);
