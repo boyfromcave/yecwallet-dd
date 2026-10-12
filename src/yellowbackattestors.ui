@@ -50,6 +50,7 @@
      <item><widget class="QPushButton" name="btnReport"><property name="text"><string>Report equivocation…</string></property></widget></item>
      <item><spacer name="attSpacerH"><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer></item>
      <item><widget class="QPushButton" name="btnHeartbeat"><property name="text"><string>Heartbeat…</string></property></widget></item>
+     <item><widget class="QPushButton" name="btnLeave"><property name="text"><string>Leave the set…</string></property></widget></item>
      <item><widget class="QPushButton" name="btnWithdraw"><property name="text"><string>Withdraw bond…</string></property></widget></item>
     </layout>
    </item>

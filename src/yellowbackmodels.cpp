@@ -148,6 +148,8 @@ YellowbackAttestor YellowbackAttestor::fromJson(const json& j) {
     a.poolFresh       = YellowbackJson::toBool(j, POOL_FRESH);
     a.lastAct         = (int)YellowbackJson::toInt(j, LAST_ACT, -1);
     a.bondFrozen      = YellowbackJson::toBool(j, BOND_FROZEN);
+    a.seatWeight      = YellowbackJson::toStr (j, SEAT_WEIGHT, "0");
+    a.evicted         = YellowbackJson::toBool(j, EVICTED);
     return a;
 }
 
@@ -724,12 +726,21 @@ QVariant YellowbackClaimableModel::headerData(int section, Qt::Orientation orien
     return QVariant();
 }
 
+// seatWeight is Q16 zat (bondZat x factor x 65,536) as a decimal string (below 2^58 at the cap)
+// Shown in YEC to 8 decimals, computed in integers: zat = floor(q16 / 65,536).
+QString YellowbackAttestorsModel::seatWeightYec(const QString& q16) {
+    bool ok = false;
+    const qulonglong v = q16.toULongLong(&ok);
+    if (!ok) return q16.isEmpty() ? QString("-") : q16;
+    return YellowbackFormat::zec((qint64)(v >> 16));
+}
+
 // ── Attestors model (v3) ──────────────────────────────────────────────────────────────────
 
 YellowbackAttestorsModel::YellowbackAttestorsModel(QObject* parent) : QAbstractTableModel(parent) {
     headers << tr("Seq") << tr("Status") << tr("Seated") << tr("Bond (lock height)") << tr("Weight")
             << tr("Seated since") << tr("Founding") << tr("Sources") << tr("Last bundle") << tr("In pool")
-            << tr("Last act") << tr("Bond frozen");
+            << tr("Last act") << tr("Bond frozen") << tr("Seat weight");
     modeldata = new QList<YellowbackAttestor>();
 }
 
@@ -768,7 +779,7 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
     if (index.row() >= modeldata->size()) return QVariant();
     const auto& a = modeldata->at(index.row());
 
-    if (role == Qt::TextAlignmentRole && (index.column() == Bond || index.column() == Weight))
+    if (role == Qt::TextAlignmentRole && (index.column() == Bond || index.column() == Weight || index.column() == SeatWeight))
         return QVariant(Qt::AlignRight | Qt::AlignVCenter);
 
     if (role == Qt::ForegroundRole) {
@@ -784,7 +795,7 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
     if (role == Qt::DisplayRole) {
         switch (index.column()) {
             case Seq:         return QString::number(a.seq);
-            case Status:      return a.status;
+            case Status:      return a.evicted ? QString(a.status % tr(" (evicted)")) : a.status;
             case Seated: {
                 QStringList marks;
                 if (a.seated) marks << tr("seated");
@@ -800,6 +811,7 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
             case PoolFresh:   return a.poolFresh ? tr("fresh") : tr("no");
             case LastAct:     return a.lastAct >= 0 ? QString::number(a.lastAct) : QString("-");
             case BondFrozen:  return a.bondFrozen ? tr("FROZEN") : tr("no");
+            case SeatWeight:  return seatWeightYec(a.seatWeight);
         }
     }
 
@@ -815,14 +827,18 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
                 if (a.status == STATUS_ELIGIBLE)  return tr("A current member of the attestor set: may be seated, selected for bundles and cancel wrong-price claims (since height %1).").arg(a.statusHeight);
                 if (a.status == STATUS_DORMANT)   return tr("No heartbeat within the set's liveness window (or too many missed bundles): set aside until its next heartbeat (since height %1).").arg(a.statusHeight);
                 if (a.status == STATUS_EJECTED)   return tr("Ejected for equivocation at height %1; the bond is frozen and forfeit.").arg(a.statusHeight);
-                if (a.status == STATUS_WITHDRAWN) return tr("The bond was withdrawn at height %1.").arg(a.statusHeight);
+                if (a.status == STATUS_WITHDRAWN)
+                    return QString((a.evicted ? tr("Evicted from the full attestor set by a larger bond at height %1 (no fault: the bond is not frozen).")
+                                      : tr("Left the attestor set at height %1.")).arg(a.statusHeight) % " " %
+                           (a.bondSpentHeight >= 0 ? tr("The bond was withdrawn at height %1.").arg(a.bondSpentHeight)
+                                                   : tr("The bond returns after the exit delay (yed_getinfo bondMaturity blocks); until then an equivocation still freezes it.")));
                 return a.status;
             case Seated:
                 return tr("Seated attestors are the ones a bundle may draw from at this height; a pinned one is excluded while its attestations sit too far from the pool cross-section.");
             case Bond:
                 return a.bondSpentHeight >= 0
                     ? tr("Bond of %1, spendable from height %2; spent at height %3.").arg(YellowbackFormat::zec(a.bondZat)).arg(a.bondLocktime).arg(a.bondSpentHeight)
-                    : tr("Bond of %1, locked until height %2.").arg(YellowbackFormat::zec(a.bondZat)).arg(a.bondLocktime);
+                    : tr("Bond of %1 (script locktime %2). It is spendable only after the attestor leaves the set (or is evicted) and the exit delay has passed.").arg(YellowbackFormat::zec(a.bondZat)).arg(a.bondLocktime);
             case Weight:
                 return tr("Bond weight at height %1: the bond scaled by its age, which sets the attestor's share of selections.").arg(currentHeight);
             case Founding:
@@ -836,6 +852,9 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
             case LastAct:
                 return tr("The attestor set's last act for this member: its join plus maturity, or its last heartbeat. Signing prices is not an act; "
                           "a member with no heartbeat within the set's liveness window is dormant.");
+            case SeatWeight:
+                return tr("Seat weight at height %1: the bond times a tenure factor from 1.0 at registration to 1.9 at a year. The 9 eligible attestors "
+                          "of greatest seat weight are seated (a seated one counts 5 % more), and a join into the full set evicts the least.").arg(currentHeight);
             case BondFrozen:
                 return a.bondFrozen ? tr("The set froze this bond (a removal with burn, or an equivocation): it can never be withdrawn, and the key never seats again.")
                                     : tr("The bond is not frozen.");

@@ -2261,6 +2261,8 @@ void YellowbackTab::updateRedeemPage() {
 // table is yed_listattestors (the module's records); the membership box is set_getinfo of the set
 // (this wallet's member keys: current or dormant, last act, bond frozen) with the heartbeat.
 
+static constexpr qint64 ZAT_PER_YEC = 100000000;
+
 void YellowbackTab::setupAttestors() {
     uiAttestors->tblAttestors->horizontalHeader()->setStretchLastSection(true);
     uiAttestors->lblArming->setText(tr("Waiting for the node..."));
@@ -2269,8 +2271,10 @@ void YellowbackTab::setupAttestors() {
     uiAttestors->btnReport->setEnabled(false);
     uiAttestors->btnHeartbeat->setEnabled(false);
     uiAttestors->btnWithdraw->setEnabled(false);
+    uiAttestors->btnLeave->setEnabled(false);
     uiAttestors->btnRegister->setToolTip(tr("Join the YED attestor set with a bond and a fresh key of this wallet (yed_registerattestor, a set_join). The yellowback-attest agent then signs beside this node."));
-    uiAttestors->btnWithdraw->setToolTip(tr("Spend the selected attestor's bond back to this wallet once its locktime has passed (yed_withdrawbond; needs the member key; a frozen bond cannot be withdrawn)."));
+    uiAttestors->btnWithdraw->setToolTip(tr("Spend the selected attestor's bond back to this wallet once it has left the set (or was evicted) and the exit delay has passed (yed_withdrawbond; needs the member key; a frozen bond cannot be withdrawn)."));
+    uiAttestors->btnLeave->setToolTip(tr("Leave the YED attestor set with the selected attestor's member key (set_leave, the member's own removal): its bond becomes withdrawable after the exit delay, and stays slashable until then."));
     uiAttestors->btnHeartbeat->setToolTip(tr("Send a heartbeat for this wallet's member key (set_heartbeat): it keeps the member live, or makes a dormant one eligible again."));
     uiAttestors->btnReport->setToolTip(tr("Report two attestations by one attestor for one height at two prices (yed_reportequivocation); the attestor is ejected and its bond frozen."));
 
@@ -2283,23 +2287,38 @@ void YellowbackTab::setupAttestors() {
         if (ctl == nullptr) return;
         using namespace YellowbackRpc;
         const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
-        QString bond = QString::number(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT) / 100000000.0, 'f', 8);
-        QString lock = QString::number(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_LOCK));
-        if (!inputFn(tr("Join the attestor set"), tr("Bond in YEC (minimum %1):").arg(bond), &bond)) return;
-        if (!inputFn(tr("Join the attestor set"), tr("Bond lock in blocks (minimum %1):").arg(lock), &lock)) return;
+        // D-Q-30: the minimum is computed (it follows YED vault collateral); the default adds the 10 %
+        // headroom the node advises, rounded up to a whole YEC, never above the cap (which always qualifies).
+        const qint64 minZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT);
+        const qint64 capZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_CAP_ZAT);
+        const int    minLock = (int)YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_LOCK);
+        qint64 defZat = (minZat * 11 + 9) / 10;
+        defZat = (defZat + ZAT_PER_YEC - 1) / ZAT_PER_YEC * ZAT_PER_YEC;
+        if (capZat > 0 && defZat > capZat) defZat = capZat;
+        QString bond = QString::number(defZat / ZAT_PER_YEC);
+        if (defZat % ZAT_PER_YEC != 0) bond = QString::number(defZat / 100000000.0, 'f', 8);
+        if (!inputFn(tr("Join the attestor set"),
+                     tr("Bond in YEC (minimum %1 for a join in the next block, between %2 and %3; the default adds 10 % headroom):")
+                        .arg(YellowbackFormat::zec(minZat)).arg(YellowbackFormat::zec(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_FLOOR_ZAT)))
+                        .arg(YellowbackFormat::zec(capZat)), &bond)) return;
+        // No year lock since the bond exit delay (bondMinLock 0): the lock is asked only when the node requires one
+        QString lock = QString::number(minLock);
+        if (minLock > 0 && !inputFn(tr("Join the attestor set"), tr("Bond lock in blocks (minimum %1):").arg(minLock), &lock)) return;
         // The bond is sent as the decimal string typed (at most 8 decimals), never through a
         // double; every parse checks its ok flag (audit F-8).
         static const QRegularExpression bondRe("^\\d{1,9}(?:\\.\\d{1,8})?$");
         bool okLock = false;
         const QString b = bond.trimmed();
         int l = lock.trimmed().toInt(&okLock);
-        if (!bondRe.match(b).hasMatch() || b.toDouble() <= 0 || !okLock || l <= 0) {
-            notice(tr("Join the attestor set"), tr("Enter a bond in YEC (up to 8 decimals) and a lock in blocks."), true);
+        if (!bondRe.match(b).hasMatch() || yecToZat(b) <= 0 || !okLock || l < 0 || l < minLock) {
+            notice(tr("Join the attestor set"), minLock > 0 ? tr("Enter a bond in YEC (up to 8 decimals) and a lock in blocks.")
+                                                            : tr("Enter a bond in YEC (up to 8 decimals)."), true);
             return;
         }
         registerAttestor(b, l);
     });
     QObject::connect(uiAttestors->btnWithdraw, &QPushButton::clicked, [=, this]() { auto a = selected(); if (a) withdrawBond(*a); });
+    QObject::connect(uiAttestors->btnLeave, &QPushButton::clicked, [=, this]() { auto a = selected(); if (a) leaveAttestorSet(*a); });
     QObject::connect(uiAttestors->btnHeartbeat, &QPushButton::clicked, [=, this]() {
         if (ctl == nullptr) return;
         // The selected row's key when it is this wallet's, else this wallet's first member key
@@ -2321,7 +2340,25 @@ void YellowbackTab::setupAttestors() {
 void YellowbackTab::updateAttestors() {
     if (ctl == nullptr) return;
     QString banner = YellowbackController::describeAttest(ctl->attest());
-    uiAttestors->lblArming->setText(banner.isEmpty() ? tr("The node reports no attestation state (not answered yet).") : banner);
+    if (banner.isEmpty()) banner = tr("The node reports no attestation state (not answered yet).");
+    // D-Q-30: the bond minimum a join in the next block must meet, with its floor and cap
+    using namespace YellowbackRpc;
+    const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
+    if (YellowbackJson::has(ap, ParamsAttest::BOND_MIN_ZAT)) {
+        const qint64 minZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT);
+        const qint64 capZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_CAP_ZAT);
+        QString line = tr("Bond minimum for a join in the next block: %1").arg(YellowbackFormat::zec(minZat));
+        if (YellowbackJson::has(ap, ParamsAttest::BOND_MIN_CAP_ZAT))
+            line += " " % tr("(%1 of the YEC locked in YED vaults over %2 seats, never below %3 nor above %4; post 10 % above it, or %4, which always qualifies)")
+                .arg(YellowbackFormat::bpsAsShortPercent(YellowbackJson::toInt(ap, ParamsAttest::BOND_SHARE_BPS)))
+                .arg(YellowbackJson::toInt(ap, ParamsAttest::N_SLOTS))
+                .arg(YellowbackFormat::zec(YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_FLOOR_ZAT)))
+                .arg(YellowbackFormat::zec(capZat));
+        line += ". " % tr("No fixed lock: a member can leave at any time and its bond returns %1 after it leaves.")
+            .arg(YellowbackFormat::blocksAndDuration((int)YellowbackJson::toInt(ap, ParamsAttest::BOND_MATURITY)));
+        banner += "\n" % line;
+    }
+    uiAttestors->lblArming->setText(banner);
     uiAttestors->tblAttestors->resizeColumnsToContents();
     auto sel = uiAttestors->tblAttestors->selectionModel();
     if (sel != nullptr) {
@@ -2348,8 +2385,8 @@ void YellowbackTab::updateMembership() {
         text += "\n" % tr("This wallet holds no member key: it is not an attestor. \"Join the attestor set\" registers it.");
     } else {
         for (const auto& m : mine)
-            text += "\n" % tr("Your member %1…: %2; bond %3 locked until %4.").arg(m.key.left(16)).arg(m.describe(ctl->height(), ctl->setLivenessWindow()))
-                                .arg(YellowbackFormat::zec(m.bondValue)).arg(m.bondLocktime);
+            text += "\n" % tr("Your member %1…: %2; bond %3.").arg(m.key.left(16)).arg(m.describe(ctl->height(), ctl->setLivenessWindow()))
+                                .arg(YellowbackFormat::zec(m.bondValue));
         if (ctl->isAttestor())
             text += "\n" % tr("As a current member this node may cancel a claim made at a wrong price (Pending claims page). Signing prices is not an act: "
                                "send a heartbeat before the liveness window runs out, or the yellowback-attest agent does it for you.");
@@ -2359,7 +2396,16 @@ void YellowbackTab::updateMembership() {
 
 // The node does not say which attestor records are this wallet's (the bond is not IsMine, R6),
 // so Withdraw is offered on any row that qualifies by status and height; the node refuses with
-// attest-key-not-held for somebody else's. Heartbeat goes to this wallet's member keys (set_getinfo).
+// attest-key-not-held for somebody else's. Heartbeat and Leave go to this wallet's member keys (set_getinfo).
+bool YellowbackTab::bondWithdrawable(const YellowbackAttestor& a, int height, int bondMaturity, int* unlockHeight) {
+    using namespace YellowbackRpc::Attestor;
+    // The bond exit delay: only a WITHDRAWN record (left, or evicted) whose bond is not frozen, from
+    // statusHeight + bondMaturity; the bond script's own locktime still applies on top.
+    const int unlock = std::max(a.statusHeight + bondMaturity, a.bondLocktime);
+    if (unlockHeight != nullptr) *unlockHeight = unlock;
+    return a.status == STATUS_WITHDRAWN && !a.bondFrozen && a.bondSpentHeight < 0 && height >= unlock;
+}
+
 void YellowbackTab::updateAttestorButtons() {
     if (ctl == nullptr) return;
     using namespace YellowbackRpc::Attestor;
@@ -2372,66 +2418,169 @@ void YellowbackTab::updateAttestorButtons() {
     auto a = ctl->attestorsModel()->rowAt(idx.isValid() ? idx.row() : -1);
     if (a == nullptr) {
         uiAttestors->btnWithdraw->setEnabled(false);
+        uiAttestors->btnLeave->setEnabled(false);
         uiAttestors->lblAttestorAction->setText(ctl->attestorsModel()->rowCount(QModelIndex()) == 0
-            ? tr("No attestor has joined yet.") : tr("Select an attestor of yours to withdraw its bond."));
+            ? tr("No attestor has joined yet.") : tr("Select an attestor of yours to leave the set or withdraw its bond."));
         return;
     }
-    bool withdrawable = a->bondSpentHeight < 0 && a->status != STATUS_WITHDRAWN && !a->bondFrozen && ctl->height() >= a->bondLocktime;
+    const int maturity = attestBondMaturity();
+    int unlock = 0;
+    const bool withdrawable = bondWithdrawable(*a, ctl->height(), maturity, &unlock);
     uiAttestors->btnWithdraw->setEnabled(actionsEnabled && withdrawable);
+    const bool member = a->status == STATUS_PENDING || a->status == STATUS_ELIGIBLE || a->status == STATUS_DORMANT;
+    uiAttestors->btnLeave->setEnabled(actionsEnabled && member && !a->bondFrozen && walletHoldsActiveKey(a->attestorPubKey));
     QString text;
-    if (a->status == STATUS_WITHDRAWN || a->bondSpentHeight >= 0)
+    if (a->bondSpentHeight >= 0)
         text = tr("Attestor %1: its bond was withdrawn at height %2.").arg(a->seq).arg(a->bondSpentHeight);
     else if (a->bondFrozen)
-        text = tr("Attestor %1: its bond of %2 is FROZEN by the set (a removal with burn or an equivocation) and can never be withdrawn.")
+        text = tr("Attestor %1: its bond of %2 is FROZEN by the set (an equivocation) and can never be withdrawn.")
                    .arg(a->seq).arg(YellowbackFormat::zec(a->bondZat));
-    else if (withdrawable)
-        text = tr("Attestor %1: the bond of %2 is past its locktime (%3) and can be withdrawn by the wallet holding its member key.")
-                   .arg(a->seq).arg(YellowbackFormat::zec(a->bondZat)).arg(a->bondLocktime);
+    else if (a->status == STATUS_WITHDRAWN) {
+        text = (a->evicted ? tr("Attestor %1 was evicted from the full set by a larger bond at height %2 (no fault, the bond is not frozen).")
+                           : tr("Attestor %1 left the set at height %2.")).arg(a->seq).arg(a->statusHeight) % " ";
+        text += withdrawable
+            ? tr("Its bond of %1 is spendable since height %2 and can be withdrawn by the wallet holding its member key.").arg(YellowbackFormat::zec(a->bondZat)).arg(unlock)
+            : tr("Its bond of %1 is locked until height %2 (the chain is at %3); until then an equivocation still freezes it.")
+                  .arg(YellowbackFormat::zec(a->bondZat)).arg(unlock).arg(ctl->height());
+    } else if (member)
+        text = tr("Attestor %1 is a member; its bond of %2 is held while it is one. Leaving the set (the wallet holding its member key) starts the exit delay: "
+                  "the bond is withdrawable %3 after.").arg(a->seq).arg(YellowbackFormat::zec(a->bondZat)).arg(YellowbackFormat::blocksAndDuration(maturity));
     else
-        text = tr("Attestor %1: the bond of %2 is locked until height %3 (the chain is at %4).")
-                   .arg(a->seq).arg(YellowbackFormat::zec(a->bondZat)).arg(a->bondLocktime).arg(ctl->height());
+        text = tr("Attestor %1: %2.").arg(a->seq).arg(a->status);
     if (a->status == STATUS_DORMANT)
         text += " " % tr("It is DORMANT: a heartbeat by the wallet holding its member key makes it eligible again, with its age kept.");
     if (a->lastAct >= 0) text += " " % tr("Last act at height %1.").arg(a->lastAct);
     uiAttestors->lblAttestorAction->setText(text);
 }
 
+int YellowbackTab::attestBondMaturity() const {
+    if (ctl == nullptr) return 0;
+    using namespace YellowbackRpc;
+    return (int)YellowbackJson::toInt(YellowbackJson::obj(ctl->params(), Params::ATTEST), ParamsAttest::BOND_MATURITY);
+}
+
+bool YellowbackTab::walletHoldsActiveKey(const QString& key) const {
+    if (ctl == nullptr || key.isEmpty()) return false;
+    for (const auto& m : ctl->walletMembers())
+        if (m.key == key && m.status == VaultRpc::Member::STATUS_ACTIVE) return true;
+    return false;
+}
+
+qint64 YellowbackTab::yecToZat(const QString& yec) {
+    static const QRegularExpression re("^(\\d{1,9})(?:\\.(\\d{1,8}))?$");
+    auto m = re.match(yec.trimmed());
+    if (!m.hasMatch()) return -1;
+    QString frac = m.captured(2);
+    while (frac.size() < 8) frac += '0';
+    return m.captured(1).toLongLong() * ZAT_PER_YEC + frac.toLongLong();
+}
+
+QString YellowbackTab::bondHeadroomAdvice(qint64 bondZat, const json& ap) {
+    using namespace YellowbackRpc;
+    const qint64 minZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT);
+    const qint64 capZat = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_CAP_ZAT);
+    if (minZat <= 0 || (capZat > 0 && bondZat >= capZat) || bondZat * 10 >= minZat * 11) return QString();
+    return tr("This bond is within 10 % of the current minimum (%1). The join is judged against the vault collateral of the block before its own, "
+              "so if YED vault collateral grows before it confirms the bond can fall short: the record then stays PENDING, its bond held, until it leaves. "
+              "Post at least %2 (10 % headroom), or %3, which always qualifies.")
+        .arg(YellowbackFormat::zec(minZat)).arg(YellowbackFormat::zec((minZat * 11 + 9) / 10)).arg(YellowbackFormat::zec(capZat));
+}
+
 void YellowbackTab::registerAttestor(const QString& bondYec, int lockBlocks) {
     if (ctl == nullptr || !actionsEnabled) return;
     using namespace YellowbackRpc;
     const json& ap = YellowbackJson::obj(ctl->params(), Params::ATTEST);
+    const qint64 bondZat = yecToZat(bondYec);
+    const qint64 minZat  = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_ZAT);
+    const qint64 capZat  = YellowbackJson::toInt(ap, ParamsAttest::BOND_MIN_CAP_ZAT);
+    // D-Q-30: refused locally below the floor for a join in the next block (the node says bond-below-min)
+    if (bondZat < 0 || (minZat > 0 && bondZat < minZat)) {
+        notice(tr("Join the attestor set"),
+               tr("A bond of %1 YEC is below the minimum for a join in the next block, %2 (it follows the YEC locked in YED vaults). "
+                  "Post at least %3 (10 % headroom), or %4, which always qualifies.")
+                   .arg(bondYec).arg(YellowbackFormat::zec(minZat)).arg(YellowbackFormat::zec((minZat * 11 + 9) / 10)).arg(YellowbackFormat::zec(capZat)), true);
+        return;
+    }
     const int locktime = ctl->height() + 1 + lockBlocks;
     const int maturity = (int)YellowbackJson::toInt(ap, ParamsAttest::BOND_MATURITY);
     QString text = tr("Join the YED attestor set with this wallet.\n\n"
-                      "Bond: %1 of YEC, locked in a bond output until height %2 (%3 blocks, about %4 days; estimated %5). "
-                      "Every Ycash node enforces that lock; only the member key in this wallet can spend it afterwards, and the set freezes it for an equivocation.\n"
-                      "Your node sends a join act to the set %6…; the member becomes eligible for bundles at least %7 blocks after the join confirms, and gets its seq number then (see the table).\n\n"
-                      "One fresh key is drawn: it is your member key, the hot key the agent signs prices with, the bond key and the fee key at once (it must stay online). "
-                      "Back up wallet.dat after this; the key exists only there.\n\n"
-                      "Stay live: a member with no heartbeat within the set's liveness window is dormant (signing prices is not an act). "
-                      "Run the yellowback-attest agent on this node only. One key on two nodes defeats the node's equivocation guard: "
-                      "the two would sooner or later sign different prices for one height, and anyone can report that, eject the member and freeze the bond.")
-        .arg(QString::number(bondYec.toDouble(), 'f', 8)).arg(locktime).arg(lockBlocks)
-        .arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
-        .arg(YellowbackFormat::estimateDate(locktime, ctl->height()).toString("yyyy-MM-dd"))
+                      "Bond: %1 of YEC (the minimum for a join in the next block is %2). The vault primitive holds it while you are a member; "
+                      "there is no fixed lock: you can leave the set at any time, and the bond is spendable %3 after you leave or are evicted. "
+                      "Every Ycash node enforces that; only the member key in this wallet can spend it afterwards, and the set freezes it for an equivocation, during the delay too.\n")
+        .arg(QString::number(bondYec.toDouble(), 'f', 8)).arg(YellowbackFormat::zec(minZat)).arg(YellowbackFormat::blocksAndDuration(maturity));
+    if (lockBlocks > 0)
+        text += tr("The bond script also carries a locktime of height %1 (%2 blocks, estimated %3).\n")
+            .arg(locktime).arg(lockBlocks).arg(YellowbackFormat::estimateDate(locktime, ctl->height()).toString("yyyy-MM-dd"));
+    const QString advice = bondHeadroomAdvice(bondZat, ap);
+    if (!advice.isEmpty()) text += "\n" % advice % "\n";
+    text += tr("\nYour node sends a join act to the set %1…; the member becomes eligible for bundles at least %2 blocks after the join confirms, and gets its seq number then (see the table).\n")
         .arg(ctl->attestorSetId().left(16)).arg(maturity);
+    if (YellowbackJson::has(ap, ParamsAttest::SEATS))
+        text += tr("Seats: the %1 eligible attestors of greatest seat weight (the bond times a tenure factor, 1.0 at registration to 1.9 at a year) are seated. "
+                   "The set has %2 members at most: a join into the full set evicts a member that is not live, else the one of least seat weight when the new bond exceeds it by %3; "
+                   "an evicted member's bond is not frozen and returns after the same delay.\n")
+            .arg(YellowbackJson::toInt(ap, ParamsAttest::N_SLOTS)).arg(YellowbackJson::toInt(ap, ParamsAttest::SEATS))
+            .arg(YellowbackFormat::bpsAsShortPercent(YellowbackJson::toInt(ap, ParamsAttest::EVICT_MARGIN_BPS)));
+    text += tr("\nOne fresh key is drawn: it is your member key, the hot key the agent signs prices with, the bond key and the fee key at once (it must stay online). "
+               "Back up wallet.dat after this; the key exists only there.\n\n"
+               "Stay live: a member with no heartbeat within the set's liveness window is dormant (signing prices is not an act). "
+               "Run the yellowback-attest agent on this node only. One key on two nodes defeats the node's equivocation guard: "
+               "the two would sooner or later sign different prices for one height, and anyone can report that, eject the member and freeze the bond.");
     if (!confirm(tr("Confirm joining the attestor set"), text)) return;
     ctl->registerAttestor(bondYec, lockBlocks,
         [=, this](const json& r) {
             Settings::getInstance()->setYellowbackBackupPending(true);
             updateBackupNag();
+            QString warn = YellowbackJson::toStr(r, RegisterResult::WARNING);
+            if (warn.startsWith(RpcErrors::BOND_NEAR_MIN))
+                warn = tr("The node warns that the bond is near the minimum (%1): if YED vault collateral grows before the join confirms, the record can stay "
+                          "PENDING, its bond held, until it leaves. Next time post 10 % headroom, or %2, which always qualifies.")
+                           .arg(warn).arg(YellowbackFormat::zec(capZat));
             notice(tr("Join sent"),
-                tr("txid %1\nbond %2 of YEC in %3, locked until height %4\nmember key %5\nfee address %6 (attestation fees are paid here)\n"
+                tr("txid %1\nbond %2 of YEC in %3 (script locktime %4)\nmember key %5\nfee address %6 (attestation fees are paid here)\n"
                    "eligible from height %7; the seq number appears in the table once the join confirms.\n\n"
                    "Back up wallet.dat now, then start the agent: yellowback-attest attest --conf attest.toml with that seq.")
                     .arg(YellowbackJson::toStr(r, RegisterResult::TXID))
                     .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RegisterResult::BOND_ZAT)))
                     .arg(YellowbackJson::toStr(r, RegisterResult::BOND_ADDRESS)).arg(YellowbackJson::toInt(r, RegisterResult::BOND_LOCKTIME))
                     .arg(YellowbackJson::toStr(r, RegisterResult::ATTESTOR_PUBKEY)).arg(YellowbackJson::toStr(r, RegisterResult::BOND_KEY_ADDRESS))
-                    .arg(YellowbackJson::toInt(r, RegisterResult::MATURES_AT)));
+                    .arg(YellowbackJson::toInt(r, RegisterResult::MATURES_AT))
+                % (warn.isEmpty() ? QString() : QString("\n\n" % warn)));
             ctl->refresh(true);
         },
         [=, this](const QString& e) { failed("yed_registerattestor", e); });
+}
+
+void YellowbackTab::leaveAttestorSet(const YellowbackAttestor& a) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    using namespace YellowbackRpc::Attestor;
+    if (a.bondFrozen || !(a.status == STATUS_PENDING || a.status == STATUS_ELIGIBLE || a.status == STATUS_DORMANT)) {
+        notice(tr("Leave the attestor set"), tr("Attestor %1 is not a member of the attestor set (%2).").arg(a.seq).arg(a.status), true);
+        return;
+    }
+    if (!walletHoldsActiveKey(a.attestorPubKey)) {
+        notice(tr("Leave the attestor set"), tr("This wallet does not hold the member key of attestor %1.").arg(a.seq), true);
+        return;
+    }
+    const int maturity = attestBondMaturity();
+    const int exitHeight = ctl->height() + 1;
+    QString text = tr("Leave the YED attestor set as attestor %1 (member key %2…).\n\n"
+                      "Your node sends this member's own removal (set_leave: signed by its key alone, nothing burned). From the next block the record is WITHDRAWN: "
+                      "no seat, no selection, no attestation fees. Its bond of %3 becomes spendable at height %4, %5 later (Withdraw bond); "
+                      "until then an equivocation proved against this key still freezes it.\n\n"
+                      "Stop the yellowback-attest agent for this key. The key can join again only after this bond is spent.")
+        .arg(a.seq).arg(a.attestorPubKey.left(16)).arg(YellowbackFormat::zec(a.bondZat))
+        .arg(std::max(exitHeight + maturity, a.bondLocktime)).arg(YellowbackFormat::blocksAndDuration(maturity));
+    if (!confirm(tr("Confirm leaving the attestor set"), text)) return;
+    ctl->leaveSet(a.attestorPubKey,
+        [=, this](const json& r) {
+            using namespace VaultRpc::Leave;
+            notice(tr("Leave sent"), tr("txid %1\nmember key %2\nexit height %3\nbond spendable from height %4 (Withdraw bond)")
+                .arg(YellowbackJson::toStr(r, TXID)).arg(YellowbackJson::toStr(r, MEMBER_KEY))
+                .arg(YellowbackJson::toInt(r, EXIT_HEIGHT)).arg(YellowbackJson::toInt(r, BOND_SPENDABLE_AT)));
+            ctl->refresh(true);
+        },
+        [=, this](const QString& e) { failed("set_leave", e); });
 }
 
 void YellowbackTab::withdrawBond(const YellowbackAttestor& a, const QString& to) {
@@ -2442,12 +2591,18 @@ void YellowbackTab::withdrawBond(const YellowbackAttestor& a, const QString& to)
         notice(tr("Withdraw bond"), tr("The bond of attestor %1 is frozen by the attestor set and can never be withdrawn.").arg(a.seq), true);
         return;
     }
-    if (ctl->height() < a.bondLocktime) {
-        notice(tr("Withdraw bond"), tr("The bond of attestor %1 is locked until height %2 (the chain is at %3).").arg(a.seq).arg(a.bondLocktime).arg(ctl->height()));
+    if (a.status != YellowbackRpc::Attestor::STATUS_WITHDRAWN) {
+        notice(tr("Withdraw bond"), tr("Attestor %1 is still a member of the attestor set (%2): leave the set first; the bond is spendable %3 after.")
+                   .arg(a.seq).arg(a.status).arg(YellowbackFormat::blocksAndDuration(attestBondMaturity())));
+        return;
+    }
+    int unlock = 0;
+    if (!bondWithdrawable(a, ctl->height(), attestBondMaturity(), &unlock)) {
+        notice(tr("Withdraw bond"), tr("The bond of attestor %1 is locked until height %2 (the chain is at %3).").arg(a.seq).arg(unlock).arg(ctl->height()));
         return;
     }
     QString text = tr("Withdraw the bond of attestor %1.\n\n"
-                      "%2 of YEC, minus the network fee, goes to %3. The member becomes WITHDRAWN: it leaves the attestor set; "
+                      "%2 of YEC, minus the network fee, goes to %3. The record stays WITHDRAWN; "
                       "joining again means a new bond and a new seq.\n\n"
                       "This wallet must hold the member key of that join.")
         .arg(a.seq).arg(YellowbackFormat::zec(a.bondZat)).arg(dest);

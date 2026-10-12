@@ -114,6 +114,8 @@ struct YellowbackAttestor {
     bool    poolFresh       = false;   // this node's pool holds a fresh attestation of this seq
     int     lastAct         = -1;      // P4-b: the set's lastAct for the member; -1 when absent
     bool    bondFrozen      = false;   // P4-b: the set froze the bond
+    QString seatWeight;                // decimal string, Q16: bondZat x the tenure factor (the seat ranking)
+    bool    evicted         = false;   // WITHDRAWN by a larger bond's join into the full set
 
     static YellowbackAttestor fromJson(const json& j);
 };
@@ -306,11 +308,14 @@ public:
         PoolFresh,
         LastAct,         // P4-b: the set's lastAct (join + maturity, or the last heartbeat)
         BondFrozen,      // P4-b
+        SeatWeight,      // seatWeight / 65,536, in YEC
         ColumnCount
     };
 
     void setNewData(const QList<YellowbackAttestor>& rows, int currentHeight);
     const YellowbackAttestor* rowAt(int row) const;
+    /** seatWeight (Q16 zat, decimal) in YEC: floor(q16 / 65,536) zat, formatted. */
+    static QString seatWeightYec(const QString& q16);
 
     int      rowCount(const QModelIndex& parent) const override;
     int      columnCount(const QModelIndex& parent) const override;
