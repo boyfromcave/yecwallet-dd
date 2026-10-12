@@ -189,16 +189,35 @@ public:
     // ── Hardening H-9.3: client plausibility (audit G-1/G-2, F-4) ─────────────────────────
     // The wallet recomputes, from yed_getinfo.params, every figure it shows the user before a
     // mint, a redeem or a claim, and refuses to send when the node's reply disagrees. Pure.
-    static qint64 feeZatFor(const json& params, qint64 collateralZat);        // FEE-1: max(FEE_MIN, c · FEE_BPS / 10⁴)
-    static qint64 attestFeeZatFor(const json& params, qint64 feeZat);         // AFEE-1: fee · ATTEST_FEE_BPS / 10⁴
+    // rpcversion 8 (fees spec §1.3, D-Q-23): the protocol fee is dollars of the DEBT in marginal bands
+    // (params.fees.protocol.bands, 1.0 % / 0.5 % / 0.1 %) with a floorCents minimum, converted to YEC at the
+    // vault's stored mint price pMint (µUSD per YEC). The node's ProtocolFeeUnits / ProtocolFeeCents / ProtocolFeeZat.
+    static qint64 protocolFeeUnitsFor(const json& params, qint64 debtCents);     // cents × bps summed over the bands, at least floor × 10⁴
+    static qint64 protocolFeeCentsFor(const json& params, qint64 debtCents);     // ceil(units / 10⁴)
+    static qint64 protocolFeeZatFor(const json& params, qint64 debtCents, qint64 pMint);   // ceil(units · COIN / pMint); -1 when pMint ≤ 0
+    static qint64 attestFeeZatFor(const json& params, qint64 feeZat);         // AFEE-1': protocol fee · attestFeeBps / 10⁴ (floor)
     static qint64 requiredZatFor(qint64 cents, qint64 minRatioBps, qint64 pMint);   // ceil(cents · ratio · COIN / pMint) up to 1,000 zat; -1 undefined
-    static qint64 mintCollateralZatFor(const json& params, qint64 requiredZat);     // MINT-5: max(required, 4 · FEE_MIN) up to 1,000 zat
+    static qint64 mintCollateralZatFor(const json& params, qint64 requiredZat);     // MINT-5': the requirement itself (rpcversion 8 dropped 4 · FEE_MIN)
+    /** params.maxMintCents (D-Q-24, $100,000); MAX_MINT_CENTS when the node does not report it. */
+    static qint64 maxMintCentsIn(const json& params);
+    /** MINT-6b (D-Q-23a): params.supplyCap.maxVaultCents, the largest debt one mint may create; -1 when there is no limit. */
+    static qint64 maxVaultCentsIn(const json& params);
+    /** The network fee of a transaction of `bytes` (fees spec §3.1, params.fees.network): max(flatZat, zatPerKB × bytes / 1000)
+     *  at the plain or the Yellowback rate, a Yellowback one capped at yellowback.maxTxFeeZat. Falls back to
+     *  params.pq.feeRateZatPerKB on a node without params.fees. Display only: the node prices the transaction. */
+    static qint64 networkFeeZatFor(const json& params, qint64 bytes, bool yellowback = true);
+    /** The approximate size of a mint (the carrier and the MINT with its attestation bundle). Display only. */
+    static constexpr qint64 MINT_TX_BYTES = 2500;
+    /** "$10.00 (5.03778338 YEC at the vault's mint price $1.9850)": a dollar fee and its YEC. */
+    static QString dollarsAndYec(qint64 cents, qint64 zat, qint64 pMint);
     /** What is wrong with a yed_estimatecollateral reply for (cents, lockBlocks) at index height
      *  `indexHeight`: the height identities (refHeight = tip − REF_LAG, lockHeight = refHeight +
      *  lockBlocks, claimHeight = lockHeight + GRACE), the class and its ratio, the collateral
      *  and the attestor fee. Empty when every figure checks out. */
     static QStringList checkEstimate(const json& params, int indexHeight, qint64 cents, int lockBlocks, const json& estimate);
-    /** The same for a yed_listclaimable row: FEE-1, AFEE-1, the claim height reached. */
+    /** The same for a yed_estimatefee reply for `cents`: feeCents by the bands, feeZat at its pMint, attestFeeZat. */
+    static QStringList checkEstimateFee(const json& params, qint64 cents, const json& estimate);
+    /** The same for a yed_listclaimable row: FEE-1' of the debt at pMint, AFEE-1', the claim height reached. */
     static QStringList checkClaimable(const json& params, int indexHeight, const YellowbackClaimable& c);
     /** The same for a vault's heights: claimHeight = lockHeight + GRACE, lockHeight − refHeight in its class. */
     static QStringList checkVaultHeights(const json& params, const YellowbackPosition& p);
@@ -225,8 +244,11 @@ public:
     qint64  claimPriceNow() const;                 // yed_getstats.pClaim, 0 when undefined
     /** IT-9: params.earlyRedeemFeeBps of a term class ("A" | "B" | "C"); 0 when unknown. Pure. */
     static qint64 earlyRedeemFeeBpsFor(const json& params, const QString& termClass);
-    /** IT-9: collateral · earlyRedeemFeeBps / 10⁴ (floor, no minimum), the node's EarlyRedeemFeeZat. */
-    static qint64 earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 collateralZat);
+    /** IT-9' (rpcversion 8): the early-redeem fee is of the DEBT at the vault's pMint: ceil(debt · bps · COIN / pMint),
+     *  no floor, the node's EarlyRedeemFeeZat; 0 when the bps or the price is undefined. */
+    static qint64 earlyRedeemFeeZatFor(const json& params, const QString& termClass, qint64 debtCents, qint64 pMint);
+    /** The same in dollars: ceil(debt · bps / 10⁴) cents (yed_estimateredeem.earlyRedeemFeeCents). */
+    static qint64 earlyRedeemFeeCentsFor(const json& params, const QString& termClass, qint64 debtCents);
     // ── rpcversion 7: post-quantum owners (quantum spec §6.2) ─────────────────────────────
     /** params.pq.falconActive: YED holders must be Falcon (FN-DSA-512) PQ addresses from then on (TOK-PQ). */
     static bool   falconActiveIn(const json& params);
@@ -236,9 +258,8 @@ public:
     /** The approximate size of a transaction carrying one SLH-DSA owner signature (a redeem): the
      *  7,939-byte owner scriptSig plus the rest of the transaction. Display only. */
     static constexpr qint64 PQ_OWNER_SPEND_BYTES = 8200;
-    /** The least network fee the node charges a transaction carrying one owner signature:
-     *  max(params.feeZat, feeRateZatPerKB × PQ_OWNER_SPEND_BYTES / 1000) (Q5, ycash-dd's wallet fee;
-     *  ycash6 also applies ZIP-317, which is higher). Display only: the node prices the transaction. */
+    /** The network fee of a transaction carrying one owner signature: networkFeeZatFor(PQ_OWNER_SPEND_BYTES)
+     *  at the Yellowback rate (rpcversion 8; ycash6 also applies ZIP-317, which is higher). Display only. */
     static qint64 pqOwnerSpendFeeZatFor(const json& params);
     /** The yed_getnewaddress type this wallet asks for: the holder policy (D-Q-2, A-13), "p2pkh" while
      *  Falcon is inactive and "pq" (a Falcon key) once active. Never "pqowner" (C-10). */
@@ -252,13 +273,17 @@ public:
     static QString pqDisclosure();
     /** A zatoshi amount in cents at a price in µUSD per YEC (display); -1 when the price is undefined. */
     static qint64 zatToCents(qint64 zat, qint64 priceMicroUsd);
-    /** The early-redeem fee in dollars beside the debt (lockup investigation recommendation):
-     *  ", worth $X at the claim price $P, against a debt of $Y" (after a large price rise the fee can be
-     *  several times the debt; waiting until the lock height removes it); "" when the price is undefined. */
-    static QString earlyFeeInDollars(qint64 feeZat, qint64 priceMicroUsd, qint64 debtCents);
+    /** The early-redeem fee in dollars beside the debt (lockup investigation recommendation, rpcversion 8: the
+     *  fee is a share of the debt, so its dollars are fixed): "$50.00 of the $1,000.00 debt (5 %, 25.2 YEC at the
+     *  mint price $1.9850); none from height H on". Pure. */
+    /** rpcversion 8: what a redeem of `p` pays from its collateral, in dollars and YEC at the vault's pMint:
+     *  "the protocol fee of $10.00 (5.04 YEC at the vault's mint price $1.9850)" and, when `early`, the
+     *  early-redeem fee by earlyFeeInDollars. Pure. */
+    static QString redeemFeesText(const json& params, const YellowbackPosition& p, bool early);
+    static QString earlyFeeInDollars(qint64 earlyCents, qint64 earlyZat, qint64 bps, qint64 pMint, qint64 debtCents, int lockHeight);
     /** What is wrong with a yed_estimateredeem reply for vault `p` (H-9.3): the vault, the burn,
-     *  the collateral, the class's fee rate, and the fee = FEE-1 + the early-redeem fee when early
-     *  (both 0 under FEE-0). Empty when every figure checks out. Pure. */
+     *  the collateral, pMint, the class's fee rate, and the fee = FEE-1' of the debt at pMint + the early-redeem
+     *  fee of the debt when early (both 0 under FEE-0). Empty when every figure checks out. Pure. */
     static QStringList checkEstimateRedeem(const json& params, const YellowbackPosition& p, const json& estimate);
     // ── v3 attestation layer (plan §4.8), pure functions of the replies so the QTest reads them ──
     // The arming banner: "UNARMED" / "TRIGGERED at h, arms at h'" / "ARMED", or the disabled
@@ -354,7 +379,8 @@ public:
     void refreshSelection();                      // v3: public so the Mint page's retry can re-query it
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
-    void getFeePayee(int refHeight, qint64 collateralZat, OkFn ok, ErrFn err);   // FEE-1 / FEE-W for a confirmation
+    void getFeePayee(int refHeight, OkFn ok, ErrFn err);   // FEE-W for a confirmation (rpcversion 8: no collateral, no fee)
+    void estimateFee(qint64 mintedCents, OkFn ok, ErrFn err);   // rpcversion 8: yed_estimatefee, FEE-1' of a debt at the mint price
 
     // The term class a lock length falls in (params.classes), name "" when it is in none (mint-bad-lock).
     TermClass classForLock(int lockBlocks) const;

@@ -44,7 +44,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 7, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 8, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
       "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
@@ -57,8 +57,18 @@ static json infoActive() {
       "params": {"startHeight": 103, "attestorSetId": "5e755e755e755e755e755e755e755e755e755e755e755e755e755e755e755e75", "claimDelay": 10,
                  "sigmaRefBps": 0, "sigmaMultMaxBps": 10000, "supplyCapBps": 0, "refLag": 2,
                  "inTermClaims": true, "claimThresholdBps": 12500, "earlyRedeemFeeBps": [500, 250, 100],
-                 "refWindow": 40, "grace": 24, "payeeWindow": 10, "feeMinZat": 50000000, "feeBps": 25,
-                 "tokenValueZat": 10000, "feeZat": 1000,
+                 "refWindow": 40, "grace": 24, "payeeWindow": 10,
+                 "tokenValueZat": 10000, "feeZat": 1000, "maxMintCents": 10000000,
+                 "fees": {"protocol": {"bands": [{"uptoCents": 100000, "bps": 100}, {"uptoCents": 1000000, "bps": 50}, {"uptoCents": null, "bps": 10}],
+                                       "floorCents": 100, "attestFeeBps": 2500, "priceSource": "pMint"},
+                          "earlyRedeemFeeBps": [500, 250, 100],
+                          "network": {"priceMicroUsd": 2000000, "priceSource": "tip",
+                                      "plain": {"usdPerKBMicro": 20000, "zatPerKB": 1000000},
+                                      "yellowback": {"usdPerKBMicro": 50000, "zatPerKB": 2500000, "maxTxFeeUsdMicro": 2000000,
+                                                     "maxTxFeeCeilingZat": 1000000000, "maxTxFeeZat": 100000000},
+                                      "floorZatPerKB": 5000, "fallbackZatPerKB": 100, "flatZat": 1000, "maxTxFeeZat": 10000000}},
+                 "supplyCap": {"circulatingZat": 1656250000000, "issuedBeforeStartZat": 625000000000, "priceMicroUsd": 1990000,
+                               "capCents": null, "maxVaultShareBps": 1000, "vaultShareFloorCents": 1000000, "maxVaultCents": null},
                  "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100, "plainAddressVersion": "4c51"},
                  "addressVersion": "2002", "pqAddressVersion": "5710",
                  "windows": {"fast": 8, "mid": 24, "slow": 64},
@@ -105,7 +115,7 @@ static json positionActive() {
       "ownerScheme": 1, "ownerHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       "ownerAddress": "yr2Qe7xCExamplePQOwnerAddress111111111111111111111cND",
       "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 25125628141, "collateral": 251.25628141,
-      "mintedCents": 100000, "mintHeight": 332, "refHeight": 329, "feePaidZat": 62814071, "closeHeight": null,
+      "mintedCents": 100000, "mintHeight": 332, "refHeight": 329, "feePaidZat": 502512563, "pMint": 1990000, "closeHeight": null,
       "closingTxid": "", "burnedCents": 0, "unbacked": false, "claimable": false, "underwaterAt": 437800,
       "voidReason": "", "canRedeem": false, "canClaim": false,
       "scriptPubKey": "045945440020755e755e755e"
@@ -147,7 +157,7 @@ static json claimableRow() {
     return json::parse(R"({
       "vault": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0",
       "ownerAddress": "yrExampleOwnerAddress111111111111111", "collateralZat": 25125628141, "mintedCents": 100000,
-      "feeZat": 62814070, "claimHeight": 404, "underwaterAt": 437800, "pClaim": 400000
+      "pMint": 1990000, "feeZat": 502512563, "claimHeight": 404, "underwaterAt": 437800, "pClaim": 400000
     })");
 }
 
@@ -162,7 +172,8 @@ static json txMint() {
 static json estimateReply() {
     return json::parse(R"({
       "requiredZat": 251256282000, "termClass": "A", "lockHeight": 377, "claimHeight": 401, "minRatioBps": 50000,
-      "baseRatioBps": 50000, "sigmaMultBps": 10000, "pMint": 1990000, "refHeight": 329
+      "baseRatioBps": 50000, "sigmaMultBps": 10000, "pMint": 1990000, "refHeight": 329,
+      "protocolFeeCents": 1000, "protocolFeeZat": 502512563
     })");
 }
 
@@ -203,7 +214,8 @@ static json selectionReply() {
 static json estimateReplyArmed() {
     json e = estimateReply();
     e["xMint"] = 1990000; e["aMint"] = 1985000; e["pMint"] = 1985000; e["source"] = "a"; e["armed"] = true;
-    e["bundleSeqs"] = json::array({1, 2}); e["attestFeeZat"] = 157430730; e["divergenceBps"] = 25;
+    e["bundleSeqs"] = json::array({1, 2}); e["attestFeeZat"] = 125944584; e["divergenceBps"] = 25;
+    e["protocolFeeZat"] = 503778338;     // rpcversion 8: FEE-1' of $1,000 (1 %, $10.00) at $1.985: ceil(10⁷ · COIN / 1985000)
     e["requiredZat"] = 251889169000;     // H-9.3: ceil(100000 · 50000 · COIN / 1985000) up to 1,000 zat, as the wallet recomputes it
     return e;
 }
@@ -260,20 +272,24 @@ static json noticePendingReply() {
     })");
 }
 
-// H-9.3: the wallet recomputes FEE-1 (feeMinZat 50000000, feeBps 25 in infoActive), so the
-// canned fee is FEE-1 of the collateral asked about (the contract's example figures disagree with
-// its own parameters; the fixtures are the consistent ones)
-static qint64 fee1(qint64 collateralZat) { return std::max<qint64>(50000000, collateralZat * 25 / 10000); }
+// H-9.3: the wallet recomputes the fee. rpcversion 8 (FEE-1'): the protocol fee is dollars of the DEBT
+// ($1,000 in every fixture: 1 %, $10.00) at the vault's stored pMint ($1.99 in positionActive,
+// claimableRow, estimateReply): ceil(10⁷ · COIN / 1990000) = 502512563 zat, whatever the collateral
+// (the contract's example figures are 100× too high, see the report; the fixtures are the consistent ones)
+static const qint64 FEE1 = 502512563;
+static qint64 fee1(qint64 /*collateralZat: no longer a factor*/) { return FEE1; }
+// IT-9': the early-redeem fee is 5 % (class A) of the debt at pMint: ceil(100000 · 500 · COIN / 1990000)
+static const qint64 EARLY_A = 2512562815;
 static const qint64 VAULT_ZAT   = 25125628141;     // positionActive / claimableRow collateral
 static const qint64 EST_ZAT     = 251256282000;    // estimateReply: $1,000 at 500 % and $1.99
 static const qint64 EST_ARMED_ZAT = 251889169000;  // estimateReplyArmed: $1,000 at 500 % and $1.985
 static json feePayeeReply(qint64 collateralZat = VAULT_ZAT) {
     json f = json::parse(R"({
-      "eligible": ["smQvTmAz2ExamplePayoutAddress1111111"], "feeZat": 50000000,
+      "eligible": ["smQvTmAz2ExamplePayoutAddress1111111"],
       "default": {"payoutAddress": "smQvTmAz2ExamplePayoutAddress1111111", "weight": 19800},
       "policy": {"penaltyBlocks": 12, "accuracyWindow": 24, "tiltBps": 10000}
     })");
-    f["feeZat"] = fee1(collateralZat);
+    (void)collateralZat;   // rpcversion 8: yed_getfeepayee takes no collateral and quotes no fee
     return f;
 }
 
@@ -292,6 +308,24 @@ static json redeemReply() {
       "feeZat": 62814071, "payee": "smQvTmAz2ExamplePayoutAddress1111111", "collateralOut": 25062804070,
       "to": "smExampleTransparentTwin111111111111"
     })");
+}
+
+// The quote yed_estimateredeem gives for positionActive() at `height` (tip + 1), consistent with
+// the parameters (rpcversion 8): FEE-1' of the $1,000 debt at the vault's pMint $1.99 plus, before
+// lock height 380, 5 % of the debt (class A, $50.00) at the same price.
+static json estimateRedeemReply(int height) {
+    const bool early = height < 380;
+    const qint64 earlyFee = early ? EARLY_A : 0;
+    return json{{"vault", "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"}, {"status", "ACTIVE"},
+                {"termClass", "A"}, {"lockHeight", 380}, {"height", height}, {"early", early}, {"burnedCents", 100000},
+                {"collateralZat", VAULT_ZAT}, {"pMint", 1990000}, {"protocolFeeCents", 1000}, {"protocolFeeZat", FEE1},
+                {"feeZat", FEE1 + earlyFee}, {"earlyRedeemFeeBps", 500}, {"earlyRedeemFeeCents", early ? 5000 : 0},
+                {"earlyRedeemFeeZat", earlyFee}, {"payee", "smQvTmAz2ExamplePayoutAddress1111111"}, {"canRedeem", true}, {"error", ""}};
+}
+
+// yed_estimatefee 100000 (rpcversion 8): $10.00 at the cross-section xMint $1.99, the attestors' quarter
+static json estimateFeeReply() {
+    return json{{"feeCents", 1000}, {"feeZat", FEE1}, {"pMint", 1990000}, {"attestFeeZat", FEE1 * 2500 / 10000}};
 }
 
 static json balanceReply(qint64 confirmed) {
@@ -362,6 +396,9 @@ struct Harness {
         rpc.results[YellowbackRpc::LISTCLAIMABLE]    = claimable.is_null() ? json::array() : claimable;
         rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array();
         rpc.results[YellowbackRpc::LISTVAULTS]       = json::array();
+        // rpcversion 8: the redeem confirmation quotes yed_estimateredeem on every node; the Mint page yed_estimatefee
+        rpc.results[YellowbackRpc::ESTIMATEREDEEM] = estimateRedeemReply(height + 1);
+        rpc.results[YellowbackRpc::ESTIMATEFEE]    = estimateFeeReply();
     }
     void selectRow(const char* table, int row) {
         auto t = tab.findChild<QTableView*>(table);
@@ -625,23 +662,24 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsSeven() {
-        // post-quantum owners (quantum spec §6.2): ownerScheme/ownerHash replace ownerPubKey/ownerKeyId
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 7);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 7);
+    void contractVersionIsEight() {
+        // the fee structure (fees spec §3.4): params.fees, maxMintCents, supplyCap, vault.pMint,
+        // yed_estimatefee <mintedCents>; feeMinZat/feeBps and yed_getfeepayee's fee gone
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 8);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 8);
     }
 
-    // The rpcversion 7 handshake: 7 is accepted, 6 (in-term claims with elliptic-curve owners)
-    // and 8 are refused with both numbers named, and nothing is enabled until they match.
-    void handshakeAcceptsRpcVersionSevenOnly() {
-        for (int v : { 6, 8 }) {
+    // The rpcversion 8 handshake: 8 is accepted, 7 (the flat collateral fee) and 9 are refused
+    // with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionEightOnly() {
+        for (int v : { 7, 9 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("version 7"));
+            QVERIFY(h.label("lblBanner").contains("version 8"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -744,7 +782,8 @@ private slots:
 
         auto c = YellowbackClaimable::fromJson(claimableRow());
         QCOMPARE(c.vault.right(2), QString(":0"));
-        QCOMPARE(c.feeZat, (qint64)62814070);
+        QCOMPARE(c.feeZat, FEE1);
+        QCOMPARE(c.pMint, (qint64)1990000);
         QCOMPARE(c.pClaim, (qint64)400000);
 
         auto t = YellowbackTx::fromJson(txMint());
@@ -787,7 +826,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 7"));
+        QVERIFY(h.label("lblBanner").contains("version 8"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -1722,7 +1761,7 @@ private slots:
         auto m = h.ctl.claimableModel();
         QCOMPARE(m->rowCount(QModelIndex()), 1);
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Burn), Qt::DisplayRole).toString(), QString("$1,000.00"));
-        QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Fee), Qt::DisplayRole).toString(), YellowbackFormat::zec(62814070));
+        QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::Fee), Qt::DisplayRole).toString(), YellowbackFormat::zec(FEE1));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::ClaimHeight), Qt::DisplayRole).toString(), QString("404"));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::UnderwaterAt), Qt::DisplayRole).toString(), QString("$0.4378"));
         QCOMPARE(m->data(m->index(0, YellowbackClaimableModel::PClaim), Qt::DisplayRole).toString(), QString("$0.4000"));
@@ -1761,7 +1800,8 @@ private slots:
         QCOMPARE(combo->count(), 3);
         QCOMPARE(combo->itemData(0).toInt(), 48);
         QVERIFY(h.button("btnMint") != nullptr && !h.button("btnMint")->isEnabled());
-        QVERIFY(h.ctl.mintBlocker(1000).contains("between $100.00 and $10,000.00"));
+        QVERIFY(h.ctl.mintBlocker(1000).contains("between $100.00 and $100,000.00"));        // rpcversion 8: maxMintCents (D-Q-24)
+        QVERIFY(h.ctl.mintBlocker(10000001).contains("between $100.00 and $100,000.00"));
         QVERIFY(h.ctl.mintBlocker(10000).isEmpty());
         const qint64 yedBefore = h.ctl.confirmedCents();
     }
@@ -1800,7 +1840,11 @@ private slots:
         QVERIFY2(text.contains("at most " % YellowbackFormat::zec(253768844820)), qPrintable(text));   // the cap sent (F-1)
         QVERIFY(text.contains("500.00 %"));                                  // ratio
         QVERIFY(text.contains("1.00x"));                                     // sigma
-        QVERIFY(text.contains(YellowbackFormat::zec(628140705)));            // pool fee: FEE-1 of the collateral (H-9.3)
+        // rpcversion 8: the protocol fee in dollars of the debt and in YEC at the mint price (H-9.3 recomputes both)
+        QVERIFY2(text.contains("Protocol fee: $10.00 (" % YellowbackFormat::zec(FEE1) % " at the vault's mint price $1.9900)"), qPrintable(text));
+        QVERIFY(text.contains("Redeeming this vault later pays the same $10.00 again"));
+        QVERIFY(text.contains("Network fee: about "));
+        QVERIFY(text.contains("Maximum mint: $100,000.00 per vault."));
         QVERIFY(text.contains("smQvTmAz2ExamplePayoutAddress1111111"));      // payee
         QVERIFY(text.contains("height 377"));                                 // refHeight 329 + 48 (H-9.3 recomputes it)
         QVERIFY(text.contains("claim height is 401"));
@@ -1812,8 +1856,8 @@ private slots:
         // answered in the full shape), so the summary comes straight from it.
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::MINT), json::array({100000, 48, "", "", false, 253768844820}));   // maxCollateralZat = collateral + 1 % (F-1)
-        // yed_getfeepayee <refHeight from the estimate> <the vault's collateral, max(required, 4 FEE_MIN)>
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({329, EST_ZAT}));
+        // yed_getfeepayee <refHeight from the estimate> (rpcversion 8: no collateral)
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({329}));
         QCOMPARE(h.notices.size(), 1);
         QVERIFY(h.notices[0].startsWith("Mint sent|"));
         QVERIFY(h.notices[0].contains("6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"));
@@ -1845,7 +1889,7 @@ private slots:
         h.mintAmount("1000");
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
-        QVERIFY(h.confirms[0].contains("Pool fee: none"));
+        QVERIFY(h.confirms[0].contains("Protocol fee: none"));
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 1);
     }
 
@@ -1939,7 +1983,7 @@ private slots:
                 if (h.confirms.size() == 1) {
                     h.feedActive(332);
                     json e = estimateReply(); e["refHeight"] = 330; e["lockHeight"] = 378; e["claimHeight"] = 402;
-                    e["pMint"] = 1890000; e["requiredZat"] = 264550265000;
+                    e["pMint"] = 1890000; e["requiredZat"] = 264550265000; e["protocolFeeZat"] = 529100530;   // $10.00 at $1.89
                     h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
                     h.rpc.results[YellowbackRpc::GETFEEPAYEE]        = feePayeeReply(264550265000);
                 }
@@ -2177,13 +2221,13 @@ private slots:
         const json params = infoActive()["params"];
         QVERIFY(!YellowbackController::falconActiveIn(params));
         QCOMPARE(YellowbackController::pqFeeRateIn(params), (qint64)100);
-        QCOMPARE(YellowbackController::pqOwnerSpendFeeZatFor(params), (qint64)1000);   // max(1000, 100 × 8.2) at 1× the floor (C-5)
-        json p3 = params; p3["pq"]["feeRateZatPerKB"] = 300;
+        QCOMPARE(YellowbackController::pqOwnerSpendFeeZatFor(params), (qint64)20500000);   // rpcversion 8: $0.05/KB at $2 = 2,500,000 zat/KB × 8.2
+        json p3 = params; p3.erase("fees"); p3["pq"]["feeRateZatPerKB"] = 300;           // a node without params.fees: -pqfeerate by size
         QCOMPARE(YellowbackController::pqOwnerSpendFeeZatFor(p3), (qint64)2460);        // 300 × 8,200 / 1,000
         QCOMPARE(YellowbackController::pqFeeRateIn(json::object()), (qint64)0);
         QCOMPARE(YellowbackController::receiveAddressTypeFor(params), QString("p2pkh"));
         const QString pq = YellowbackController::describePq(params);
-        QVERIFY2(pq.contains("SLH-DSA-SHA2-128s") && pq.contains("no Falcon activation height") && pq.contains("100 zat per KB"), qPrintable(pq));
+        QVERIFY2(pq.contains("SLH-DSA-SHA2-128s") && pq.contains("no Falcon activation height") && pq.contains("$0.05 per KB") && pq.contains("2500000 zat per KB"), qPrintable(pq));
         QVERIFY(YellowbackController::describePq(json::object()).isEmpty());
         json f = params; f["pq"]["falconActive"] = true; f["pq"]["falconHeight"] = 300;
         QVERIFY(YellowbackController::describePq(f).contains("active since height 300"));
@@ -2205,8 +2249,11 @@ private slots:
         QCOMPARE(YellowbackController::zatToCents(100000000, 2000000), (qint64)200);          // 1 YEC at $2.00
         QCOMPARE(YellowbackController::zatToCents(2100000000000000LL, 4294967295LL), (qint64)9019431319500LL);   // no overflow at PRICE_MAX
         QCOMPARE(YellowbackController::zatToCents(100000000, 0), (qint64)-1);
-        QVERIFY(YellowbackController::earlyFeeInDollars(1, 0, 100).isEmpty());
-        QCOMPARE(YellowbackController::earlyFeeInDollars(125000000, 2000000, 100000), QString(", worth $2.50 at the claim price $2.0000, against a debt of $1,000.00"));
+        // rpcversion 8 (IT-9'): the early fee is a share of the debt, so its dollars are fixed; the YEC is at the vault's pMint
+        QCOMPARE(YellowbackController::earlyFeeInDollars(5000, EARLY_A, 500, 1990000, 100000, 380),
+                 QString("$50.00 of the $1,000.00 debt (5 %), " % YellowbackFormat::zec(EARLY_A) % " at the vault's mint price $1.9900; it disappears at the end of the term (height 380)"));
+        QCOMPARE(YellowbackController::earlyFeeInDollars(5000, 0, 500, 0, 100000, 380),
+                 QString("$50.00 of the $1,000.00 debt (5 %); it disappears at the end of the term (height 380)"));
     }
 
     void sendInsufficientYed() {
@@ -2233,12 +2280,14 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Redeem vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(62814070)));                 // fee estimate = FEE-1 (H-9.3)
+        // rpcversion 8: the quote's protocol fee of the debt at the vault's pMint, in dollars and YEC (H-9.3)
+        QVERIFY2(h.confirms[0].contains("Protocol fee: $10.00 (" % YellowbackFormat::zec(FEE1) % " at the vault's mint price $1.9900)"), qPrintable(h.confirms[0]));
         QVERIFY(h.confirms[0].contains("smQvTmAz2ExamplePayoutAddress1111111"));
-        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - 62814070)));   // collateral out
+        QVERIFY(h.confirms[0].contains(YellowbackFormat::zec(25125628141 - FEE1)));   // collateral out
         QVERIFY(h.confirms[0].contains("fresh transparent address"));
-        // yed_getfeepayee <tip - refLag> <collateralZat>; yed_redeem <vaultTxid> (no `to`)
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETFEEPAYEE), json::array({379, 25125628141}));
+        // yed_estimateredeem <vaultTxid> on every node (yed_getfeepayee quotes no fee); yed_redeem <vaultTxid> (no `to`)
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::ESTIMATEREDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}));
+        QCOMPARE(h.rpc.count(YellowbackRpc::GETFEEPAYEE), 0);
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::REDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}));
         QCOMPARE(h.notices.size(), 1);
         QVERIFY(h.notices[0].startsWith("Redeem sent|"));
@@ -2282,10 +2331,12 @@ private slots:
         h.inTerm = false;                                            // yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee
         json p = positionActive(); p["canRedeem"] = true;
         h.feedActive(381, json::array({p}));
-        h.rpc.errors[YellowbackRpc::GETFEEPAYEE] = "fee-no-eligible-payee: E(R) is empty";
+        json q = estimateRedeemReply(382);                            // FEE-0: no pool eligible, no fee output
+        q["feeZat"] = 0; q["protocolFeeZat"] = 0; q["payee"] = nullptr;
+        h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = q;
         h.rpc.results[YellowbackRpc::REDEEM]     = redeemReply();
         h.tab.redeemVault(YellowbackPosition::fromJson(p), "ys1exampleSaplingDestination");
-        QVERIFY(h.confirms[0].contains("Pool fee: none"));
+        QVERIFY(h.confirms[0].contains("Protocol fee: none"));
         QVERIFY(h.confirms[0].contains("ys1exampleSaplingDestination"));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::REDEEM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "ys1exampleSaplingDestination"}));
         // the Redeem page lists the vault and offers the default destination
@@ -2373,7 +2424,7 @@ private slots:
         QCOMPARE(h.confirms.size(), 1);
         QVERIFY(h.confirms[0].startsWith("Claim vault 6a1f"));
         QVERIFY(h.confirms[0].contains("Burn: $1,000.00 of YED"));
-        QVERIFY2(h.confirms[0].contains("Fees from your own YEC: the pool fee " % YellowbackFormat::zec(62814070)), qPrintable(h.confirms[0]));
+        QVERIFY2(h.confirms[0].contains("Fees from your own YEC: the protocol fee $10.00 (" % YellowbackFormat::zec(FEE1) % " at the vault's mint price $1.9900)"), qPrintable(h.confirms[0]));
         // rpcversion 5 (U-23): the claim intent carries the whole collateral less the residual (0 here)
         QVERIFY(h.confirms[0].contains("Claim intent: about " % YellowbackFormat::zec(25125628141)));
         QVERIFY2(h.confirms[0].contains("at least " % YellowbackFormat::zec(24874371860)), qPrintable(h.confirms[0]));   // the floor sent (F-1)
@@ -2801,7 +2852,7 @@ private slots:
     void claimShowsPathAndResidualThenFollowsTheCarrier() {
         Harness h;
         json row = claimableRow();
-        row["claimPath"] = "b"; row["residualZat"] = 250000000; row["attestFeeZat"] = 15703517;
+        row["claimPath"] = "b"; row["residualZat"] = 250000000; row["attestFeeZat"] = 125628140;
         row["noticed"] = true; row["noticeHeight"] = 338; row["emergencyOpenAt"] = 342;
         h.feedActive(410, json(nullptr), json::array({row}));
         h.ctl.setPendingPollMs(10);
@@ -2820,8 +2871,8 @@ private slots:
         QVERIFY2(h.confirms[0].contains("Claim path: emergency clause (b)"), qPrintable(h.confirms[0]));
         QVERIFY(h.confirms[0].contains("height 338"));
         QVERIFY2(h.confirms[0].contains("Residual: " % YellowbackFormat::zec(250000000) % " of YEC goes to the vault owner in its own intent"), qPrintable(h.confirms[0]));
-        QVERIFY(h.confirms[0].contains("Attestation fee: " % YellowbackFormat::zec(15703517) % " of YEC from your own YEC"));
-        QVERIFY(h.confirms[0].contains("and the attestation fee " % YellowbackFormat::zec(15703517)));
+        QVERIFY(h.confirms[0].contains("Attestation fee: " % YellowbackFormat::zec(125628140) % " of YEC from your own YEC"));
+        QVERIFY(h.confirms[0].contains("and the attestation fee " % YellowbackFormat::zec(125628140)));
         // U-23: the claim intent is the collateral less the residual; the fees are the claimant's own YEC
         QVERIFY(h.confirms[0].contains("Claim intent: about " % YellowbackFormat::zec(25125628141 - 250000000)));
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24626871860, 100099}));   // (25125628141 - 250000000) - 1 %
@@ -3217,8 +3268,8 @@ private slots:
         const QString& t = h.confirms[0];
         QVERIFY2(t.startsWith("Renew vault 6a1f"), qPrintable(t));
         QVERIFY(t.contains("burn $1,000.00 of YED"));
-        QVERIFY(t.contains("Pool fee: " % YellowbackFormat::zec(62814070)));
-        QVERIFY(t.contains(YellowbackFormat::zec(VAULT_ZAT - 62814070)));
+        QVERIFY2(t.contains("Protocol fee: $10.00 (" % YellowbackFormat::zec(FEE1) % " at the vault's mint price $1.9900) from the collateral."), qPrintable(t));
+        QVERIFY(t.contains(YellowbackFormat::zec(VAULT_ZAT - FEE1)));
         QVERIFY(t.contains("against " % YellowbackFormat::zec(EST_ZAT)));
         QVERIFY(t.contains("at most " % YellowbackFormat::zec(253768844820)));
         QVERIFY(t.contains("lock 51 blocks (class A)"));
@@ -3257,7 +3308,7 @@ private slots:
         h.rpc.results[YellowbackRpc::MINT]               = mintReply();
         h.tab.renewVault(YellowbackPosition::fromJson(row));
         QVERIFY(h.tab.renewPending());
-        json moved = renewEstimate(); moved["pMint"] = 1900000; moved["requiredZat"] = 263157895000;
+        json moved = renewEstimate(); moved["pMint"] = 1900000; moved["requiredZat"] = 263157895000; moved["protocolFeeZat"] = 526315790;
         h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = moved;
         json closed = row; closed["status"] = "CLOSED";
         h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({closed}), json(nullptr), json(nullptr));
@@ -3330,25 +3381,44 @@ private slots:
         QVERIFY(note.contains("class B and C are disabled"));
         QVERIFY(h.ctl.classForLock(103681).name.isEmpty());
         QCOMPARE(h.ctl.classForLock(34560).name, QString("A"));
-        QCOMPARE(h.ctl.maxMintCents(), (qint64)250000);                     // H-12 off regtest
-        QVERIFY(h.label("m1").contains("$2,500.00"));
+        QCOMPARE(h.ctl.maxMintCents(), (qint64)10000000);                   // rpcversion 8 (D-Q-24): params.maxMintCents, every network
+        QVERIFY(h.label("m1").contains("$100,000.00"));
         QVERIFY(YellowbackController::explainError("mint-bad-lock: lockBlocks 200000 is in no term class (A 34560-103680, B disabled, C disabled)").contains("disabled"));
         // regtest with every class enabled and no H-1: no note
         Harness r;
         r.feedActive();
         QVERIFY(r.label("lblClassNote").isEmpty());
-        QCOMPARE(r.ctl.maxMintCents(), (qint64)1000000);
+        QCOMPARE(r.ctl.maxMintCents(), (qint64)10000000);
     }
 
     // H-9.3: the local recomputation, and each action refusing a reply that disagrees with it.
     void plausibilityRecomputesFeesAndHeights() {
         const json params = infoActive()["params"];
-        QCOMPARE(YellowbackController::feeZatFor(params, VAULT_ZAT), (qint64)62814070);
-        QCOMPARE(YellowbackController::feeZatFor(params, 1000), (qint64)50000000);           // FEE_MIN
-        QCOMPARE(YellowbackController::attestFeeZatFor(params, 62814070), (qint64)15703517);
+        // rpcversion 8 (FEE-1'): marginal bands of the debt, a $1 floor, at the vault's pMint
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 100000), (qint64)1000);     // 1 % of $1,000
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 10000), (qint64)100);       // 1 % of $100 = the $1 floor
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 5000), (qint64)100);        // under the floor
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 1000000), (qint64)5500);    // $10 + 0.5 % of $9,000
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 10000000), (qint64)14500);  // $55 + 0.1 % of $90,000 (maxMint)
+        QCOMPARE(YellowbackController::protocolFeeCentsFor(params, 100001), (qint64)1001);     // ceil: $10 + 0.5 % of 1 cent
+        QCOMPARE(YellowbackController::protocolFeeZatFor(params, 100000, 1990000), FEE1);
+        QCOMPARE(YellowbackController::protocolFeeZatFor(params, 100000, 0), (qint64)-1);
+        QCOMPARE(YellowbackController::earlyRedeemFeeZatFor(params, "A", 100000, 1990000), EARLY_A);
+        QCOMPARE(YellowbackController::earlyRedeemFeeCentsFor(params, "B", 100000), (qint64)2500);
+        QCOMPARE(YellowbackController::mintCollateralZatFor(params, EST_ZAT), EST_ZAT);         // MINT-5': no 4 · FEE_MIN floor
+        QCOMPARE(YellowbackController::maxMintCentsIn(params), (qint64)10000000);
+        QCOMPARE(YellowbackController::maxVaultCentsIn(params), (qint64)-1);                    // the cap is undefined on regtest
+        json share = params; share["supplyCap"]["maxVaultCents"] = 1500000;
+        QCOMPARE(YellowbackController::maxVaultCentsIn(share), (qint64)1500000);
+        // the network fee: max(flatZat, zatPerKB × size / 1000), the Yellowback one capped
+        QCOMPARE(YellowbackController::networkFeeZatFor(params, 400, true), (qint64)1000000);     // 2,500,000 × 0.4
+        QCOMPARE(YellowbackController::networkFeeZatFor(params, 400, false), (qint64)400000);     // the plain rate
+        QCOMPARE(YellowbackController::networkFeeZatFor(params, 100000, true), (qint64)100000000); // the cap
+        QCOMPARE(YellowbackController::networkFeeZatFor(params, 0, true), (qint64)1000);          // the flat floor
+        QCOMPARE(YellowbackController::attestFeeZatFor(params, 62814070), (qint64)15703517);     // params.fees.protocol.attestFeeBps 2500
         QCOMPARE(YellowbackController::requiredZatFor(100000, 50000, 1990000), EST_ZAT);
         QCOMPARE(YellowbackController::requiredZatFor(100000, 50000, 0), (qint64)-1);
-        QCOMPARE(YellowbackController::mintCollateralZatFor(params, 1000), (qint64)200000000);  // MINT-5: 4 · FEE_MIN
+        QCOMPARE(YellowbackController::mintCollateralZatFor(params, 1000), (qint64)1000);       // MINT-5': no 4 · FEE_MIN floor (rpcversion 8)
         QCOMPARE(YellowbackController::mintCollateralZatFor(params, EST_ZAT), EST_ZAT);
         QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, estimateReply()).isEmpty());
         json ahead = estimateReply(); ahead["refHeight"] = 330; ahead["lockHeight"] = 378; ahead["claimHeight"] = 402;
@@ -3383,27 +3453,38 @@ private slots:
             Harness h;
             h.feedActive();
             h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
-            json f = feePayeeReply(EST_ZAT); f["feeZat"] = 200000000000;   // a server taking most of the collateral as the fee (audit G-2)
-            h.rpc.results[YellowbackRpc::GETFEEPAYEE] = f;
+            json e = estimateReply(); e["protocolFeeZat"] = 200000000000;   // a server taking most of the collateral as the fee (audit G-2)
+            h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = e;
+            h.rpc.results[YellowbackRpc::GETFEEPAYEE] = feePayeeReply(EST_ZAT);
             h.rpc.results[YellowbackRpc::MINT]        = mintReply();
             h.mintAmount("1000");
             h.tab.doMint();
             QCOMPARE(h.confirms.size(), 0);
             QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
-            QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
+            QVERIFY2(h.errorNotices.value(0).contains("protocolFeeZat is 200000000000"), qPrintable(h.errorNotices.value(0)));
+            json c = estimateReply(); c["protocolFeeCents"] = 50000;            // an inflated dollar fee
+            QVERIFY(YellowbackController::checkEstimate(params, 331, 100000, 48, c).join(" ").contains("protocolFeeCents is 50000 where the parameters give 1000"));
+            // yed_estimatefee (the Mint page's fee line): the bands, the price and the attestors' share
+            QVERIFY(YellowbackController::checkEstimateFee(params, 100000, estimateFeeReply()).isEmpty());
+            json bad = estimateFeeReply(); bad["feeZat"] = 2 * FEE1;
+            QVERIFY(YellowbackController::checkEstimateFee(params, 100000, bad).join(" ").contains("the protocol fee is"));
+            json noPrice = estimateFeeReply(); noPrice["pMint"] = nullptr; noPrice["feeZat"] = nullptr; noPrice["attestFeeZat"] = nullptr;
+            QVERIFY(YellowbackController::checkEstimateFee(params, 100000, noPrice).isEmpty());
         }
-        {   // Redeem with an inflated fee (yed_getfeepayee's quote; in-term: redeemInTermQuotesTheEarlyRedeemFee)
+        {   // Redeem with an inflated fee (yed_estimateredeem's quote on every node since rpcversion 8)
             Harness h;
             h.inTerm = false;
             json row = positionActive(); row["canRedeem"] = true;
             h.feedActive(381, json::array({row}));
-            json f = feePayeeReply(VAULT_ZAT); f["feeZat"] = 20000000000;
-            h.rpc.results[YellowbackRpc::GETFEEPAYEE] = f;
+            json q = estimateRedeemReply(382); q["protocolFeeZat"] = 20000000000; q["feeZat"] = 20000000000;
+            h.rpc.results[YellowbackRpc::ESTIMATEREDEEM] = q;
             h.rpc.results[YellowbackRpc::REDEEM]      = redeemReply();
             h.tab.redeemVault(YellowbackPosition::fromJson(row));
             QCOMPARE(h.confirms.size(), 0);
             QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
-            QVERIFY(h.errorNotices.value(0).contains("FEE-1 of the collateral"));
+            QVERIFY2(h.errorNotices.value(0).contains("protocolFeeZat is 20000000000"), qPrintable(h.errorNotices.value(0)));
+            json m = estimateRedeemReply(382); m["pMint"] = 1000000;      // a quote at another price than the vault's stored pMint
+            QVERIFY(YellowbackController::checkEstimateRedeem(infoActive()["params"], YellowbackPosition::fromJson(row), m).join(" ").contains("pMint is 1000000"));
         }
         {   // Claim: an inflated fee, then a claim height not yet reached
             Harness h;
@@ -3412,7 +3493,7 @@ private slots:
             h.rpc.results[YellowbackRpc::CLAIM] = redeemReply();
             h.tab.claimVault(YellowbackClaimable::fromJson(row));
             QCOMPARE(h.rpc.count(YellowbackRpc::CLAIM), 0);
-            QVERIFY(h.errorNotices.value(0).contains("the pool fee is"));
+            QVERIFY2(h.errorNotices.value(0).contains("the protocol fee is"), qPrintable(h.errorNotices.value(0)));
             Harness early;
             early.inTerm = false;                                    // under in-term claims the threshold decides at every height
             early.feedActive(400, json(nullptr), json::array({claimableRow()}));
@@ -3432,16 +3513,6 @@ private slots:
 
     // ── rpcversion 6: in-term claims (in-term plan IT-7, IT-8, IT-9; D-IT-15, D-IT-16) ─────────
 
-    // The quote yed_estimateredeem gives for positionActive() at `height` (tip + 1), consistent with
-    // the parameters: FEE-1 plus, before lock height 380, 5 % of the collateral (class A).
-    static json estimateRedeemReply(int height) {
-        const bool early = height < 380;
-        const qint64 earlyFee = early ? VAULT_ZAT * 500 / 10000 : 0;
-        return json{{"vault", "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8:0"}, {"status", "ACTIVE"},
-                    {"termClass", "A"}, {"lockHeight", 380}, {"height", height}, {"early", early}, {"burnedCents", 100000},
-                    {"collateralZat", VAULT_ZAT}, {"feeZat", fee1(VAULT_ZAT) + earlyFee}, {"earlyRedeemFeeBps", 500},
-                    {"earlyRedeemFeeZat", earlyFee}, {"payee", "smQvTmAz2ExamplePayoutAddress1111111"}, {"canRedeem", true}, {"error", ""}};
-    }
 
     void inTermPromiseIsTheDisclosure() {
         // IT-8 verbatim (tests/check-rpc-contract.py --spec checks it against the generated spec's §8.1)
@@ -3475,7 +3546,10 @@ private slots:
         QVERIFY(h.ctl.deadlineWarnings().isEmpty());                    // no claim-height deadline under in-term claims
         auto a = YellowbackTab::vaultActions(YellowbackPosition::fromJson(p), 331, h.ctl.params(), 2000000);
         QVERIFY(a.redeem && !a.renew && !a.release);
-        QVERIFY2(a.text.contains("early-redeem fee of 5 % of the collateral (about " % YellowbackFormat::zec(VAULT_ZAT * 500 / 10000) % ", worth $25.13 at the claim price $2.0000, against a debt of $1,000.00)"), qPrintable(a.text));
+        // rpcversion 8 (IT-9'): the early fee in dollars of the debt and in YEC at the vault's pMint, and that it disappears at term
+        QVERIFY2(a.text.contains("early-redeem fee of 5 % of the debt: $50.00 of the $1,000.00 debt (5 %), " % YellowbackFormat::zec(EARLY_A) %
+                                 " at the vault's mint price $1.9900; it disappears at the end of the term (height 380)"), qPrintable(a.text));
+        QVERIFY(a.text.contains("pays the protocol fee of $10.00 (" % YellowbackFormat::zec(FEE1)));
         QVERIFY(a.text.contains("if the claim price falls below $0.4378"));
         // the claim price nears the threshold (within 25 %): orange, and the banner warns
         json near = statsOpen(); near["pClaim"] = 500000; near["pFast"] = 500000;
@@ -3503,7 +3577,7 @@ private slots:
     }
 
     void redeemInTermQuotesTheEarlyRedeemFee() {
-        const qint64 earlyFee = VAULT_ZAT * 500 / 10000;
+        const qint64 earlyFee = EARLY_A;
         {   // in term: the quote first, the early-redeem fee named, the collateral out net of both fees
             Harness h;
             json p = positionActive(); p["canRedeem"] = true;
@@ -3516,11 +3590,11 @@ private slots:
             QCOMPARE(h.rpc.count(YellowbackRpc::GETFEEPAYEE), 0);
             QCOMPARE(h.confirms.size(), 1);
             const QString& text = h.confirms[0];
-            QVERIFY2(text.contains("Early-redeem fee: " % YellowbackFormat::zec(earlyFee) % " of YEC (5 % of the collateral, class A, worth "), qPrintable(text));
-            QVERIFY(text.contains("against a debt of $1,000.00), because"));
-            QVERIFY(text.contains("Network fee: at least " % YellowbackFormat::zec(1000) % " of YEC"));   // rpcversion 7: grows with size
+            QVERIFY2(text.contains("Early-redeem fee: $50.00 of the $1,000.00 debt (5 %), " % YellowbackFormat::zec(earlyFee) %
+                                   " at the vault's mint price $1.9900; it disappears at the end of the term (height 380), because the vault's term (class A)"), qPrintable(text));
+            QVERIFY(text.contains("Network fee: about " % YellowbackFormat::zec(20500000) % " of YEC"));   // rpcversion 8: $0.05/KB at the attested price
             QVERIFY(text.contains("about 8 KB"));
-            QVERIFY(text.contains("Pool fee: " % YellowbackFormat::zec(fee1(VAULT_ZAT))));
+            QVERIFY(text.contains("Protocol fee: $10.00 (" % YellowbackFormat::zec(FEE1) % " at the vault's mint price $1.9900)"));
             QVERIFY(text.contains("Redeeming at or after height 380 pays no early-redeem fee"));
             QVERIFY(text.contains(YellowbackFormat::zec(VAULT_ZAT - fee1(VAULT_ZAT) - earlyFee)));   // collateral out
             QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 1);
@@ -3529,7 +3603,9 @@ private slots:
             // the Redeem page says the early-redeem fee comes off too
             auto redeemCollateral = h.tab.page(YellowbackTab::Redeem)->findChild<QLabel*>("lblCollateral");
             QVERIFY(redeemCollateral != nullptr);
-            QVERIFY2(redeemCollateral->text().contains("early-redeem fee of 5 %"), qPrintable(redeemCollateral->text()));
+            QVERIFY2(redeemCollateral->text().contains("early-redeem fee of $50.00 of the $1,000.00 debt (5 %), " % YellowbackFormat::zec(EARLY_A)), qPrintable(redeemCollateral->text()));
+            QVERIFY(redeemCollateral->text().contains("minus the protocol fee of $10.00 (" % YellowbackFormat::zec(FEE1)));
+            QVERIFY(redeemCollateral->text().contains("it disappears at the end of the term (height 380)"));
         }
         {   // past the lock height: no early-redeem fee line
             Harness h;
@@ -3621,6 +3697,40 @@ private slots:
         QVERIFY(none.label("lblClaimHint").startsWith("No vault is claimable at the current claim price. 1 more vault(s)"));
     }
 
+    // rpcversion 8 (the fee structure): the Mint page's fee lines, the vault's stored mint price, the
+    // per-vault share limit (MINT-6b) and the new mint verdicts explained
+    void feeStructureOnTheMintPageAndVaults() {
+        Harness h;
+        h.feedActive(331, json::array({positionActive()}));
+        h.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = estimateReply();
+        h.estimateFor("1000");
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::ESTIMATEFEE), json::array({100000}));
+        QVERIFY2(h.label("lblProtocolFee").startsWith("$10.00 (" % YellowbackFormat::zec(FEE1) % " at the mint price $1.9900)"), qPrintable(h.label("lblProtocolFee")));
+        QVERIFY(h.label("lblProtocolFee").contains("a redeem pays $10.00 again"));
+        QVERIFY2(h.label("lblNetworkFee").startsWith("about " % YellowbackFormat::zec(6250000)), qPrintable(h.label("lblNetworkFee")));   // 2,500 bytes at 2,500,000 zat/KB
+        QVERIFY(h.label("m1").contains("$100,000.00"));
+        // a server whose fee disagrees with the bands: the line says so instead of the figure
+        json bad = estimateFeeReply(); bad["feeCents"] = 5000;
+        h.rpc.results[YellowbackRpc::ESTIMATEFEE] = bad;
+        h.estimateFor("1000.5");
+        QVERIFY2(h.label("lblProtocolFee").contains("failed the wallet's check"), qPrintable(h.label("lblProtocolFee")));
+        // the vault's mint price, a column and the vault's tooltip
+        auto m = h.ctl.positionsModel();
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::MintPrice), Qt::DisplayRole).toString(), QString("$1.9900"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Vault), Qt::ToolTipRole).toString().contains("Mint price $1.9900 per YEC"));
+        // MINT-6b: one mint at most max(10 % of the cap, $10,000)
+        Harness s;
+        json info = infoActive(); info["params"]["supplyCap"]["capCents"] = 15000000; info["params"]["supplyCap"]["maxVaultCents"] = 1500000;
+        s.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json::array(), json::array(), json(nullptr));
+        QVERIFY2(s.ctl.mintBlocker(1500001).contains("at most $15,000.00") && s.ctl.mintBlocker(1500001).contains("mint-vault-share"), qPrintable(s.ctl.mintBlocker(1500001)));
+        QVERIFY(s.ctl.mintBlocker(1500000).isEmpty());
+        // the verdicts, bare or after mempool-check-failed:
+        QVERIFY(YellowbackController::explainError("mempool-check-failed:mint-vault-share").contains("a tenth of the supply cap"));
+        QVERIFY(YellowbackController::explainError("mint-vault-share: 2000000 > 1500000").contains("split it over several vaults"));
+        QVERIFY(YellowbackController::explainError("mempool-check-failed:mint-supply-cap").contains("above the supply cap"));
+        QVERIFY(YellowbackController::explainError("bad-mint-amount: cents must be between 10000 and 10000000").contains("$100,000"));
+    }
+
     void mintConfirmationInTerm() {
         Harness h;
         h.feedActive();
@@ -3631,8 +3741,8 @@ private slots:
         h.tab.doMint();
         QCOMPARE(h.confirms.size(), 1);
         const QString& text = h.confirms[0];
-        QVERIFY2(text.contains("You can redeem at any time by paying back the $1,000.00 of YED; redeeming before height 377 also costs an early-redeem fee of 5 % of the collateral"), qPrintable(text));
-        QVERIFY(text.contains(YellowbackFormat::zec(EST_ZAT * 500 / 10000)));
+        QVERIFY2(text.contains("You can redeem at any time by paying back the $1,000.00 of YED; redeeming before height 377 also costs an early-redeem fee of 5 % of the debt ($50.00 of the $1,000.00 debt"), qPrintable(text));
+        QVERIFY(text.contains(YellowbackFormat::zec(EARLY_A)));
         QVERIFY(text.contains("falls below 125 % of its debt"));
         QVERIFY(text.contains("usually nothing"));
         QVERIFY(text.contains("This wallet warns you before that happens, and redeeming stops it."));
@@ -3644,7 +3754,7 @@ private slots:
         QVERIFY(text.contains("Sapling"));
         QVERIFY(text.contains("No hardware wallet, watch-only wallet or xpub"));
         QVERIFY(text.contains("0.25-0.6 s"));
-        QVERIFY2(text.contains("worth $") && text.contains("against a debt of $1,000.00"), qPrintable(text));
+        QVERIFY2(text.contains("it disappears at the end of the term (height 377)"), qPrintable(text));
         QCOMPARE(h.rpc.count(YellowbackRpc::MINT), 0);
     }
 
@@ -3868,7 +3978,7 @@ private slots:
         QVERIFY2(YellowbackController::checkEstimateRedeem(h.ctl.params(), vault, quote).isEmpty(),
                  qPrintable(YellowbackController::checkEstimateRedeem(h.ctl.params(), vault, quote).join("; ")));
         QCOMPARE(YellowbackJson::toInt(quote, YellowbackRpc::EstimateRedeem::EARLY_REDEEM_FEE_ZAT),
-                 YellowbackController::earlyRedeemFeeZatFor(h.ctl.params(), vault.termClass, vault.collateralZat));
+                 YellowbackController::earlyRedeemFeeZatFor(h.ctl.params(), vault.termClass, vault.mintedCents, vault.pMint));
 
         // To the lock height, then Renew
         mineTo(vault.lockHeight);

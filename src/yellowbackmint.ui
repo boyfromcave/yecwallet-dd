@@ -6,7 +6,7 @@
    <item>
     <widget class="QLabel" name="lblMintIntro">
      <property name="wordWrap"><bool>true</bool></property>
-     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. Every upgraded Ycash node enforces, as a consensus rule of the vault upgrade, that the collateral cannot leave the vault before its lock height and that, after it, releasing the collateral requires burning exactly the YED minted. The mint's pool fee (to a pool that publishes price quotes), any attestation fee and the network fee are paid from your own YEC on top of the collateral; a redemption pays its pool fee from the collateral.</string></property>
+     <property name="text"><string>Minting locks YEC as collateral in a vault and creates YED. Every upgraded Ycash node enforces, as a consensus rule of the vault upgrade, that the collateral cannot leave the vault before its lock height and that, after it, releasing the collateral requires burning exactly the YED minted. The protocol fee is in dollars of the YED you mint (1 % of the first $1,000, 0.5 % up to $10,000, 0.1 % above, at least $1), paid in YEC at the vault's mint price to a pool that publishes price quotes; the vault keeps that price, and redeeming it pays the same fee again from the collateral. The protocol fee, any attestation fee and the network fee of a mint are paid from your own YEC on top of the collateral.</string></property>
     </widget>
    </item>
    <item>
@@ -45,6 +45,10 @@
      <item row="6" column="1"><widget class="QLabel" name="lblUnlock"><property name="text"><string>-</string></property></widget></item>
      <item row="7" column="0"><widget class="QLabel" name="m7"><property name="text"><string>YEC available at the funding source</string></property></widget></item>
      <item row="7" column="1"><widget class="QLabel" name="lblYecAvailable"><property name="text"><string>-</string></property></widget></item>
+     <item row="10" column="0"><widget class="QLabel" name="m11"><property name="text"><string>Protocol fee</string></property></widget></item>
+     <item row="10" column="1"><widget class="QLabel" name="lblProtocolFee"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property><property name="toolTip"><string>The protocol fee of this mint (yed_estimatefee): dollars of the debt in marginal bands, converted to YEC at the mint price. A redeem of the vault pays the same dollar fee again, at the same price.</string></property></widget></item>
+     <item row="11" column="0"><widget class="QLabel" name="m12"><property name="text"><string>Network fee (estimated)</string></property></widget></item>
+     <item row="11" column="1"><widget class="QLabel" name="lblNetworkFee"><property name="text"><string>-</string></property><property name="wordWrap"><bool>true</bool></property><property name="toolTip"><string>Network fees of vault and YED transactions are dollars per KB at the attested price; your node prices the transaction by its size.</string></property></widget></item>
     </layout>
    </item>
    <item>
