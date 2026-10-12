@@ -1,36 +1,86 @@
 YecWallet is the official wallet for [Ycash](https://www.ycash.xyz) that runs on Linux, Windows and macOS.
 
-## Ycash Yellowback (YED) on this branch
+## Ycash vaults and Yellowback on this branch
 
-This branch (`upgrade/vault`) adds a **Yellowback** tab to YecWallet. It is the wallet side of a
-proposed Ycash network upgrade, **the vault upgrade**, which adds **vaults** to Ycash: YEC locked on
-chain under rules every node enforces. **Ycash Yellowback (YED)** is a dollar token built on vaults:
-lock YEC in a vault to mint YED (`1 YED = 1 US dollar`), return the YED to get the YEC back. If a
-vault's YEC becomes worth less than the YED it backs, others can claim it.
+This fork of YecWallet is the desktop wallet of the
+[Ycash vaults and Yellowback](https://github.com/boyfromcave/yellowback) project: a proposed Ycash
+network upgrade that adds **post-quantum vaults** (YEC locked under rules every node checks), with
+**Ycash Yellowback (YED)**, a dollar backed by YEC in vaults (`1 YED = $1`), as the first
+application. The wallet adds a **Yellowback** tab; everything else is stock YecWallet.
 
-- **What the tab does:** mint, send and redeem YED; claim an under-collateralised vault and, on
-  the **Pending claims** page, release the claimed YEC once its delay has passed. For
-  **attestors** (members of Yellowback's signer set, who sign YEC/USD prices): join the set, send
-  heartbeats, and cancel a claim made at a wrong price. The wallet does not touch the wYEC bridge.
-- **Node it needs:** a ycashd built from the `upgrade/vault` branch of
-  [ycash-dd](https://github.com/boyfromcave/ycash-dd) or
-  [ycash6](https://github.com/boyfromcave/ycash6). A stock ycashd has no Yellowback, and the tab
-  says so. Nothing in `ycash.conf` turns Yellowback on.
-- **Status: proposed, not live.** It runs on a local test network (regtest) only. It has not been
-  adopted by the Ycash Foundation, has not been audited, and has no activation height on mainnet
-  or testnet. The releases linked below are upstream YecWallet and know nothing of Yellowback.
-- **Try it:** in a ycash-dd checkout, `contrib/yellowback/devnet/yellowback-devnet up` starts a
-  local test network and `contrib/yellowback/devnet/yellowback-devnet wallet` opens this wallet on
-  it (the node's [devnet crash course](https://github.com/boyfromcave/ycash-dd/blob/upgrade/vault/doc/yellowback-devnet.md)
-  has the details). By hand: `yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`.
-- **Post-quantum line (`upgrade/quantum-vaults`):** every vault's owner key is a post-quantum
-  SLH-DSA key kept in the node's `wallet.dat`, and the wallet needs a ycashd from the same branch
-  (Yellowback RPC version 7). Post-quantum keys protect the authority to redeem a vault; shielded
-  (Sapling) YEC and the attestors' keys are not post-quantum, and no hardware wallet or watch-only
-  wallet supports these keys.
-- **More:** [docs/yellowback.md](docs/yellowback.md), the developer notes for the tab.
+> **Status: in development.** It runs on regtest and on a one-laptop devnet only. No activation
+> height is set on mainnet or testnet, the upgrade has not been adopted by the Ycash Foundation,
+> and there is no external audit. The releases linked under Installation are upstream YecWallet
+> and know nothing of vaults or YED.
 
-# Installation
+### What the Yellowback tab does
+
+- **Mint, send and redeem YED.** Lock YEC in a vault to mint YED; burn the YED to get the YEC back.
+  The mint and redeem screens show the fees before you confirm (see below).
+- **Claim** an undercollateralized vault, and release the claimed YEC from the **Pending claims**
+  page once its delay has passed.
+- **Attestors** (the bonded signer set that signs the YEC/USD price) can register with a bond,
+  send heartbeats, leave the set, withdraw their bond after the exit delay, report equivocation,
+  and cancel a claim made at a wrong price. The page shows the current bond minimum.
+- The wallet does not touch the wYEC or nYEC bridges.
+
+### Post-quantum keys
+
+- **Vault owners** sign with SLH-DSA-SHA2-128s. The node creates the owner key and keeps it in
+  `wallet.dat`; the wallet itself holds no post-quantum code.
+- **YED holders** use Falcon-512 addresses: `yb…` on mainnet, `yt…` on testnet, `yr…` on regtest
+  (53 characters). Falcon is active from the upgrade's first block on mainnet; Receive hands out a
+  Falcon address once it is, and Send refuses a vault owner's address or, after Falcon, an
+  ordinary one.
+- **Plain YEC** post-quantum addresses (`sq…` / `tq…` / `rq…`) hold YEC, never YED; the YED Send
+  page refuses them.
+- Shielded (Sapling) YEC, the attestors' keys and the pools' keys are not post-quantum. No
+  hardware wallet, watch-only wallet or xpub supports these keys.
+
+### Fees
+
+- **Protocol fee:** charged at the mint and again at the redeem, in dollars of the debt like tax
+  brackets (1.0 % of the first $1,000, 0.5 % up to $10,000, 0.1 % above, at least $1), paid in YEC
+  at the vault's mint price. Redeeming before the end of the term adds an early-redeem fee of
+  5 / 2.5 / 1 % of the debt, depending on the vault's class. The largest mint is $100,000.
+- **Network fee:** priced by size, in dollars per kilobyte at the attested price, with a floor and
+  a cap. Post-quantum signatures are large (a vault owner's spend is about 8 KB), so this matters.
+
+### The node it needs
+
+A `ycashd` built from the `upgrade/quantum-vaults` branch of
+[ycash-dd](https://github.com/boyfromcave/ycash-dd) or [ycash6](https://github.com/boyfromcave/ycash6)
+(this line joins `upgrade/vault` at release). The wallet requires Yellowback RPC version
+(`rpcversion`) **8** exactly; with any other node the tab is disabled and names both numbers. A
+stock `ycashd` has no Yellowback, and the tab says so. Nothing in `ycash.conf` turns Yellowback on.
+
+### Build and test
+
+With CMake, Ninja and Qt 6 (the CI uses Qt 6.5 with testlib):
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # add -DCMAKE_PREFIX_PATH=$(brew --prefix qt) on macOS
+ninja -C build yecwallet yellowback_test nodecompat_test nodedatacheck_test
+QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+python3 tests/check-rpc-contract.py   # the RPC fields the wallet reads vs docs/yellowback-rpc-contract.json
+```
+
+A release package with the node inside is built by `build.sh`, for example
+`bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd`.
+
+### Try it on one laptop
+
+In a ycash-dd checkout, `contrib/yellowback/devnet/yellowback-devnet up` starts a local test
+network with the upgrade active, and `contrib/yellowback/devnet/yellowback-devnet wallet` opens
+this wallet on it. By hand: `yecwallet --conf ~/yb-devnet/node0/ycash.conf --no-embedded`. See the
+node's [devnet guide](https://github.com/boyfromcave/ycash-dd/blob/upgrade/vault/doc/yellowback-devnet.md).
+
+### More
+
+- [docs/yellowback.md](docs/yellowback.md): developer notes for the tab, screen by screen.
+- [The parent project](https://github.com/boyfromcave/yellowback): plans, specs and every component.
+
+# Installation (upstream YecWallet)
 
 Head over to the releases page and grab the latest installers or binary. https://github.com/ycashfoundation/yecwallet/releases
 
