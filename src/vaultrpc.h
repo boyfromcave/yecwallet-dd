@@ -21,6 +21,7 @@ namespace VaultRpc {
 constexpr const char* VAULT_GETINFO       = "vault_getinfo";
 constexpr const char* SET_GETINFO         = "set_getinfo";       // "setid" ( height ): members, current/dormant
 constexpr const char* SET_HEARTBEAT       = "set_heartbeat";     // "setid" ( "memberkey" ): a SET_HEARTBEAT act
+constexpr const char* SET_LEAVE           = "set_leave";         // "setid" ( "memberkey" ): the member's own SET_REMOVE (the bond exit delay)
 constexpr const char* VAULT_RELEASE       = "vault_release";     // "intentoutpoint" ( "address"|"script" )
 constexpr const char* VAULT_BUILDCANCEL   = "vault_buildcancel"; // "intentoutpoint": the unsigned CANCEL spend
 constexpr const char* SET_SIGNCANCEL      = "set_signcancel";    // "hex": this wallet's cancel-set signatures
@@ -67,6 +68,15 @@ namespace Member {   // set_getinfo.memberlist[]
 namespace Heartbeat {
     constexpr const char* TXID              = "txid";
     constexpr const char* MEMBER_KEY        = "memberkey";
+}
+
+// ── set_leave ─────────────────────────────────────────────────────────────────────────────
+// The bond is spendable from bondspendableat = exitheight + the set's maturity (frozen if slashed meanwhile).
+namespace Leave {
+    constexpr const char* TXID              = "txid";
+    constexpr const char* MEMBER_KEY        = "memberkey";
+    constexpr const char* EXIT_HEIGHT       = "exitheight";
+    constexpr const char* BOND_SPENDABLE_AT = "bondspendableat";
 }
 
 // ── vault_buildcancel / set_signcancel ────────────────────────────────────────────────────

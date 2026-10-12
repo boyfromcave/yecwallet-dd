@@ -1159,6 +1159,16 @@ void YellowbackController::heartbeat(const QString& memberKey, OkFn ok, ErrFn er
     call(VaultRpc::SET_HEARTBEAT, params, ok, err);
 }
 
+// The member's own SET_REMOVE (the one removal of the attestor set that is valid): the record is
+// WITHDRAWN from the next block and the bond returns bondMaturity blocks later.
+void YellowbackController::leaveSet(const QString& memberKey, OkFn ok, ErrFn err) {
+    const QString id = attestorSetId();
+    if (id.isEmpty()) { if (err) err(tr("the node reports no YED attestor set")); return; }
+    json params = json::array({id.toStdString()});
+    if (!memberKey.isEmpty()) params.push_back(memberKey.toStdString());
+    call(VaultRpc::SET_LEAVE, params, ok, err);
+}
+
 void YellowbackController::releaseIntent(const QString& outpoint, const QString& recipientScript, OkFn ok, ErrFn err) {
     json params = json::array({outpoint.toStdString()});
     if (!recipientScript.isEmpty()) params.push_back(recipientScript.toStdString());

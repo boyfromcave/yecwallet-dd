@@ -252,8 +252,18 @@ namespace ParamsAttest {   // contract: yed_getinfo.params.attest
     constexpr const char* ARM_MIN             = "armMin";
     constexpr const char* EMERGENCY_PERSIST   = "emergencyPersist";
     constexpr const char* CARRIER_MODE        = "carrierMode";
-    constexpr const char* BOND_MIN_ZAT        = "bondMinZat";       // A5-b: the register dialog states them
-    constexpr const char* BOND_MIN_LOCK       = "bondMinLock";
+    constexpr const char* BOND_MIN_ZAT        = "bondMinZat";       // A5-b: the register dialog states them. D-Q-30: computed, the floor a
+                                                                    // join in the next block must meet (follows YED vault collateral)
+    constexpr const char* BOND_MIN_FLOOR_ZAT  = "bondMinFloorZat";  // D-Q-30: bondMinZat never below this, nor above the cap
+    constexpr const char* BOND_MIN_CAP_ZAT    = "bondMinCapZat";    // a bond of the cap always qualifies
+    constexpr const char* BOND_SHARE_BPS      = "bondShareBps";     // the share of vault collateral the seats back together
+    constexpr const char* BOND_MIN_LOCK       = "bondMinLock";      // 0 since the bond exit delay (no year lock)
+    constexpr const char* N_SLOTS             = "nSlots";           // the seated attestors per snapshot
+    constexpr const char* SEATS               = "seats";            // the OPEN attestor set's seats; a larger bond can evict
+    constexpr const char* SEAT_AGE_UNIT       = "seatAgeUnit";
+    constexpr const char* SEAT_AGE_CAP        = "seatAgeCap";
+    constexpr const char* SEAT_MARGIN_BPS     = "seatMarginBps";
+    constexpr const char* EVICT_MARGIN_BPS    = "evictMarginBps";
     constexpr const char* BOND_MATURITY       = "bondMaturity";
     constexpr const char* ATTEST_FEE_BPS      = "attestFeeBps";     // AFEE-1; H-9.3 recomputes the attestor fee from it
 }
@@ -492,6 +502,8 @@ namespace Attestor {   // contract: yed_listattestors[]
     constexpr const char* POOL_FRESH        = "poolFresh";
     constexpr const char* LAST_ACT          = "lastAct";       // P4-b: the set's lastAct for the member (join + maturity, or its last heartbeat)
     constexpr const char* BOND_FROZEN       = "bondFrozen";    // P4-b: the set froze the bond (removal with burn, set or price equivocation)
+    constexpr const char* SEAT_WEIGHT       = "seatWeight";    // decimal string, Q16 (divide by 65,536 for zat): the seat ranking
+    constexpr const char* EVICTED           = "evicted";       // WITHDRAWN by a larger bond's join into the full set (bond not frozen)
 
     constexpr const char* STATUS_PENDING    = "PENDING";       // value
     constexpr const char* STATUS_ELIGIBLE   = "ELIGIBLE";      // value
@@ -702,6 +714,7 @@ namespace RegisterResult {   // contract: yed_registerattestor
     constexpr const char* BOND_ZAT          = "bondZat";
     constexpr const char* BOND_LOCKTIME     = "bondLocktime";
     constexpr const char* MATURES_AT        = "maturesAt";
+    constexpr const char* WARNING           = "warning";       // "" or "bond-near-min: ..." (D-Q-30): post 10 % headroom or the cap
 }
 
 // v3: yed_withdrawbond result.
@@ -819,6 +832,8 @@ namespace RpcErrors {
     // yed_registerattestor since P4-b (the doc names them; the contract's error table does not)
     constexpr const char* REGISTER_NEEDS_ADMISSION = "register-needs-admission";
     constexpr const char* NO_ATTESTOR_SET   = "yellowback-no-attestor-set";
+    // yed_registerattestor's warning (D-Q-30 review B2): the bond is below bondMinCapZat and within 10 % of bondMinZat
+    constexpr const char* BOND_NEAR_MIN     = "bond-near-min";
     // rpcversion 8: the module's mint verdicts the wallet explains. The doc names them (MINT-6, MINT-6b) but
     // the contract's error table does not list them; they reach the wallet bare (a builder refusal) or after
     // mempool-check-failed:, so the wallet matches them anywhere in the message.

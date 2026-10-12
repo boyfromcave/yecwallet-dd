@@ -355,6 +355,7 @@ public:
     void registerAttestor(const QString& bondYec, int lockBlocks, OkFn ok, ErrFn err);
     void withdrawBond(int seq, const QString& to, OkFn ok, ErrFn err);                // v3
     void heartbeat(const QString& memberKey, OkFn ok, ErrFn err);                     // P4-b: set_heartbeat <attestorSetId> <key>
+    void leaveSet(const QString& memberKey, OkFn ok, ErrFn err);                      // set_leave <attestorSetId> <key>: the bond exit delay
     // rpcversion 5: the claim intent spends (the primitive's RPCs, vaultrpc.h)
     void releaseIntent(const QString& outpoint, const QString& recipientScript, OkFn ok, ErrFn err);   // vault_release; script "" = the wallet's own
     void buildCancel(const QString& outpoint, OkFn ok, ErrFn err);                    // vault_buildcancel

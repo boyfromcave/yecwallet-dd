@@ -124,6 +124,19 @@ public:
     void registerAttestor(const QString& bondYec, int lockBlocks);   // bondYec: a decimal string, sent as typed
     void withdrawBond(const YellowbackAttestor& a, const QString& to = QString());
     void heartbeatMember(const QString& memberKey);                   // set_heartbeat <attestorSetId> <key>
+    // The bond exit delay (owner 2026-10-11): leaving is the member's own SET_REMOVE (set_leave on the
+    // attestor set with the record's attestorPubKey); the bond is withdrawable bondMaturity blocks later.
+    void leaveAttestorSet(const YellowbackAttestor& a);
+    int  attestBondMaturity() const;                        // params.attest.bondMaturity (the exit delay)
+    bool walletHoldsActiveKey(const QString& key) const;    // set_getinfo: an active member key of this wallet
+    /** Withdraw is possible: WITHDRAWN (left or evicted), not frozen, unspent, and tip >= statusHeight +
+     *  bondMaturity (and the bond script's locktime). `unlockHeight` gets the height it opens at. */
+    static bool bondWithdrawable(const YellowbackAttestor& a, int height, int bondMaturity, int* unlockHeight = nullptr);
+    /** A decimal YEC string ("12.5", up to 8 decimals) in zat; -1 when malformed. Integer arithmetic only (F-8). */
+    static qint64 yecToZat(const QString& yec);
+    /** D-Q-30: the register dialog's advice for `bondZat` against params.attest: "" when fine, else the
+     *  bond-near-min headroom sentence (below the cap and within 10 % of bondMinZat). */
+    static QString bondHeadroomAdvice(qint64 bondZat, const nlohmann::json& attestParams);
     void reportEquivocation(const QString& hexA, const QString& hexB);          // two-step
     void sweepCarriers();                                                        // yed_sweepcarriers (Settings page)
 
