@@ -122,16 +122,13 @@ QString randomPassword() {
         "0123456789"
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz";
-
-    const int passwordLength = 10;
-    char* s = new char[passwordLength + 1];
-
-    for (int i = 0; i < passwordLength; ++i) {
-        s[i] = alphanum[QRandomGenerator::global()->bounded(quint32(sizeof(alphanum)))];
-    }
-
-    s[passwordLength] = 0;
-    return QString::fromStdString(s);
+    constexpr int alphabetSize = sizeof(alphanum) - 1;   // the literal's terminator is not a symbol (audit 06/W-1)
+    constexpr int passwordLength = 24;
+    QString s;
+    s.reserve(passwordLength);
+    for (int i = 0; i < passwordLength; ++i)
+        s.append(QLatin1Char(alphanum[QRandomGenerator::global()->bounded(quint32(alphabetSize))]));
+    return s;
 }
 
 /**

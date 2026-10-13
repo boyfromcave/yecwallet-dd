@@ -332,7 +332,8 @@ if(TARGET Qt6::Test AND NOT QT_STATIC)
     # yellowback_test: the Yellowback tab. nodecompat_test: the version-aware calls for the two
     # ycashd lines (v4.5.0 and 6.20.0, ycash6 plan Phase 7), against a loopback mock ycashd.
     # nodedatacheck_test: the one-way data directory upgrade check (NodeDataCheck).
-    foreach(test_name yellowback_test nodecompat_test nodedatacheck_test)
+    # connection_test: randomPassword(), the generated ycash.conf rpcpassword (audit 06/W-1).
+    foreach(test_name yellowback_test nodecompat_test nodedatacheck_test connection_test)
         if(test_name STREQUAL "yellowback_test")
             set(test_source tests/yellowbacktab_test.cpp)
         else()
