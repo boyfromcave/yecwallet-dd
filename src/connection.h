@@ -31,6 +31,10 @@ struct ConnectionConfig {
 
 class Connection;
 
+// The rpcpassword written into a freshly created ycash.conf: 24 characters drawn uniformly from
+// [0-9A-Za-z] by QRandomGenerator::global() (audit 06/W-1). Declared here for tests/connection_test.cpp.
+QString randomPassword();
+
 class ConnectionLoader {
 
 public:

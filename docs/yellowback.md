@@ -204,6 +204,7 @@ cmake -S . -B build -DCMAKE_PREFIX_PATH=$(brew --prefix qt) && cmake --build bui
 QT_QPA_PLATFORM=offscreen build/bin/yellowback_test        # offline cases; the devnet cases QSKIP
 QT_QPA_PLATFORM=offscreen build/bin/nodecompat_test        # v4.5.0 / 6.20.0 call shapes (loopback mock ycashd)
 QT_QPA_PLATFORM=offscreen build/bin/nodedatacheck_test     # the data directory upgrade check
+QT_QPA_PLATFORM=offscreen build/bin/connection_test        # the generated ycash.conf rpcpassword (audit 06/W-1)
 python3 tests/check-rpc-contract.py                        # yellowbackrpc.h vs docs/yellowback-rpc-contract.json
 python3 tests/check-rpc-contract.py --spec ../ycash-dd/doc/yellowback-spec.md   # in-term line: the disclosure is IT-8 verbatim
 grep -rn 'trustless' src/ | { ! grep .; }
@@ -528,5 +529,6 @@ mint → renew, and claim → release / claim → attestor cancel against a fres
 | `src/settings.{cpp,h}` | `yellowback/unitcents`, `yellowback/advanced`, `yellowback/backuppending`; `getYellowbackRpcVersion()` (the prototype's `yellowback/endpoints` key is no longer read) |
 | `src/controller.{cpp,h}`, `src/mainwindow.{cpp,h}` | creation and the three hooks; tab registration; `setEZcashd` now finds the console tab by `indexOf` because index 4 is taken |
 | `src/nodedatacheck.{cpp,h}`, `tests/nodedatacheck_test.cpp` | the one-way data directory upgrade check and its QTest (see "The upgrade warning"); the dialog is `ConnectionLoader::confirmNodeDataUpgrade` in `src/connection.cpp` |
+| `src/connection.{cpp,h}` (`randomPassword`), `tests/connection_test.cpp` | the generated `ycash.conf` `rpcpassword`: 24 characters from `[0-9A-Za-z]`; the inherited generator indexed the alphabet with `sizeof` of the literal, so a NUL could truncate the password, and leaked its buffer (audit 06/W-1) |
 | `src/nodecompat.h`, `tests/nodecompat_test.cpp` | the v4.5.0 / 6.20.0 call shapes (see "Two node lines") and their QTest |
 | `CMakeLists.txt`, `tests/yellowbacktab_test.cpp`, `tests/check-rpc-contract.py` | source registration; the optional `yellowback_test` QTest target (`find_package(Qt6 OPTIONAL_COMPONENTS Test)`, skipped when `QT_STATIC`); the contract checker |

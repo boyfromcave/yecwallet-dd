@@ -147,7 +147,7 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build the app and the three QTest targets
-        run: ninja -C build yecwallet yellowback_test nodecompat_test nodedatacheck_test
+        run: ninja -C build yecwallet yellowback_test nodecompat_test nodedatacheck_test connection_test
       - name: ccache statistics
         if: ${{ !cancelled() }}
         run: ccache --show-stats
