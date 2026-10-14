@@ -1227,7 +1227,7 @@ QString YellowbackTab::claimSummary(const json& r) const {
         out += "\n" % tr("claim path: underwater (a) at the combined claim price %1").arg(YellowbackFormat::priceOrUndefined(r, ClaimResult::P_CLAIM));
     qint64 residual = YellowbackJson::toInt(r, ClaimResult::RESIDUAL_ZAT);
     if (YellowbackJson::has(r, ClaimResult::RESIDUAL_ZAT))
-        out += "\n" % (residual > 0 ? tr("residual intent for the vault owner: %1 (if the claim is cancelled, it stays held until the vault closes, and after the quiet period only while the position is no longer claimable)").arg(YellowbackFormat::zec(residual)) : tr("residual to the owner: none"));
+        out += "\n" % (residual > 0 ? tr("residual intent for the vault owner: %1 (if the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable)").arg(YellowbackFormat::zec(residual)) : tr("residual to the owner: none"));
     qint64 attestFee = YellowbackJson::toInt(r, ClaimResult::ATTEST_FEE_ZAT);
     if (YellowbackJson::has(r, ClaimResult::ATTEST_FEE_ZAT))
         out += "\n" % (attestFee > 0 ? tr("attestation fee %1 to %2").arg(YellowbackFormat::zec(attestFee)).arg(YellowbackJson::toStr(r, ClaimResult::ATTEST_PAYEE, tr("an attestor")))
@@ -1297,7 +1297,7 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
                 : tr("This vault was claimed (claim %1 at height %2): its claim delay has passed and the claimant may release the collateral now.")
                       .arg(c->txid.left(16) % "…").arg(c->height);
         if (const YellowbackIntent* r = p.residualIntent())
-            a.text += " " % tr("Your residual (the collateral above the claimant's share) waits in intent %1. It can be released to you from height %2, but if the claim is cancelled it stays held until the vault closes, and after the quiet period only while the position is no longer claimable (Pending claims page).")
+            a.text += " " % tr("Your residual (the collateral above the claimant's share) waits in intent %1. It can be released to you from height %2, but if the claim is cancelled it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable (Pending claims page).")
                                 .arg(r->outpoint()).arg(r->releaseHeight);
     } else if (p.status == STATUS_ACTIVE) {
         // H-9.2: the two deadlines as dates, on every ACTIVE vault
@@ -1817,7 +1817,7 @@ QString YellowbackTab::describeClaimPath(const YellowbackClaimable& c) {
     else
         out = tr("Claim path: none yet — this node cannot build the price proof (too few fresh attestations in its pool), so the node will refuse the claim until the subscriber refills it.");
     if (c.residualZat > 0)
-        out += " " % tr("Residual: %1 of YEC goes to the vault owner in its own intent (the collateral above the debt's worth); it is not yours. If the claim is cancelled, that residual stays held until the vault closes, and after the quiet period only while the position is no longer claimable.").arg(YellowbackFormat::zec(c.residualZat));
+        out += " " % tr("Residual: %1 of YEC goes to the vault owner in its own intent (the collateral above the debt's worth); it is not yours. If the claim is cancelled, that residual stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable.").arg(YellowbackFormat::zec(c.residualZat));
     else
         out += " " % tr("Residual to the owner: none.");
     if (c.attestFeeZat > 0)
@@ -1909,8 +1909,8 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
 // Every CLAIMING vault's intents (yed_listvaults "CLAIMING"). A claimant intent is released to
 // the claimant from releaseHeight on (vault_release finds the recipient among this wallet's keys);
 // the owner's residual intent pays the owner's PQPKH. If the claim is cancelled, that residual
-// stays held until the vault closes, and after the quiet period only while the position is no
-// longer claimable (CAN-3). Before releaseHeight a current member of the YED attestor set may
+// stays held until the vault closes. After the quiet period it can be released only once the
+// position is no longer claimable (CAN-3). Before releaseHeight a current member of the YED attestor set may
 // cancel a claimant intent: the collateral returns to the vault (ACTIVE again under the cancel's
 // txid) and the burn is lost.
 
@@ -1922,7 +1922,7 @@ void YellowbackTab::setupPendingClaims() {
     lblPendingIntro->setText(tr("Claims waiting out the claim delay. A claim burns the vault's debt and moves its collateral into a claim intent: "
                                 "from its release height the claimant releases it (Release), and the vault is CLAIMED. Before then any current member "
                                 "of the YED attestor set may cancel a claim made at a wrong price: the collateral returns to the vault, which is ACTIVE again, "
-                                "and the claimant's burn is not refunded. The owner's residual, when there is one, waits in its own intent. If the claim is cancelled, it stays held until the vault closes, and after the quiet period only while the position is no longer claimable."));
+                                "and the claimant's burn is not refunded. The owner's residual, when there is one, waits in its own intent. If the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable."));
     layout->addWidget(lblPendingIntro);
     tblPendingClaims = new QTableView(pages[PendingClaims]);
     tblPendingClaims->setObjectName("tblPendingClaims");
@@ -2015,8 +2015,8 @@ void YellowbackTab::updatePendingClaims() {
     btnCancelClaim->setEnabled(actionsEnabled && canCancel);
     QString text;
     if (residual)
-        text = matured ? tr("The owner's residual of vault %1 can be released to the owner now, unless the claim was cancelled: then it stays held until the vault closes, and after the quiet period only while the position is no longer claimable.").arg(c->vault.vaultName())
-                       : tr("The owner's residual of vault %1 can be released to the owner from height %2 (%3), unless the claim is cancelled: then it stays held until the vault closes, and after the quiet period only while the position is no longer claimable.")
+        text = matured ? tr("The owner's residual of vault %1 can be released to the owner now, unless the claim was cancelled: then it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable.").arg(c->vault.vaultName())
+                       : tr("The owner's residual of vault %1 can be released to the owner from height %2 (%3), unless the claim is cancelled: then it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable.")
                              .arg(c->vault.vaultName()).arg(c->intent.releaseHeight).arg(YellowbackPendingClaimsModel::remaining(c->intent, height));
     else if (matured)
         text = c->mineClaim ? tr("Your claim of vault %1 has matured: release the collateral to your address now.").arg(c->vault.vaultName())

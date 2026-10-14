@@ -934,7 +934,7 @@ QVariant YellowbackPendingClaimsModel::data(const QModelIndex& index, int role) 
     }
     if (role == Qt::ToolTipRole) {
         if (c.intent.role == ROLE_RESIDUAL)
-            return tr("The owner's residual (RED-5): the collateral above what the claimant receives. It cannot be cancelled. If the claim is cancelled, it stays held until the vault closes, and after the quiet period only while the position is no longer claimable.");
+            return tr("The owner's residual (RED-5): the collateral above what the claimant receives. It cannot be cancelled. If the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable.");
         return tr("Intent %1: released to the claimant from height %2 on. Until then any member of the YED attestor set may cancel it as a wrong-price claim; "
                   "the collateral then returns to the vault and the claim's burn is not refunded.").arg(c.intent.outpoint()).arg(c.intent.releaseHeight);
     }
