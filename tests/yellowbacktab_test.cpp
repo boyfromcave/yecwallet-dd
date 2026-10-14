@@ -1607,7 +1607,7 @@ private slots:
         QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
         const QString warning = h.confirms.last();
         QVERIFY2(warning.contains("WARNING. Cancel only a claim made at a wrong price"), qPrintable(warning));
-        QVERIFY(warning.contains("burn of $1,000.00 of YED is NOT refunded"));
+        QVERIFY(warning.contains("burn of $1,000.00 of YED is re-issued to the claimant"));
         QVERIFY(warning.contains("provable equivocation"));
         QVERIFY(warning.contains("freezes your bond"));
         QVERIFY(warning.contains("must confirm by height 414"));
@@ -1620,7 +1620,7 @@ private slots:
         QCOMPARE(h.rpc.lastParams("vault_send"), json::array({"04deadbeefsigned"}));
         QCOMPARE(Settings::getInstance()->getYellowbackSignedCancel(outpoint), QString("04deadbeefsigned"));
         QVERIFY2(h.notices.last().startsWith("Cancel sent|txid ca9ce1"), qPrintable(h.notices.last()));
-        QVERIFY(h.notices.last().contains("burn is not refunded"));
+        QVERIFY(h.notices.last().contains("burn is re-issued to the claimant"));
         // a second cancel of the same intent re-sends the kept transaction and signs nothing
         h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
         QCOMPARE(h.rpc.count("vault_buildcancel"), 1);
@@ -1672,7 +1672,7 @@ private slots:
         QCOMPARE(outcomes[0].outcome, QString("cancelled"));
         QVERIFY(h.visible("lblCancelledClaims"));
         QVERIFY2(h.label("lblCancelledClaims").contains("was cancelled by the attestor set"), qPrintable(h.label("lblCancelledClaims")));
-        QVERIFY(h.label("lblCancelledClaims").contains("$1,000.00 of YED it burned are not refunded"));
+        QVERIFY(h.label("lblCancelledClaims").contains("$1,000.00 of YED it burned were re-issued to you"));
         QVERIFY(h.label("lblCancelledClaims").contains("more collateralised"));
         // a released claim reads CLAIMED, a pending one CLAIMING; neither is listed as cancelled
         QCOMPARE(YellowbackTab::describeCancelledClaims({}), QString());
@@ -2434,7 +2434,7 @@ private slots:
         QVERIFY2(h.confirms[0].contains("at most $1,000.99"), qPrintable(h.confirms[0]));                               // the burn cap sent (H-9.3)
         QVERIFY(h.confirms[0].contains("$0.4000 per YEC"));
         QVERIFY(h.confirms[0].contains("waits in a claim intent for 10 blocks"));
-        QVERIFY(h.confirms[0].contains("does NOT refund the $1,000.00 of YED you burn"));
+        QVERIFY(h.confirms[0].contains("re-issues the $1,000.00 of YED you burn to you"));
         // yed_claim <vaultTxid> [to] [bundleHex] [wait]: default destination, pool bundle, wait = false
         QCOMPARE(h.rpc.lastParams(YellowbackRpc::CLAIM), json::array({"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "", "", false, 24874371860, 100099}));   // minOutZat = intent - 1 % (F-1); maxBurnCents = debt + 99 (H-9.3)
         QVERIFY(h.notices[0].startsWith("Claim sent|"));
@@ -4327,7 +4327,7 @@ private slots:
         QVERIFY2(height() + 1 < pc->intent.releaseHeight, "the claim matured before the attestor could cancel it");
         a.tab.cancelClaim(*pc);
         QVERIFY2(a.errorNotices.isEmpty(), qPrintable(a.errorNotices.join("\n")));
-        QVERIFY(a.confirms.last().contains("NOT refunded"));
+        QVERIFY(a.confirms.last().contains("is re-issued to the claimant"));
         QVERIFY2(a.notices.last().startsWith("Cancel sent|"), qPrintable(a.notices.last()));
         const QString cancelTx = noticeTxid(a.notices.last());
         QCOMPARE(cancelTx.size(), 64);
@@ -4346,12 +4346,12 @@ private slots:
         h.ctl.getVault(cancelTxid, [](const json&) {}, [&](const QString& e) { gone = e; });
         QVERIFY2(gone.startsWith("vault-not-found"), qPrintable(gone));
         QVERIFY(pendingRow(h.ctl, cancelTxid) == nullptr);
-        // The claimant's page names the cancelled claim and the lost burn; its YED stays burned
+        // The claimant's page names the cancelled claim and its burn, which is re-issued to the claimant
         h.ctl.refreshClaimOutcomes();
         QTRY_VERIFY_WITH_TIMEOUT(h.visible("lblCancelledClaims"), 5000);
         QVERIFY2(h.label("lblCancelledClaims").contains("was cancelled by the attestor set"), qPrintable(h.label("lblCancelledClaims")));
-        QVERIFY(h.label("lblCancelledClaims").contains("$100.00 of YED it burned are not refunded"));
-        QCOMPARE(h.ctl.confirmedCents(), yedBefore);
+        QVERIFY(h.label("lblCancelledClaims").contains("$100.00 of YED it burned were re-issued to you"));
+        QCOMPARE(h.ctl.confirmedCents(), yedBefore + 10000);
         // The attestor never signs a second cancel of that intent
         QVERIFY(!Settings::getInstance()->getYellowbackSignedCancel(claimC % ":0").isEmpty());
         QVERIFY(h.copyIsClean());

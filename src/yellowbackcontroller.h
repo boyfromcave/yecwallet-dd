@@ -362,7 +362,7 @@ public:
     void signCancel(const QString& hex, OkFn ok, ErrFn err);                          // set_signcancel
     void sendVaultTx(const QString& hex, OkFn ok, ErrFn err);                         // vault_send
     /** Follow every claim of this wallet (yed_listtransactions "claim") to its outcome: pending,
-     *  released, or cancelled by the attestor set (the burn is not refunded, U-24). */
+     *  released, or cancelled by the attestor set (the burn is re-issued to the claimant, CAN-1). */
     void refreshClaimOutcomes();
     void reportEquivocation(const QString& hexA, const QString& hexB, OkFn ok, ErrFn err);   // v3, two-step
 
