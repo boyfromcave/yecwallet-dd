@@ -1175,8 +1175,30 @@ void YellowbackController::releaseIntent(const QString& outpoint, const QString&
     call(VaultRpc::VAULT_RELEASE, params, ok, err);
 }
 
-void YellowbackController::buildCancel(const QString& outpoint, OkFn ok, ErrFn err) {
-    call(VaultRpc::VAULT_BUILDCANCEL, json::array({outpoint.toStdString()}), ok, err);
+void YellowbackController::signCancelCosign(const QString& outpoint, qint64 priceMicroUsd, int seq, OkFn ok, ErrFn err) {
+    json params = json::array({outpoint.toStdString()});
+    if (priceMicroUsd >= 0 || seq >= 0) params.push_back(priceMicroUsd >= 0 ? json(priceMicroUsd) : json(nullptr));
+    if (seq >= 0) params.push_back(seq);
+    call(YellowbackRpc::SIGNCANCELCOSIGN, params, ok, err);
+}
+
+void YellowbackController::buildCancel(const QString& outpoint, const QStringList& cosigs, OkFn ok, ErrFn err) {
+    json list = json::array();
+    for (const QString& c : cosigs) list.push_back(c.toStdString());
+    call(YellowbackRpc::BUILDCANCEL, json::array({outpoint.toStdString(), list}), ok, err);
+}
+
+QList<int> YellowbackController::walletCancelSeqs() const {
+    QList<int> seqs;
+    for (const auto& m : walletMembers()) {
+        if (attestors == nullptr || m.status != VaultRpc::Member::STATUS_ACTIVE || !m.current || m.bondFrozen) continue;
+        for (int i = 0; i < attestors->rowCount(QModelIndex()); i++) {
+            const YellowbackAttestor* a = attestors->rowAt(i);
+            if (a != nullptr && a->attestorPubKey.compare(m.key, Qt::CaseInsensitive) == 0 && !seqs.contains(a->seq)) seqs.append(a->seq);
+        }
+    }
+    std::sort(seqs.begin(), seqs.end());
+    return seqs;
 }
 
 void YellowbackController::signCancel(const QString& hex, OkFn ok, ErrFn err) {

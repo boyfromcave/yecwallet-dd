@@ -634,6 +634,37 @@ struct DevnetTransport {
     }
 };
 
+// CAN-1 + CAN-2: a CLAIMING vault and the canned replies of the attestor cancel (cancelClaim*)
+static json cancelVault(int cancelsRequired = 1, int cancelCount = 0) {
+    json v = claimingVault();
+    v["burnedCents"] = 100099; v["cancelsRequired"] = cancelsRequired; v["cancelCount"] = cancelCount;
+    v["cancelQuietUntil"] = cancelCount > 0 ? json(9000) : json(nullptr);
+    v["refundHolder"] = "76a914a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d488ac";
+    return v;
+}
+static QString cosigHex(char c) { return QString(138, QChar(c)); }
+static json cosignReply(char c, int seq) {
+    return json{{"cosig", cosigHex(c).toStdString()}, {"seq", seq}, {"priceMicroUsd", 500000}, {"citedHeight", 403}, {"reused", true}};
+}
+static json buildCancelReply(const json& cosigners) {
+    json b = json::parse(R"({"hex": "04deadbeef", "required": 1, "cancelsetid": "5e75", "deadline": 414, "intentconfirmed": true,
+      "refund": {"vout": 1, "script": "76a914a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d488ac", "cents": 100099},
+      "carrierTxid": "cc0000000000000000000000000000000000000000000000000000000000000c"})");
+    b["cosigners"] = cosigners; b["cancelsRequired"] = (int)cosigners.size();
+    return b;
+}
+static void cannedCancel(Harness& h, const json& vault) {
+    h.ctl.feedUpgrade(json::array({vault}), attestorSetReply(true));
+    h.rpc.results[YellowbackRpc::LISTVAULTS] = json::array({vault});    // the refresh after the action reads them back
+    h.rpc.results["set_getinfo"] = attestorSetReply(true);
+    json claimInfo = txInfoClaim(); claimInfo["txid"] = CLAIM_TXID; claimInfo["feeZat"] = 502512563;
+    h.rpc.results[YellowbackRpc::GETTXINFO] = claimInfo;
+    h.rpc.results[YellowbackRpc::SIGNCANCELCOSIGN] = cosignReply('a', 1);
+    h.rpc.results[YellowbackRpc::BUILDCANCEL] = buildCancelReply(json::array({1}));
+    h.rpc.results["set_signcancel"] = json::parse(R"({"hex": "04deadbeefsigned", "complete": true, "signatures": 1, "required": 1, "sighash": "00", "setsigs": []})");
+    h.rpc.results["vault_send"]     = "ca9ce10000000000000000000000000000000000000000000000000000000000";
+}
+
 class YellowbackTabTest : public QObject {
     Q_OBJECT
 
@@ -1583,52 +1614,63 @@ private slots:
         QVERIFY(h.copyIsClean());
     }
 
-    // The attestor's cancel of a wrong-price claim: the warning names the lost burn and the
-    // equivocation risk; build, sign, send through the primitive RPCs; the signed cancel is kept
-    // and a second attempt only re-sends it, never signs another.
+    // The attestor's cancel of a wrong-price claim (CAN-1 + CAN-2): the warning names the burn that is
+    // re-issued, the claimant's lost YEC costs, the co-signatures needed and the equivocation risk; this
+    // wallet co-signs (yed_signcancelcosign), the module builds the cancel (yed_buildcancel, never the
+    // primitive's vault_buildcancel, which refuses a YED intent), set_signcancel signs it and vault_send
+    // sends it; the signed cancel is kept and a second attempt only re-sends it, never signs another.
     void cancelClaimFlow() {
         Harness h;
         h.feedActive(408);
-        h.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(true));
-        h.rpc.results[YellowbackRpc::LISTVAULTS] = json::array({claimingVault()});    // the refresh after the action reads them back
-        h.rpc.results["set_getinfo"] = attestorSetReply(true);
+        cannedCancel(h, cancelVault());
         const QString outpoint = QString(CLAIM_TXID) % ":0";
         Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
-        h.rpc.results["vault_buildcancel"] = json::parse(R"({"hex": "04deadbeef", "required": 1, "cancelsetid": "5e75", "deadline": 414})");
-        h.rpc.results["set_signcancel"]    = json::parse(R"({"hex": "04deadbeefsigned", "complete": true, "signatures": 1, "required": 1, "sighash": "00", "setsigs": []})");
-        h.rpc.results["vault_send"]        = "ca9ce10000000000000000000000000000000000000000000000000000000000";
         // the residual intent cannot be cancelled
         h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(1));
-        QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
+        QCOMPARE(h.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
         QVERIFY(h.errorNotices.last().contains("Only a claimant intent can be cancelled"));
-        // a declined warning sends nothing
+        // a declined warning co-signs and sends nothing
         h.answer = false;
         h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
-        QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
+        QCOMPARE(h.rpc.count(YellowbackRpc::SIGNCANCELCOSIGN), 0);
+        QCOMPARE(h.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
         const QString warning = h.confirms.last();
         QVERIFY2(warning.contains("WARNING. Cancel only a claim made at a wrong price"), qPrintable(warning));
-        QVERIFY(warning.contains("burn of $1,000.00 of YED is re-issued to the claimant"));
+        QVERIFY(warning.contains("whole burn of $1,000.99 of YED is re-issued to the holder it came from (the claimant, CAN-1)"));   // burnedCents, not mintedCents
+        QVERIFY(warning.contains("the claim's protocol fee of " % YellowbackFormat::zec(502512563)));
+        QVERIFY(warning.contains("needs 1 co-signature(s) of distinct current members"));
+        QVERIFY(warning.contains("cancelled 0 time(s)"));
+        QVERIFY(warning.contains("This wallet holds 1 seat(s)"));
+        QVERIFY(!warning.contains("paste the co-signatures"));
+        QVERIFY(warning.contains("equivocation guard"));
         QVERIFY(warning.contains("provable equivocation"));
         QVERIFY(warning.contains("freezes your bond"));
         QVERIFY(warning.contains("must confirm by height 414"));
         QVERIFY(warning.contains("1 signature(s) needed"));
-        // confirmed: build, sign, keep, send
+        // confirmed: co-sign with the node's default seat (no attestor list read), build, sign, keep, send
         h.answer = true;
         h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
-        QCOMPARE(h.rpc.lastParams("vault_buildcancel"), json::array({outpoint.toStdString()}));
+        QVERIFY2(h.errorNotices.size() == 1, qPrintable(h.errorNotices.join("\n")));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SIGNCANCELCOSIGN), json::array({outpoint.toStdString()}));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::BUILDCANCEL), json::array({outpoint.toStdString(), json::array({cosigHex('a').toStdString()})}));
         QCOMPARE(h.rpc.lastParams("set_signcancel"), json::array({"04deadbeef"}));
         QCOMPARE(h.rpc.lastParams("vault_send"), json::array({"04deadbeefsigned"}));
+        QCOMPARE(h.rpc.count("vault_buildcancel"), 0);
         QCOMPARE(Settings::getInstance()->getYellowbackSignedCancel(outpoint), QString("04deadbeefsigned"));
         QVERIFY2(h.notices.last().startsWith("Cancel sent|txid ca9ce1"), qPrintable(h.notices.last()));
-        QVERIFY(h.notices.last().contains("burn is re-issued to the claimant"));
+        QVERIFY(h.notices.last().contains("burn of $1,000.99 of YED is re-issued at ca9ce10000000000000000000000000000000000000000000000000000000000:1"));
+        QVERIFY(h.notices.last().contains("76a914a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d488ac"));
+        QVERIFY(h.notices.last().contains("Co-signers (seq): 1"));
         // a second cancel of the same intent re-sends the kept transaction and signs nothing
         h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
-        QCOMPARE(h.rpc.count("vault_buildcancel"), 1);
+        QCOMPARE(h.rpc.count(YellowbackRpc::SIGNCANCELCOSIGN), 1);
+        QCOMPARE(h.rpc.count(YellowbackRpc::BUILDCANCEL), 1);
         QCOMPARE(h.rpc.count("set_signcancel"), 1);
         QCOMPARE(h.rpc.count("vault_send"), 2);
         QVERIFY(h.confirms.last().contains("will not sign another one"));
         h.selectRow("tblPendingClaims", 0);
         QVERIFY(h.label("lblPendingAction").contains("already signed a cancel"));
+        QVERIFY(h.label("lblPendingAction").contains("with 1 co-signature(s) of distinct current members"));
         // a set that needs more signatures: kept, put on the clipboard, nothing sent
         Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
         h.rpc.results["set_signcancel"] = json::parse(R"({"hex": "04partly", "complete": false, "signatures": 1, "required": 2})");
@@ -1638,24 +1680,160 @@ private slots:
         QVERIFY(h.notices.last().contains("1 of 2 signatures"));
         QCOMPARE(Settings::getInstance()->getYellowbackSignedCancel(outpoint), QString("04partly"));
         Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        // the node's refusal of the build is shown verbatim; nothing is signed with the set key
+        h.rpc.results.remove(YellowbackRpc::BUILDCANCEL);
+        h.rpc.errors[YellowbackRpc::BUILDCANCEL] = "cancel-cosign-needed: this cancel needs 2 co-signature(s) of distinct current members (cancelsRequired), 1 valid given (yed_signcancelcosign)";
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY2(h.errorNotices.last().startsWith("yed_buildcancel failed: cancel-cosign-needed"), qPrintable(h.errorNotices.last()));
+        QCOMPARE(h.rpc.count("set_signcancel"), 2);
+        QVERIFY(Settings::getInstance()->getYellowbackSignedCancel(outpoint).isEmpty());
         // a wallet that is no attestor, or a matured intent: refused before any RPC
         Harness plain;
         plain.feedActive(408);
-        plain.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(false));
+        plain.ctl.feedUpgrade(json::array({cancelVault()}), attestorSetReply(false));
         plain.tab.cancelClaim(*plain.ctl.pendingClaimsModel()->rowAt(0));
-        QCOMPARE(plain.rpc.count("vault_buildcancel"), 0);
+        QCOMPARE(plain.rpc.count(YellowbackRpc::SIGNCANCELCOSIGN), 0);
+        QCOMPARE(plain.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
         QVERIFY(plain.errorNotices.last().contains("no current member key"));
         Harness late;
         late.feedActive(414);
-        late.ctl.feedUpgrade(json::array({claimingVault()}), attestorSetReply(true));
+        late.ctl.feedUpgrade(json::array({cancelVault()}), attestorSetReply(true));
         late.tab.cancelClaim(*late.ctl.pendingClaimsModel()->rowAt(0));
-        QCOMPARE(late.rpc.count("vault_buildcancel"), 0);
+        QCOMPARE(late.rpc.count(YellowbackRpc::SIGNCANCELCOSIGN), 0);
         QVERIFY(late.errorNotices.last().contains("can no longer be cancelled"));
         QVERIFY(h.copyIsClean());
     }
 
+    // CAN-2's escalation: a position cancelled twice within the quiet period needs three distinct
+    // co-signers. This wallet holds one seat, so it co-signs with it, puts its co-signature on the
+    // clipboard and asks for the other members'; without them nothing is built, signed or sent.
+    void cancelClaimNeedsOtherMembers() {
+        Harness h;
+        h.feedActive(408);
+        cannedCancel(h, cancelVault(3, 2));
+        h.ctl.feedAttest(json(nullptr), json::array({attestorRow()}), json(nullptr));   // seq 1 holds MEMBER_KEY
+        QCOMPARE(h.ctl.walletCancelSeqs(), QList<int>({1}));
+        h.rpc.results[YellowbackRpc::BUILDCANCEL] = buildCancelReply(json::array({1, 2, 3}));
+        const QString outpoint = QString(CLAIM_TXID) % ":0";
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        QStringList prompts;
+        QString paste;
+        bool pasteOk = false;
+        h.tab.inputFn = [&](const QString&, const QString& label, QString* value) { prompts << label; *value = paste; return pasteOk; };
+        // the user has no co-signatures to paste: nothing is built
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY2(h.confirms.last().contains("needs 3 co-signature(s) of distinct current members"), qPrintable(h.confirms.last()));
+        QVERIFY(h.confirms.last().contains("cancelled 2 time(s)"));
+        QVERIFY(h.confirms.last().contains("paste the co-signatures of 2 other current member(s)"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SIGNCANCELCOSIGN), json::array({outpoint.toStdString(), nullptr, 1}));
+        QCOMPARE(prompts.size(), 1);
+        QVERIFY2(prompts[0].contains("needs 3 co-signature(s)") && prompts[0].contains("this wallet has 1"), qPrintable(prompts[0]));
+        QVERIFY(prompts[0].contains("yed_signcancelcosign " % outpoint));
+        QCOMPARE(QGuiApplication::clipboard()->text(), cosigHex('a'));
+        QVERIFY2(h.notices.last().startsWith("Cancel not built|"), qPrintable(h.notices.last()));
+        QVERIFY(h.notices.last().contains("Nothing was signed with the set key and nothing was sent"));
+        QCOMPARE(h.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
+        QCOMPARE(h.rpc.count("set_signcancel"), 0);
+        // something that is not a co-signature, or too few: refused before the build
+        pasteOk = true;
+        paste = "deadbeef";
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY2(h.errorNotices.last().contains("is not a cancel co-signature"), qPrintable(h.errorNotices.last()));
+        paste = cosigHex('b') % " " % cosigHex('a');                // our own again does not count twice
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY2(h.errorNotices.last().contains("2 distinct co-signature(s) in hand, 3 needed"), qPrintable(h.errorNotices.last()));
+        QCOMPARE(h.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
+        // two other members' co-signatures (comma, newline or space separated): built with all three
+        paste = cosigHex('B') % ",\n" % cosigHex('c');
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::BUILDCANCEL),
+                 json::array({outpoint.toStdString(), json::array({cosigHex('a').toStdString(), cosigHex('b').toStdString(), cosigHex('c').toStdString()})}));
+        QVERIFY2(h.notices.last().startsWith("Cancel sent|"), qPrintable(h.notices.last()));
+        QVERIFY(h.notices.last().contains("Co-signers (seq): 1, 2, 3"));
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        // a wallet holding enough seats co-signs with every one (seq order) and asks for nothing
+        Harness two;
+        two.feedActive(408);
+        json vault = cancelVault(2, 1);
+        cannedCancel(two, vault);
+        json set = attestorSetReply(true);
+        set["memberlist"][0]["wallet"] = true;                         // 02aaaa… is ours too, as seq 4
+        two.ctl.feedUpgrade(json::array({vault}), set);
+        json other = attestorRow(); other["seq"] = 4; other["attestorPubKey"] = set["memberlist"][0]["key"];
+        two.ctl.feedAttest(json(nullptr), json::array({other, attestorRow()}), json(nullptr));
+        QCOMPARE(two.ctl.walletCancelSeqs(), QList<int>({1, 4}));
+        auto canned = two.rpc.transport();                             // each seat signs its own co-signature
+        two.ctl.setTransport([&, canned](const QString& m, const json& params, YellowbackController::OkFn ok, YellowbackController::ErrFn err) {
+            if (m == YellowbackRpc::SIGNCANCELCOSIGN && params.size() == 3) {
+                two.rpc.calls.append({m, params});
+                const int seq = params[2].get<int>();
+                if (ok) ok(cosignReply(seq == 1 ? 'a' : 'd', seq));
+                return;
+            }
+            canned(m, params, ok, err);
+        });
+        int asked = 0;
+        two.tab.inputFn = [&](const QString&, const QString&, QString*) { asked++; return false; };
+        two.tab.cancelClaim(*two.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(asked, 0);
+        QCOMPARE(two.rpc.count(YellowbackRpc::SIGNCANCELCOSIGN), 2);
+        QCOMPARE(two.rpc.lastParams(YellowbackRpc::SIGNCANCELCOSIGN), json::array({outpoint.toStdString(), nullptr, 4}));
+        QCOMPARE(two.rpc.lastParams(YellowbackRpc::BUILDCANCEL),
+                 json::array({outpoint.toStdString(), json::array({cosigHex('a').toStdString(), cosigHex('d').toStdString()})}));
+        QVERIFY2(two.notices.last().startsWith("Cancel sent|"), qPrintable(two.notices.last()));
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        QVERIFY(h.copyIsClean());
+        QVERIFY(two.copyIsClean());
+    }
+
+    // A seat whose equivocation guard holds no price for the claim's refHeight states one (price-required):
+    // the wallet asks for it once and co-signs with it; a claim still in the mempool is not co-signed.
+    void cancelClaimStatesAPrice() {
+        QCOMPARE([] { qint64 v = 0; return YellowbackTab::parsePriceMicroUsd("$0.40", &v) ? v : -1; }(), (qint64)400000);
+        QCOMPARE([] { qint64 v = 0; return YellowbackTab::parsePriceMicroUsd("1,234.5", &v) ? v : -1; }(), (qint64)1234500000);
+        QVERIFY(!YellowbackTab::parsePriceMicroUsd("0", nullptr));
+        QVERIFY(!YellowbackTab::parsePriceMicroUsd("0.1234567", nullptr));
+        QVERIFY(!YellowbackTab::parsePriceMicroUsd("forty", nullptr));
+        Harness h;
+        h.feedActive(408);
+        cannedCancel(h, cancelVault());
+        const QString outpoint = QString(CLAIM_TXID) % ":0";
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        // the node: price-required without a price, a co-signature with one
+        auto canned = h.rpc.transport();
+        h.ctl.setTransport([&, canned](const QString& m, const json& params, YellowbackController::OkFn ok, YellowbackController::ErrFn err) {
+            if (m == YellowbackRpc::SIGNCANCELCOSIGN && params.size() < 2) {
+                h.rpc.calls.append({m, params});
+                if (err) err("price-required: this key signed no price for the claim's refHeight 403; pass priceMicroUsd");
+                return;
+            }
+            canned(m, params, ok, err);
+        });
+        QStringList prompts;
+        h.tab.inputFn = [&](const QString&, const QString& label, QString* value) { prompts << label; *value = "0.50"; return true; };
+        h.tab.cancelClaim(*h.ctl.pendingClaimsModel()->rowAt(0));
+        QCOMPARE(prompts.size(), 1);
+        QVERIFY2(prompts[0].contains("signed no price for the claim's reference height") && prompts[0].contains("refHeight 403"), qPrintable(prompts[0]));
+        QVERIFY(prompts[0].contains("claimable below $0.4378"));
+        QVERIFY(prompts[0].contains("never attest another one there"));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SIGNCANCELCOSIGN), json::array({outpoint.toStdString(), 500000}));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::BUILDCANCEL), json::array({outpoint.toStdString(), json::array({cosigHex('a').toStdString()})}));
+        QVERIFY2(h.notices.last().startsWith("Cancel sent|"), qPrintable(h.notices.last()));
+        Settings::getInstance()->setYellowbackSignedCancel(outpoint, QString());
+        // a claim in the mempool: nothing is co-signed, built or sent
+        Harness m;
+        m.feedActive(408);
+        cannedCancel(m, cancelVault());
+        m.rpc.errors[YellowbackRpc::SIGNCANCELCOSIGN] = "claim-unconfirmed: co-sign the cancel once the claim has confirmed";
+        m.tab.cancelClaim(*m.ctl.pendingClaimsModel()->rowAt(0));
+        QVERIFY2(m.errorNotices.last().contains("still in the mempool"), qPrintable(m.errorNotices.last()));
+        QCOMPARE(m.rpc.count(YellowbackRpc::BUILDCANCEL), 0);
+        QVERIFY(Settings::getInstance()->getYellowbackSignedCancel(outpoint).isEmpty());
+        QVERIFY(h.copyIsClean());
+    }
+
     // A claim of ours that the attestor set cancelled: the vault it closed is gone (re-created
-    // under the cancel's txid), so yed_getvault answers vault-not-found; the page says the burn is lost.
+    // under the cancel's txid), so yed_getvault answers vault-not-found; the page says the burn was re-issued (CAN-1).
     void cancelledClaimsAreShown() {
         Harness h;
         h.feedActive(420);
@@ -1673,7 +1851,7 @@ private slots:
         QVERIFY(h.visible("lblCancelledClaims"));
         QVERIFY2(h.label("lblCancelledClaims").contains("was cancelled by the attestor set"), qPrintable(h.label("lblCancelledClaims")));
         QVERIFY(h.label("lblCancelledClaims").contains("$1,000.00 of YED it burned were re-issued to you"));
-        QVERIFY(h.label("lblCancelledClaims").contains("more collateralised"));
+        QVERIFY(h.label("lblCancelledClaims").contains("the claim's YEC costs (its protocol fee and network fees) do not"));
         // a released claim reads CLAIMED, a pending one CLAIMING; neither is listed as cancelled
         QCOMPARE(YellowbackTab::describeCancelledClaims({}), QString());
         Harness r;
@@ -4121,7 +4299,7 @@ private slots:
     // Pending claims page: CLAIMED. Vault C is claimed the same way and then cancelled by an
     // attestor's wallet (node 5, a current member of the YED attestor set) through its own
     // Pending claims page before it matures: the vault is ACTIVE again under the cancel's txid,
-    // the claimant's burn is lost, and the claimant's page says so. Every Yellowback action goes
+    // the claimant's burn is re-issued to it (CAN-1), and the claimant's page says so. Every Yellowback action goes
     // through the tab's own code path; only mining and the market (other people's machines on a
     // real network) are driven directly.
     void devnetClaimReleaseAndCancel() {
@@ -4325,10 +4503,30 @@ private slots:
         QVERIFY2(pc != nullptr, "the attestor's Pending claims page does not list the claim");
         QVERIFY(!pc->mineClaim);
         QVERIFY2(height() + 1 < pc->intent.releaseHeight, "the claim matured before the attestor could cancel it");
+        // CAN-2 + C4b: the vault's first cancel needs one member's co-signature, its signed price statement at
+        // the claim's refHeight saying the vault was not claimable. Node 5's wallet co-signs with its own seat
+        // (stating $50 when its guard holds no price there); when its agent attested the crash at that height
+        // (cancel-statement-claimable) the wallet asks for another member's co-signature, which the test
+        // fetches from node 6 or 7 (other operators' machines on a real network), as upgrade-walk's fallback.
+        const std::string intent = QString(claimC % ":0").toStdString();
+        QStringList prompts;
+        a.tab.inputFn = [&](const QString& title, const QString&, QString* value) {
+            prompts << title;
+            if (title.contains("price")) { *value = "50"; return true; }
+            for (int node : {6, 7}) {
+                json r = att.rpcOn(node, "yed_signcancelcosign", json::array({intent}));
+                if (!r.is_object()) r = att.rpcOn(node, "yed_signcancelcosign", json::array({intent, 50000000}));
+                if (r.is_object() && r.find("cosig") != r.end() && r["cosig"].is_string()) { *value = QString::fromStdString(r["cosig"].get<std::string>()); return true; }
+            }
+            return false;
+        };
         a.tab.cancelClaim(*pc);
+        qInfo("cancel prompts: %s", qPrintable(prompts.join(" | ")));
         QVERIFY2(a.errorNotices.isEmpty(), qPrintable(a.errorNotices.join("\n")));
-        QVERIFY(a.confirms.last().contains("is re-issued to the claimant"));
-        QVERIFY2(a.notices.last().startsWith("Cancel sent|"), qPrintable(a.notices.last()));
+        QVERIFY2(a.confirms.last().contains("of YED is re-issued to the holder it came from"), qPrintable(a.confirms.last()));
+        QVERIFY(a.confirms.last().contains("needs 1 co-signature(s)"));
+        QVERIFY2(a.notices.last().startsWith("Cancel sent|"), qPrintable(a.notices.join("\n")));
+        QVERIFY(a.notices.last().contains("Co-signers (seq): "));
         const QString cancelTx = noticeTxid(a.notices.last());
         QCOMPARE(cancelTx.size(), 64);
         qInfo("cancel result:\n%s", qPrintable(a.notices.last()));

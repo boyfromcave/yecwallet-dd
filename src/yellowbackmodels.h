@@ -48,6 +48,10 @@ struct YellowbackPosition {
     QString voidReason;                // "" unless VOID
     QString scriptPubKey;              // rpcversion 5: the vault's V template (hex)
     QList<YellowbackIntent> intents;   // rpcversion 5: present while CLAIMING
+    int     cancelCount     = 0;       // CAN-2: the position's cancels counted by the escalation schedule
+    int     cancelsRequired = 1;       // CAN-2: co-signatures of distinct current members a cancel confirming next block needs (1 when absent)
+    int     cancelQuietUntil = -1;     // CAN-2: null (-1) when never cancelled
+    QString refundHolder;              // CAN-1, while CLAIMING: the script (hex) a cancel re-issues the burn to; "" when absent
     bool    canRedeem       = false;   // ACTIVE or VOID at or past lockHeight (VOID: the Release, L14)
     bool    canClaim        = false;
     bool    noticed         = false;   // v3: a claim notice stands against this vault (NOT-1)

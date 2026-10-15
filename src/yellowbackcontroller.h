@@ -358,7 +358,15 @@ public:
     void leaveSet(const QString& memberKey, OkFn ok, ErrFn err);                      // set_leave <attestorSetId> <key>: the bond exit delay
     // rpcversion 5: the claim intent spends (the primitive's RPCs, vaultrpc.h)
     void releaseIntent(const QString& outpoint, const QString& recipientScript, OkFn ok, ErrFn err);   // vault_release; script "" = the wallet's own
-    void buildCancel(const QString& outpoint, OkFn ok, ErrFn err);                    // vault_buildcancel
+    // CAN-1 + CAN-2: the attestor cancel of a YED claim. yed_signcancelcosign states this wallet's member's price at
+    // the claim's refHeight (priceMicroUsd < 0: the price its equivocation guard holds; seq < 0: the node's default,
+    // the first current member key the wallet holds); yed_buildcancel takes cancelsRequired such co-signatures of
+    // distinct current members and builds the cancel that re-creates the vault and re-issues the claim's burn.
+    void signCancelCosign(const QString& outpoint, qint64 priceMicroUsd, int seq, OkFn ok, ErrFn err);   // yed_signcancelcosign
+    void buildCancel(const QString& outpoint, const QStringList& cosigs, OkFn ok, ErrFn err);              // yed_buildcancel
+    /** The seqs (yed_listattestors) of this wallet's current, unfrozen member keys (set_getinfo), ascending:
+     *  the seats it can co-sign a cancel with. Empty when the attestor list has not been read. */
+    QList<int> walletCancelSeqs() const;
     void signCancel(const QString& hex, OkFn ok, ErrFn err);                          // set_signcancel
     void sendVaultTx(const QString& hex, OkFn ok, ErrFn err);                         // vault_send
     /** Follow every claim of this wallet (yed_listtransactions "claim") to its outcome: pending,
