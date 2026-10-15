@@ -331,8 +331,8 @@ private:
 
 // rpcversion 5: the Pending claims page. One row per claim intent of a CLAIMING vault (from
 // yed_listvaults "CLAIMING"): the claimant's intent is released after CLAIM_DELAY to the claimant,
-// or cancelled before then by the YED attestor set (the vault is ACTIVE again, the burn is not
-// refunded, U-24); the owner's residual intent is released only.
+// or cancelled before then by the YED attestor set (the vault is ACTIVE again, the burn is
+// re-issued to the claimant, CAN-1); the owner's residual intent is released only.
 struct YellowbackPendingClaim {
     YellowbackPosition vault;   // the CLAIMING vault (yed_getvault row)
     YellowbackIntent   intent;
