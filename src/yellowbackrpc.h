@@ -76,6 +76,10 @@ constexpr const char* SWEEPCARRIERS       = "yed_sweepcarriers";      // reclaim
 constexpr const char* REGISTERATTESTOR    = "yed_registerattestor";
 constexpr const char* WITHDRAWBOND        = "yed_withdrawbond";
 constexpr const char* REPORTEQUIVOCATION  = "yed_reportequivocation";
+// CAN-1 + CAN-2 (the cancel-limit design): the attestor cancel of a YED claim is built here, not with the
+// primitive's vault_buildcancel (which refuses a YED intent); it refunds the burn and carries co-signatures
+constexpr const char* BUILDCANCEL         = "yed_buildcancel";        // <intentOutpoint> [cosigs]
+constexpr const char* SIGNCANCELCOSIGN    = "yed_signcancelcosign";   // <intentOutpoint> [priceMicroUsd] [seq]
 
 // ── yed_getinfo result ─────────────────────────────────────────────────────────────────────
 namespace Info {   // contract: yed_getinfo
@@ -354,6 +358,10 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* VOID_REASON       = "voidReason";    // "" unless VOID (none is produced since the upgrade)
     constexpr const char* SCRIPT_PUBKEY     = "scriptPubKey";  // rpcversion 5: the vault's V template in hex
     constexpr const char* INTENTS           = "intents";       // optional: present while CLAIMING (PositionIntent rows)
+    constexpr const char* CANCEL_COUNT      = "cancelCount";   // CAN-2: the position's cancels counted by the escalation schedule
+    constexpr const char* CANCELS_REQUIRED  = "cancelsRequired"; // CAN-2: co-signatures of distinct current members a cancel confirming next block needs
+    constexpr const char* CANCEL_QUIET_UNTIL = "cancelQuietUntil"; // CAN-2: null when never cancelled
+    constexpr const char* REFUND_HOLDER     = "refundHolder";  // optional, CAN-1: while CLAIMING, the script a cancel refunds the burn to
     constexpr const char* CAN_REDEEM        = "canRedeem";     // listpositions only
     constexpr const char* CAN_CLAIM         = "canClaim";      // listpositions only
     constexpr const char* NOTICED           = "noticed";       // v3: a Notices record stands (NOT-1)
@@ -379,6 +387,35 @@ namespace PositionIntent {   // contract: optional yed_getvault.intents[]
 
     constexpr const char* ROLE_CLAIMANT     = "claimant";      // value
     constexpr const char* ROLE_RESIDUAL     = "residual";      // value
+}
+
+// CAN-1 + CAN-2: yed_buildcancel's result (the unsigned cancel; sign with set_signcancel, send with vault_send)
+namespace BuildCancel {   // contract: yed_buildcancel
+    constexpr const char* HEX               = "hex";
+    constexpr const char* REQUIRED          = "required";          // the cancel set's cancelthreshold (1, pinned by the module)
+    constexpr const char* CANCEL_SET_ID     = "cancelsetid";
+    constexpr const char* DEADLINE          = "deadline";          // the last height the cancel can confirm at
+    constexpr const char* INTENT_CONFIRMED  = "intentconfirmed";
+    constexpr const char* REFUND            = "refund";            // BuildCancelRefund
+    constexpr const char* CANCELS_REQUIRED  = "cancelsRequired";
+    constexpr const char* COSIGNERS         = "cosigners";         // the co-signers' seqs, carrier order
+    constexpr const char* CARRIER_TXID      = "carrierTxid";       // the carrier holding the co-signatures
+    constexpr const char* WARNINGS          = "warnings";          // optional: "cosigs[i] dropped: <identifier>: <why>"
+}
+
+namespace BuildCancelRefund {   // contract: yed_buildcancel.refund
+    constexpr const char* VOUT              = "vout";              // always 1
+    constexpr const char* SCRIPT            = "script";            // the holder of the claim's lowest-index YED input
+    constexpr const char* CENTS             = "cents";             // the claim's whole burn, re-issued
+}
+
+// CAN-2 + C4b: yed_signcancelcosign's result, a member's co-signature and price statement at the claim's refHeight
+namespace CancelCosign {   // contract: yed_signcancelcosign
+    constexpr const char* COSIG             = "cosig";             // 69 bytes of hex: price LE32 || sig65
+    constexpr const char* SEQ               = "seq";
+    constexpr const char* PRICE_MICRO_USD   = "priceMicroUsd";
+    constexpr const char* CITED_HEIGHT      = "citedHeight";       // the claim's refHeight
+    constexpr const char* REUSED            = "reused";            // the guard already held this price
 }
 
 // ── yed_listclaimable element ──────────────────────────────────────────────────────────────
@@ -819,6 +856,11 @@ namespace Errors {   // contract: errors
     constexpr const char* ATTEST_MALFORMED      = "attest-malformed";
     constexpr const char* ATTEST_RANGE          = "attest-range";
     constexpr const char* EQUIVOCATION_GUARD    = "equivocation-guard";
+    // CAN-2 + C4b: the attestor cancel's co-signatures (yed_signcancelcosign, yed_buildcancel)
+    constexpr const char* CANCEL_COSIGN_NEEDED  = "cancel-cosign-needed";
+    constexpr const char* CANCEL_STATEMENT_CLAIMABLE = "cancel-statement-claimable";
+    constexpr const char* PRICE_REQUIRED        = "price-required";
+    constexpr const char* CLAIM_UNCONFIRMED     = "claim-unconfirmed";
 }
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).
@@ -851,6 +893,8 @@ constexpr qint64 MAX_MINT_CENTS      = 10000000;  // $100,000 (D-Q-24, every net
 constexpr qint64 MIN_OUTPUT_CENTS    = 100;       // $1 change floor (§3.1 MIN_OUTPUT)
 // v3: an attestation travels through RPC as 74 bytes of hex (yed_reportequivocation's arguments).
 constexpr int ATTESTATION_HEX_LENGTH = 148;
+// CAN-2: a cancel co-signature travels as 69 bytes of hex (yed_signcancelcosign's cosig, yed_buildcancel's cosigs).
+constexpr int CANCEL_COSIG_HEX_LENGTH = 138;
 
 }
 

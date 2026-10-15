@@ -39,7 +39,7 @@ namespace Ui {
 // dialog and one yed_* call (plan §4.8, V24, L14); the node builds, checks, signs and commits.
 // rpcversion 5 (the vault upgrade): a claim moves the collateral into a claim intent; the Pending
 // claims page releases it after CLAIM_DELAY (vault_release) and, on an attestor's node, cancels a
-// wrong-price claim before then (vault_buildcancel, set_signcancel, vault_send). Modal prompts go
+// wrong-price claim before then (yed_signcancelcosign, yed_buildcancel, set_signcancel, vault_send). Modal prompts go
 // through confirmFn / noticeFn / inputFn so the offline QTest can answer them.
 //
 // v3 (A5-b): Mint, Claim, the claim notice and the equivocation report are two-step (W7): the
@@ -100,11 +100,15 @@ public:
     void claimVault(const YellowbackClaimable& c, const QString& to = QString());   // to: "" or a transparent address (D-U1)
     // rpcversion 5, the Pending claims page: release a matured claim intent (vault_release), or,
     // on a node whose wallet holds a current member key of the YED attestor set, cancel a claim
-    // made at a wrong price before it matures (vault_buildcancel + set_signcancel + vault_send).
+    // made at a wrong price before it matures (CAN-2's co-signatures from yed_signcancelcosign, then
+    // yed_buildcancel, which re-issues the claim's burn (CAN-1), + set_signcancel + vault_send).
     // A cancel is signed at most once per intent: the signed transaction is kept and only ever
     // re-sent, because two different signed spends of one intent are a provable equivocation.
     void releaseClaim(const YellowbackPendingClaim& c);
     void cancelClaim(const YellowbackPendingClaim& c);
+    // A price in US dollars per YEC ("0.40", "$1,234.5", up to 6 decimals) in µUSD; false on anything else or 0.
+    // The cancel's co-signature states it when the seat's equivocation guard holds no price for the claim's refHeight.
+    static bool parsePriceMicroUsd(const QString& text, qint64* microUsd);
     static QString describeCancelledClaims(const QList<YellowbackClaimOutcome>& outcomes);
     // Hardening H-9.2: renew = redeem the vault and re-mint its debt in a new vault, in one flow.
     // One confirmation covers both legs; the redeem is sent at once, and the mint follows when the
@@ -210,6 +214,9 @@ private:         // the height the last "Minted. txid" status was shown at; clea
     static qint64 capBelow(qint64 zat) { return zat - zat * CAP_SLACK_BPS / 10000; }
     QString claimSummary(const nlohmann::json& r) const;
     bool    bundleInsufficientRetry(const QString& what, const QString& e);   // true when it was that error
+    // cancelClaim after its checks: the warning (the burn re-issued, the claimant's lost YEC costs, the co-signatures
+    // needed), then the co-signatures, yed_buildcancel, set_signcancel, vault_send. claimFeeZat -1: not known.
+    void confirmCancel(const YellowbackPendingClaim& c, qint64 claimFeeZat);
     void setActionsEnabled(bool enabled);
     void refreshDestinations();             // the Redeem page's destination combo (I2)
     bool confirm(const QString& title, const QString& text);

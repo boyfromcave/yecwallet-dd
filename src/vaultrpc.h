@@ -7,10 +7,12 @@
 
 // The vault primitive's RPCs (set_*, vault_*) the wallet uses, as ycash-dd/doc/vault-rpc.md
 // documents them (upgrade plan §15.8). Under the vault upgrade a Yellowback claim is a primitive
-// intent: it is released with vault_release after CLAIM_DELAY, and before that a member of the
-// YED attestor set may cancel it (vault_buildcancel + set_signcancel + vault_send). An attestor
-// is a member of that set and stays live with set_heartbeat. Everything else the wallet does goes
-// through the yed_* contract (yellowbackrpc.h).
+// intent: it is released with vault_release after CLAIM_DELAY, and before that the YED attestor
+// set may cancel it: the module builds that cancel (yed_buildcancel, CAN-1: it refunds the claim's
+// burn and carries CAN-2's co-signatures, yellowbackrpc.h), a member signs it with set_signcancel
+// and its node sends it with vault_send. The primitive's vault_buildcancel refuses a YED intent, so
+// the wallet never calls it. An attestor is a member of that set and stays live with set_heartbeat.
+// Everything else the wallet does goes through the yed_* contract (yellowbackrpc.h).
 //
 // The primitive is application-agnostic and its RPCs carry no rpcversion: the wallet reads only
 // the fields named here and treats any other shape as an error message, never as data.
@@ -23,7 +25,6 @@ constexpr const char* SET_GETINFO         = "set_getinfo";       // "setid" ( he
 constexpr const char* SET_HEARTBEAT       = "set_heartbeat";     // "setid" ( "memberkey" ): a SET_HEARTBEAT act
 constexpr const char* SET_LEAVE           = "set_leave";         // "setid" ( "memberkey" ): the member's own SET_REMOVE (the bond exit delay)
 constexpr const char* VAULT_RELEASE       = "vault_release";     // "intentoutpoint" ( "address"|"script" )
-constexpr const char* VAULT_BUILDCANCEL   = "vault_buildcancel"; // "intentoutpoint": the unsigned CANCEL spend
 constexpr const char* SET_SIGNCANCEL      = "set_signcancel";    // "hex": this wallet's cancel-set signatures
 constexpr const char* VAULT_SEND          = "vault_send";        // "hex": sign the fee inputs and broadcast
 
@@ -79,12 +80,10 @@ namespace Leave {
     constexpr const char* BOND_SPENDABLE_AT = "bondspendableat";
 }
 
-// ── vault_buildcancel / set_signcancel ────────────────────────────────────────────────────
+// ── set_signcancel (of a yed_buildcancel transaction) ─────────────────────────────────────
 namespace Cancel {
     constexpr const char* HEX               = "hex";
     constexpr const char* REQUIRED          = "required";          // the cancel set's cancelthreshold
-    constexpr const char* CANCEL_SET_ID     = "cancelsetid";
-    constexpr const char* DEADLINE          = "deadline";          // the last height a cancel can confirm at
     constexpr const char* COMPLETE          = "complete";          // set_signcancel: enough signatures
     constexpr const char* SIGNATURES        = "signatures";
 }
@@ -93,7 +92,7 @@ namespace Cancel {
 constexpr const char* ERR_MATURES_AT      = "matures at height";
 // vault_release without a recipient this wallet knows
 constexpr const char* ERR_RECIPIENT_UNKNOWN = "recipient script is unknown";
-// vault_buildcancel after the intent matured
+// yed_buildcancel after the intent matured (the primitive's refusal, passed through)
 constexpr const char* ERR_NO_LONGER_CANCELLABLE = "can no longer be cancelled";
 
 }

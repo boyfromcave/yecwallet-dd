@@ -1911,8 +1911,9 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
 // the owner's residual intent pays the owner's PQPKH. If the claim is cancelled, that residual
 // stays held until the vault closes. After the quiet period it can be released only once the
 // position is no longer claimable (CAN-3). Before releaseHeight a current member of the YED attestor set may
-// cancel a claimant intent: the collateral returns to the vault (ACTIVE again under the cancel's
-// txid) and the burn is lost.
+// cancel a claimant intent, with the co-signatures of cancelsRequired distinct current members (CAN-2):
+// the collateral returns to the vault (ACTIVE again under the cancel's txid) and the claim's burn is
+// re-issued to the holder it came from (CAN-1); the claimant's YEC fees are not returned.
 
 void YellowbackTab::setupPendingClaims() {
     QVBoxLayout* layout = new QVBoxLayout(pages[PendingClaims]);
@@ -1920,8 +1921,9 @@ void YellowbackTab::setupPendingClaims() {
     lblPendingIntro->setObjectName("lblPendingIntro");
     lblPendingIntro->setWordWrap(true);
     lblPendingIntro->setText(tr("Claims waiting out the claim delay. A claim burns the vault's debt and moves its collateral into a claim intent: "
-                                "from its release height the claimant releases it (Release), and the vault is CLAIMED. Before then any current member "
-                                "of the YED attestor set may cancel a claim made at a wrong price: the collateral returns to the vault, which is ACTIVE again, "
+                                "from its release height the claimant releases it (Release), and the vault is CLAIMED. Before then a current member "
+                                "of the YED attestor set may cancel a claim made at a wrong price, with the co-signatures of as many distinct current members as the cancel needs "
+                                "(one for a position's first cancel, more for repeated cancels): the collateral returns to the vault, which is ACTIVE again, "
                                 "and the claimant's burn is re-issued to the claimant (its YEC fees are not refunded). The owner's residual, when there is one, waits in its own intent. If the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable."));
     layout->addWidget(lblPendingIntro);
     tblPendingClaims = new QTableView(pages[PendingClaims]);
@@ -1942,8 +1944,8 @@ void YellowbackTab::setupPendingClaims() {
     btnReleaseClaim->setToolTip(tr("Pay a matured claim intent to its recipient (vault_release); the network fee comes from your YEC."));
     btnCancelClaim = new QPushButton(tr("Cancel wrong-price claim…"), pages[PendingClaims]);
     btnCancelClaim->setObjectName("btnCancelClaim");
-    btnCancelClaim->setToolTip(tr("Attestors only: stop a claim made at a wrong price before it matures (vault_buildcancel, set_signcancel, vault_send). "
-                                  "The collateral returns to the vault and the claimant's burn is lost."));
+    btnCancelClaim->setToolTip(tr("Attestors only: stop a claim made at a wrong price before it matures (yed_signcancelcosign, yed_buildcancel, set_signcancel, vault_send). "
+                                  "The collateral returns to the vault and the claim's burn is re-issued to the claimant; the claimant's YEC fees are lost."));
     buttons->addWidget(btnReleaseClaim);
     buttons->addWidget(btnCancelClaim);
     layout->addLayout(buttons);
@@ -1976,8 +1978,8 @@ QString YellowbackTab::describeCancelledClaims(const QList<YellowbackClaimOutcom
     }
     if (lines.isEmpty()) return QString();
     return lines.join("\n") % "\n" %
-           tr("A cancel means at least one member of the attestor set judged the claim to be made at a wrong price. The burn is lost by design "
-              "(it is the price of a wrong-price claim); it lowers the YED supply while the vault keeps its debt, so the system only becomes more collateralised.");
+           tr("A cancel means members of the attestor set judged the claim to be made at a wrong price and co-signed their price statements for it (CAN-2). "
+              "The burn comes back as a YED token to the holder of the claim's first YED input (CAN-1); the claim's YEC costs (its protocol fee and network fees) do not.");
 }
 
 void YellowbackTab::updatePendingClaims() {
@@ -2024,9 +2026,10 @@ void YellowbackTab::updatePendingClaims() {
     else {
         text = tr("Claim %1 of vault %2 releases at height %3 (%4).").arg(c->intent.outpoint()).arg(c->vault.vaultName())
                    .arg(c->intent.releaseHeight).arg(YellowbackPendingClaimsModel::remaining(c->intent, height));
-        if (c->mineClaim) text += " " % tr("It is your claim: an attestor may cancel it before then if it was made at a wrong price, and your burn would be lost.");
+        if (c->mineClaim) text += " " % tr("It is your claim: the attestor set may cancel it before then if it was made at a wrong price; your burn would be re-issued to you, your YEC fees would be lost.");
         if (c->mineVault) text += " " % tr("It is your vault: it returns to you as ACTIVE only if an attestor cancels the claim.");
-        if (attestor)     text += " " % tr("As a current member of the attestor set you may cancel it if its price was wrong (deadline: height %1).").arg(c->intent.releaseHeight - 1);
+        if (attestor)     text += " " % tr("As a current member of the attestor set you may cancel it if its price was wrong (deadline: height %1), with %2 co-signature(s) of distinct current members.")
+                                          .arg(c->intent.releaseHeight - 1).arg(std::max(1, c->vault.cancelsRequired));
     }
     if (!Settings::getInstance()->getYellowbackSignedCancel(c->intent.outpoint()).isEmpty())
         text += " " % tr("This wallet already signed a cancel of this intent; Cancel only re-sends that transaction.");
@@ -2096,54 +2099,219 @@ void YellowbackTab::cancelClaim(const YellowbackPendingClaim& c) {
         notice(tr("Cancel claim"), tr("The claim intent %1 matured at height %2: it can no longer be cancelled.").arg(outpoint).arg(c.intent.releaseHeight), true);
         return;
     }
-    const int threshold = ctl->setCancelThreshold();
+    // The warning names the claimant's YEC costs, which a cancel does not return: the claim's protocol fee
+    // (yed_gettxinfo of the claim; a node that does not know it yet leaves the figure out)
+    ctl->getTxInfo(c.intent.txid,
+        [=, this](const json& info) { confirmCancel(c, YellowbackJson::toInt(info, YellowbackRpc::TxInfo::FEE_ZAT, -1)); },
+        [=, this](const QString&) { confirmCancel(c, -1); });
+}
+
+bool YellowbackTab::parsePriceMicroUsd(const QString& text, qint64* microUsd) {
+    QString t = text.trimmed();
+    t.remove('$').remove(' ').remove(',');
+    static const QRegularExpression re("^(\\d{1,7})(?:\\.(\\d{1,6}))?$");
+    auto m = re.match(t);
+    if (!m.hasMatch()) return false;
+    QString frac = m.captured(2);
+    while (frac.size() < 6) frac += '0';
+    const qint64 v = m.captured(1).toLongLong() * 1000000 + frac.toLongLong();
+    if (v <= 0) return false;
+    if (microUsd != nullptr) *microUsd = v;
+    return true;
+}
+
+// CAN-1 + CAN-2 (the cancel-limit design, both node lines): the cancel of a YED claim is built by the
+// module, never by the primitive's vault_buildcancel, which refuses every YED intent. It needs
+// cancelsRequired co-signatures of distinct current members of the YED attestor set (each one's signed
+// price statement at the claim's refHeight saying the vault was not claimable): this wallet co-signs with
+// every seat it holds (yed_signcancelcosign), and when that is not enough the user pastes the others'
+// co-signatures. Then yed_buildcancel (the vault re-created at output 0, the burn re-issued at output 1,
+// the co-signature carrier broadcast), set_signcancel (one member, the module pins cancelThreshold 1),
+// vault_send.
+void YellowbackTab::confirmCancel(const YellowbackPendingClaim& c, qint64 claimFeeZat) {
+    if (ctl == nullptr || !actionsEnabled) return;
+    const QString outpoint = c.intent.outpoint();
+    const int required = std::max(1, c.vault.cancelsRequired);
+    QList<int> seqs = ctl->walletCancelSeqs();
+    const int seats = std::max(1, (int)seqs.size());     // isAttestor(): at least the node's default seat
+    const qint64 burned = c.vault.burnedCents > 0 ? c.vault.burnedCents : c.vault.mintedCents;
+    const QString fee = claimFeeZat >= 0
+        ? tr("the claim's protocol fee of %1 (half of it paid to an attestor when one was) and its network fees").arg(YellowbackFormat::zec(claimFeeZat))
+        : tr("the claim's protocol fee and its network fees");
+    QString cosignText = tr("Co-signatures (CAN-2): this cancel needs %1 co-signature(s) of distinct current members of the YED attestor set "
+                            "(1 for a position's first cancel, one more for each cancel within the quiet period; this position was cancelled %2 time(s)). "
+                            "Each is that member's signed price statement at the claim's reference height saying the vault was not claimable. "
+                            "This wallet holds %3 seat(s) and co-signs with each (yed_signcancelcosign). ")
+                             .arg(required).arg(c.vault.cancelCount).arg(seats);
+    if (seats < required)
+        cosignText += tr("That is not enough on its own: you will be asked to paste the co-signatures of %1 other current member(s). ").arg(required - seats);
+    cosignText += tr("A co-signature records its price for that height in this node's equivocation guard: your attestation at that height must carry the same price, "
+                     "or EQV-1 ejects you and freezes your bond.");
     QString text = tr("Cancel the claim of vault %1 (claim intent %2, made at height %3).\n\n"
                       "WARNING. Cancel only a claim made at a wrong price: one that the attested and pooled prices did not support. A cancel is final: "
-                      "the collateral returns to the vault, which is ACTIVE again under the cancel's txid with its debt unchanged, and the claim's burn of %4 of YED "
-                      "is re-issued to the claimant (CAN-1); only the claimant's YEC costs (protocol fee, network fees) are lost. Cancelling an honest claim still costs the claimant the claim delay and those fees.\n\n"
-                      "You sign as a member of the YED attestor set (%5 signature(s) needed). Sign one cancel of this intent, once: two different signed spends of the same "
+                      "the collateral returns to the vault, which is ACTIVE again under the cancel's txid with its debt unchanged, and the claim's whole burn of %4 of YED "
+                      "is re-issued to the holder it came from (the claimant, CAN-1). The claimant loses its YEC costs: %5. "
+                      "Cancelling an honest claim still costs the claimant those fees and the claim delay.\n\n"
+                      "%6\n\n"
+                      "You sign the cancel as a member of the YED attestor set (%7 signature(s) needed). Sign one cancel of this intent, once: two different signed spends of the same "
                       "intent are a provable equivocation that anyone can submit, which ejects your membership and freezes your bond. This wallet keeps the transaction it "
                       "signs and will only ever re-send it.\n\n"
-                      "The cancel must confirm by height %6. The network fee is paid from your YEC.")
-        .arg(c.vault.vaultName()).arg(outpoint).arg(c.intent.height).arg(YellowbackFormat::cents(c.vault.mintedCents))
-        .arg(threshold).arg(c.intent.releaseHeight - 1);
+                      "The cancel must confirm by height %8. This wallet pays the cancel's network fee and the co-signature carrier from its YEC.")
+        .arg(c.vault.vaultName()).arg(outpoint).arg(c.intent.height).arg(YellowbackFormat::cents(burned)).arg(fee)
+        .arg(cosignText).arg(ctl->setCancelThreshold()).arg(c.intent.releaseHeight - 1);
     if (!confirm(tr("Confirm cancel of a wrong-price claim"), text)) return;
-    lblPendingAction->setText(tr("Cancelling: building the cancel..."));
-    ctl->buildCancel(outpoint,
-        [=, this](const json& built) {
-            const QString hex = YellowbackJson::toStr(built, Cancel::HEX);
-            ctl->signCancel(hex,
-                [=, this](const json& signedTx) {
-                    const QString shex = YellowbackJson::toStr(signedTx, Cancel::HEX);
-                    if (shex.isEmpty()) { notice(tr("Cancel not sent"), tr("set_signcancel returned no transaction."), true); return; }
-                    // Kept before anything is sent: from here on this wallet only re-sends it
-                    Settings::getInstance()->setYellowbackSignedCancel(outpoint, shex);
-                    if (!YellowbackJson::toBool(signedTx, Cancel::COMPLETE)) {
-                        QGuiApplication::clipboard()->setText(shex);
-                        notice(tr("Cancel needs more signatures"),
-                               tr("This wallet signed the cancel of intent %1 (%2 of %3 signatures). The partly signed transaction is on the clipboard: "
-                                  "other members add theirs with set_signcancel, and the node that built it sends it with vault_send before height %4.")
-                                   .arg(outpoint).arg(YellowbackJson::toInt(signedTx, Cancel::SIGNATURES)).arg(YellowbackJson::toInt(signedTx, Cancel::REQUIRED))
-                                   .arg(YellowbackJson::toInt(built, Cancel::DEADLINE, c.intent.releaseHeight - 1)));
-                        updatePendingClaims();
-                        return;
-                    }
-                    ctl->sendVaultTx(shex,
-                        [=, this](const json& r) {
-                            const QString txid = r.is_string() ? QString::fromStdString(r.get<std::string>()) : QString();
-                            notice(tr("Cancel sent"), tr("txid %1\nthe claim intent %2 is cancelled when this confirms (by height %3): vault %4 is re-created as ACTIVE at %1:0, "
-                                                         "and the claim's burn is re-issued to the claimant.")
-                                       .arg(txid).arg(outpoint).arg(YellowbackJson::toInt(built, Cancel::DEADLINE, c.intent.releaseHeight - 1)).arg(c.vault.vaultName()));
-                            ctl->refresh(true);
-                        },
-                        [=, this](const QString& e) {
+    if (seqs.isEmpty()) seqs.append(-1);                  // the attestor list is not read yet: the node's default seat
+
+    struct Gather {
+        QStringList cosigs;                               // 138-hex co-signatures, in the order gathered
+        QStringList refusals;                             // why a seat of this wallet did not co-sign
+        qint64      price = -1;                           // the price stated when a seat's guard held none
+        bool        asked = false;
+    };
+    auto st = std::make_shared<Gather>();
+    auto addCosig = [st](const QString& h) { const QString x = h.trimmed().toLower(); if (!x.isEmpty() && !st->cosigs.contains(x)) st->cosigs.append(x); };
+    auto seatName = [](int seq) { return seq < 0 ? tr("this wallet's seat") : tr("seat %1").arg(seq); };
+
+    // 3. yed_buildcancel, set_signcancel, vault_send
+    auto buildAndSend = [=, this]() {
+        lblPendingAction->setText(tr("Cancelling: building the cancel with %1 co-signature(s)...").arg(st->cosigs.size()));
+        ctl->buildCancel(outpoint, st->cosigs,
+            [=, this](const json& built) {
+                using namespace YellowbackRpc;
+                const QString hex = YellowbackJson::toStr(built, BuildCancel::HEX);
+                if (hex.isEmpty()) { updatePendingClaims(); notice(tr("Cancel not sent"), tr("yed_buildcancel returned no transaction."), true); return; }
+                const QStringList dropped = YellowbackJson::strings(built, BuildCancel::WARNINGS);
+                const json& refund = YellowbackJson::obj(built, BuildCancel::REFUND);
+                QStringList cosigners;
+                if (built.is_object() && built.find(BuildCancel::COSIGNERS) != built.end() && built[BuildCancel::COSIGNERS].is_array())
+                    for (const auto& q : built[BuildCancel::COSIGNERS]) if (q.is_number_integer()) cosigners << QString::number(q.get<int>());
+                const int deadline = (int)YellowbackJson::toInt(built, BuildCancel::DEADLINE, c.intent.releaseHeight - 1);
+                ctl->signCancel(hex,
+                    [=, this](const json& signedTx) {
+                        using namespace VaultRpc;
+                        const QString shex = YellowbackJson::toStr(signedTx, Cancel::HEX);
+                        if (shex.isEmpty()) { notice(tr("Cancel not sent"), tr("set_signcancel returned no transaction."), true); return; }
+                        // Kept before anything is sent: from here on this wallet only re-sends it
+                        Settings::getInstance()->setYellowbackSignedCancel(outpoint, shex);
+                        if (!YellowbackJson::toBool(signedTx, Cancel::COMPLETE)) {
+                            QGuiApplication::clipboard()->setText(shex);
+                            notice(tr("Cancel needs more signatures"),
+                                   tr("This wallet signed the cancel of intent %1 (%2 of %3 signatures). The partly signed transaction is on the clipboard: "
+                                      "other members add theirs with set_signcancel, and the node that built it sends it with vault_send before height %4.")
+                                       .arg(outpoint).arg(YellowbackJson::toInt(signedTx, Cancel::SIGNATURES)).arg(YellowbackJson::toInt(signedTx, Cancel::REQUIRED))
+                                       .arg(deadline));
                             updatePendingClaims();
-                            failed(VAULT_SEND, e % "\n\n" % tr("The signed cancel is kept: Cancel on this row re-sends it, and never signs another."));
-                        });
-                },
-                [=, this](const QString& e) { updatePendingClaims(); failed(SET_SIGNCANCEL, e); });
-        },
-        [=, this](const QString& e) { updatePendingClaims(); failed(VAULT_BUILDCANCEL, e); });
+                            return;
+                        }
+                        ctl->sendVaultTx(shex,
+                            [=, this](const json& r) {
+                                using namespace YellowbackRpc;
+                                const QString txid = r.is_string() ? QString::fromStdString(r.get<std::string>()) : QString();
+                                QString done = tr("txid %1\nthe claim intent %2 is cancelled when this confirms (by height %3): vault %4 is re-created as ACTIVE at %1:0, "
+                                                  "and the claim's burn of %5 of YED is re-issued at %1:%6 to the claim's YED holder (script %7).")
+                                                   .arg(txid).arg(outpoint).arg(deadline).arg(c.vault.vaultName())
+                                                   .arg(YellowbackFormat::cents(YellowbackJson::toInt(refund, BuildCancelRefund::CENTS, burned)))
+                                                   .arg(YellowbackJson::toInt(refund, BuildCancelRefund::VOUT, 1))
+                                                   .arg(YellowbackJson::toStr(refund, BuildCancelRefund::SCRIPT));
+                                done += "\n" % tr("Co-signers (seq): %1; co-signature carrier %2.").arg(cosigners.join(", ")).arg(YellowbackJson::toStr(built, BuildCancel::CARRIER_TXID));
+                                if (!dropped.isEmpty()) done += "\n" % tr("The node did not count: %1").arg(dropped.join("; "));
+                                notice(tr("Cancel sent"), done);
+                                ctl->refresh(true);
+                            },
+                            [=, this](const QString& e) {
+                                updatePendingClaims();
+                                failed(VAULT_SEND, e % "\n\n" % tr("The signed cancel is kept: Cancel on this row re-sends it, and never signs another."));
+                            });
+                    },
+                    [=, this](const QString& e) { updatePendingClaims(); failed(VaultRpc::SET_SIGNCANCEL, e); });
+            },
+            [=, this](const QString& e) { updatePendingClaims(); failed(YellowbackRpc::BUILDCANCEL, e); });
+    };
+
+    // 2. Not enough seats here: the other members' co-signatures, pasted
+    auto afterLocal = [=, this]() {
+        if (st->cosigs.size() >= required) { buildAndSend(); return; }
+        if (!st->cosigs.isEmpty()) QGuiApplication::clipboard()->setText(st->cosigs.join(" "));
+        QString label = tr("This cancel needs %1 co-signature(s) of distinct current members of the YED attestor set; this wallet has %2.")
+                            .arg(required).arg(st->cosigs.size());
+        if (!st->refusals.isEmpty()) label += " " % tr("Not co-signed here: %1.").arg(st->refusals.join("; "));
+        if (!st->cosigs.isEmpty()) label += " " % tr("This wallet's co-signature(s) are on the clipboard, to share with the other members.");
+        label += "\n\n" % tr("Ask other current members to run yed_signcancelcosign %1 on their nodes and paste their co-signatures here "
+                             "(138 hex characters each, separated by spaces; spares keep the cancel valid if a co-signer leaves). "
+                             "Nothing is signed with the set key and nothing is sent until the cancel is built.").arg(outpoint);
+        QString pasted;
+        if (!inputFn(tr("Cancel needs co-signatures"), label, &pasted) || pasted.trimmed().isEmpty()) {
+            updatePendingClaims();
+            notice(tr("Cancel not built"),
+                   tr("The cancel of intent %1 needs %2 co-signature(s) and this wallet has %3. Nothing was signed with the set key and nothing was sent. "
+                      "Press Cancel again with the other members' co-signatures before height %4 (this wallet's own stay the same: its node reuses the price it stated).")
+                       .arg(outpoint).arg(required).arg(st->cosigs.size()).arg(c.intent.releaseHeight - 1));
+            return;
+        }
+        static const QRegularExpression sep("[\\s,;]+"), hex("^[0-9a-fA-F]+$");
+        for (const QString& tok : pasted.split(sep, Qt::SkipEmptyParts)) {
+            if (tok.size() != YellowbackRpc::CANCEL_COSIG_HEX_LENGTH || !hex.match(tok).hasMatch()) {
+                updatePendingClaims();
+                notice(tr("Cancel not built"), tr("\"%1\" is not a cancel co-signature (138 hex characters, a yed_signcancelcosign cosig). Nothing was sent.").arg(tok.left(40)), true);
+                return;
+            }
+            addCosig(tok);
+        }
+        if (st->cosigs.size() < required) {
+            updatePendingClaims();
+            notice(tr("Cancel not built"), tr("%1 distinct co-signature(s) in hand, %2 needed. Nothing was sent.").arg(st->cosigs.size()).arg(required), true);
+            return;
+        }
+        buildAndSend();
+    };
+
+    // 1. This wallet's seats, one after the other
+    // The function holds itself only weakly; each pending RPC callback holds it strongly (no cycle)
+    auto step = std::make_shared<std::function<void(int)>>();
+    std::weak_ptr<std::function<void(int)>> weakStep = step;
+    *step = [=, this](int i) {
+        auto self = weakStep.lock();
+        if (!self) return;
+        if (i >= seqs.size()) { afterLocal(); return; }
+        const int seq = seqs[i];
+        lblPendingAction->setText(tr("Cancelling: co-signing with %1...").arg(seatName(seq)));
+        ctl->signCancelCosign(outpoint, st->price, seq,
+            [=, this](const json& r) {
+                const QString cosig = YellowbackJson::toStr(r, YellowbackRpc::CancelCosign::COSIG);
+                if (cosig.size() == YellowbackRpc::CANCEL_COSIG_HEX_LENGTH) addCosig(cosig);
+                else st->refusals << tr("%1: no co-signature in the reply").arg(seatName(seq));
+                (*self)(i + 1);
+            },
+            [=, this](const QString& e) {
+                using namespace YellowbackRpc;
+                if (e.startsWith(Errors::CLAIM_UNCONFIRMED)) {
+                    updatePendingClaims();
+                    notice(tr("Cancel not built"), tr("The claim is still in the mempool: a cancel is co-signed only once the claim has confirmed "
+                                                      "(its txid can change until then). Nothing was signed or sent; try again after the next block.\n\n%1").arg(e), true);
+                    return;
+                }
+                if (e.startsWith(Errors::PRICE_REQUIRED) && st->price < 0 && !st->asked) {
+                    st->asked = true;
+                    QString value;
+                    const QString label = tr("%1 signed no price for the claim's reference height, so its co-signature states one now (%2).\n\n"
+                                             "Enter the YEC price in US dollars that you attest for that height. The vault was claimable below %3, "
+                                             "so a price below that cannot say it was not. This price is recorded for that height: never attest another one there.")
+                                              .arg(seatName(seq)).arg(e).arg(c.vault.underwaterAt > 0 ? YellowbackFormat::price(c.vault.underwaterAt) : tr("its underwater price"));
+                    if (inputFn(tr("Your price at the claim's reference height"), label, &value)) {
+                        qint64 micro = 0;
+                        if (parsePriceMicroUsd(value, &micro)) { st->price = micro; (*self)(i); return; }
+                        st->refusals << tr("%1: \"%2\" is not a price").arg(seatName(seq)).arg(value);
+                    } else {
+                        st->refusals << tr("%1: no price stated").arg(seatName(seq));
+                    }
+                    (*self)(i + 1);
+                    return;
+                }
+                st->refusals << seatName(seq) % ": " % e;
+                (*self)(i + 1);
+            });
+    };
+    (*step)(0);
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────────────────
@@ -2390,7 +2558,7 @@ void YellowbackTab::updateMembership() {
             text += "\n" % tr("Your member %1…: %2; bond %3.").arg(m.key.left(16)).arg(m.describe(ctl->height(), ctl->setLivenessWindow()))
                                 .arg(YellowbackFormat::zec(m.bondValue));
         if (ctl->isAttestor())
-            text += "\n" % tr("As a current member this node may cancel a claim made at a wrong price (Pending claims page). Signing prices is not an act: "
+            text += "\n" % tr("As a current member this node may cancel a claim made at a wrong price, with the co-signatures the cancel needs (Pending claims page). Signing prices is not an act: "
                                "send a heartbeat before the liveness window runs out, or the yellowback-attest agent does it for you.");
     }
     uiAttestors->lblMembership->setText(text);
