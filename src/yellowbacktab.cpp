@@ -1219,7 +1219,7 @@ QString YellowbackTab::claimSummary(const json& r) const {
     else
         out += "\n" % tr("claim intent %1:0").arg(txid);
     out += "\n" % tr("Release it on the Pending claims page from %1 on. Until then a member of the attestor set may cancel the claim if it was made at a wrong price: "
-                      "the collateral then returns to the vault and the YED burned is not refunded.").arg(releaseAt);
+                      "the collateral then returns to the vault and the YED burned is re-issued to the claimant (its YEC fees are not refunded).").arg(releaseAt);
     QString path = YellowbackJson::toStr(r, ClaimResult::CLAIM_PATH);
     if (path == ClaimResult::PATH_B)
         out += "\n" % tr("claim path: emergency clause (b), after a persisted notice; the claimant keeps exactly the debt at the claim price");
@@ -1870,7 +1870,7 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
                       "%12\n\n"
                       "The YEC is not paid at once: it waits in a claim intent for %16 blocks, then you release it on the Pending claims page. "
                       "Until then any member of the YED attestor set may cancel the claim if it was made at a wrong price. "
-                      "A cancel returns the collateral to the vault and does NOT refund the %3 of YED you burn: claim only at a price you are sure of.\n\n"
+                      "A cancel returns the collateral to the vault and re-issues the %3 of YED you burn to you, but the delay and your YEC fees are lost: claim only at a price you are sure of.\n\n"
                       "%17 "
                       "Your own node builds the claim in two steps (the carrier with the price proof now, the claim when it confirms) "
                       "and checks it against the Yellowback consensus rules before it signs and sends it.")
@@ -1922,7 +1922,7 @@ void YellowbackTab::setupPendingClaims() {
     lblPendingIntro->setText(tr("Claims waiting out the claim delay. A claim burns the vault's debt and moves its collateral into a claim intent: "
                                 "from its release height the claimant releases it (Release), and the vault is CLAIMED. Before then any current member "
                                 "of the YED attestor set may cancel a claim made at a wrong price: the collateral returns to the vault, which is ACTIVE again, "
-                                "and the claimant's burn is not refunded. The owner's residual, when there is one, waits in its own intent. If the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable."));
+                                "and the claimant's burn is re-issued to the claimant (its YEC fees are not refunded). The owner's residual, when there is one, waits in its own intent. If the claim is cancelled, it stays held until the vault closes. After the quiet period it can be released only once the position is no longer claimable."));
     layout->addWidget(lblPendingIntro);
     tblPendingClaims = new QTableView(pages[PendingClaims]);
     tblPendingClaims->setObjectName("tblPendingClaims");
@@ -1970,7 +1970,7 @@ QString YellowbackTab::describeCancelledClaims(const QList<YellowbackClaimOutcom
     QStringList lines;
     for (const auto& o : outcomes) {
         if (o.outcome != "cancelled") continue;
-        lines << tr("Your claim %1 (height %2) of vault %3 was cancelled by the attestor set: the %4 of YED it burned are not refunded, "
+        lines << tr("Your claim %1 (height %2) of vault %3 was cancelled by the attestor set: the %4 of YED it burned were re-issued to you, "
                     "and the collateral went back to the vault.")
                      .arg(o.claimTxid.left(16) % "…").arg(o.height).arg(o.vaultTxid.left(16) % "…").arg(YellowbackFormat::cents(o.burnedCents));
     }
@@ -2099,8 +2099,8 @@ void YellowbackTab::cancelClaim(const YellowbackPendingClaim& c) {
     const int threshold = ctl->setCancelThreshold();
     QString text = tr("Cancel the claim of vault %1 (claim intent %2, made at height %3).\n\n"
                       "WARNING. Cancel only a claim made at a wrong price: one that the attested and pooled prices did not support. A cancel is final: "
-                      "the collateral returns to the vault, which is ACTIVE again under the cancel's txid with its debt unchanged, and the claimant's burn of %4 of YED "
-                      "is NOT refunded. Cancelling an honest claim takes that burn from someone who did nothing wrong.\n\n"
+                      "the collateral returns to the vault, which is ACTIVE again under the cancel's txid with its debt unchanged, and the claim's burn of %4 of YED "
+                      "is re-issued to the claimant (CAN-1); only the claimant's YEC costs (protocol fee, network fees) are lost. Cancelling an honest claim still costs the claimant the claim delay and those fees.\n\n"
                       "You sign as a member of the YED attestor set (%5 signature(s) needed). Sign one cancel of this intent, once: two different signed spends of the same "
                       "intent are a provable equivocation that anyone can submit, which ejects your membership and freezes your bond. This wallet keeps the transaction it "
                       "signs and will only ever re-send it.\n\n"
@@ -2132,7 +2132,7 @@ void YellowbackTab::cancelClaim(const YellowbackPendingClaim& c) {
                         [=, this](const json& r) {
                             const QString txid = r.is_string() ? QString::fromStdString(r.get<std::string>()) : QString();
                             notice(tr("Cancel sent"), tr("txid %1\nthe claim intent %2 is cancelled when this confirms (by height %3): vault %4 is re-created as ACTIVE at %1:0, "
-                                                         "and the claimant's burn is not refunded.")
+                                                         "and the claim's burn is re-issued to the claimant.")
                                        .arg(txid).arg(outpoint).arg(YellowbackJson::toInt(built, Cancel::DEADLINE, c.intent.releaseHeight - 1)).arg(c.vault.vaultName()));
                             ctl->refresh(true);
                         },
