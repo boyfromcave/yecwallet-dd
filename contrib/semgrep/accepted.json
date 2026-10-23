@@ -1,5 +1,102 @@
 {
   "_comment": "Accepted Semgrep findings (contrib/semgrep/README.md, 'Accepting a finding'). findings: fingerprint -> {rule, path, reason, by, date}. rule_paths: [{rule (glob), paths (globs), reason, by, date}]. Every entry needs a reason a reviewer can check.",
-  "findings": {},
-  "rule_paths": []
+  "findings": {
+    "0f006f493cff752e": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "50a64d293b831500": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "0f006f493cff752e-1": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "78ad20fc62458269": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "78ad20fc62458269-1": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "cce19860780c5ee7": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "6bbe6bc7b12fa892": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/yellowbackcontroller.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "d71cdfe6d9952f30": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/zcashdrpc.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "79f4d0e6e2924870": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/zcashdrpc.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "ccf948d9d0ffadf8": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/zcashdrpc.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "92621577e4fd3def": {
+      "rule": "0xdea.rules.c.raptor-format-string-bugs",
+      "path": "src/zcashdrpc.cpp",
+      "reason": "The callee is the ErrFn / std::function<void(QString)> callback parameter named `err`, not BSD err(3): it takes one QString and formats nothing, so there is no format string (0xdea matches the name).",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    },
+    "ed8cf924ec8b69ae": {
+      "rule": "yecwallet.secrets.secret-in-qsettings",
+      "path": "src/settings.cpp",
+      "reason": "Upstream YecWallet's manual connection (Edit -> Settings, used only when the wallet does not read ycash.conf): the rpcpassword of a node the user configured by hand, kept in the per-user QSettings beside host and user. It is the same credential ycash.conf holds in plain text, not a wallet key or seed; there is nowhere else to persist it without an OS keychain dependency. Risk taken knowingly; moving it to the OS keychain is a separate change.",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    }
+  },
+  "rule_paths": [
+    {
+      "rule": "generic.secrets.*",
+      "paths": [
+        "tests/**",
+        "docs/**",
+        "*.md"
+      ],
+      "reason": "Test fixtures and documentation examples, not secrets (checked 2026-10-23): MEMBER_KEY in the QTest suites is a made-up compressed public key with a sequential hex pattern, and docs/yellowback-rpc-contract.json's example keyid is a sequential placeholder. A secret anywhere else is still reported.",
+      "by": "semgrep CI setup",
+      "date": "2026-10-23"
+    }
+  ]
 }
