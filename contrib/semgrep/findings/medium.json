@@ -1,0 +1,22 @@
+{
+ "bucket": "medium",
+ "sla_days": 90,
+ "findings": [
+  {
+   "fingerprint": "f9d5e2cfc5549b74",
+   "rule": "0xdea.rules.c.raptor-insecure-api-signal",
+   "path": "src/main.cpp",
+   "line": 72,
+   "first_seen": "2026-10-23",
+   "due": "2027-01-21"
+  },
+  {
+   "fingerprint": "e88d4f31b895c256",
+   "rule": "0xdea.rules.c.raptor-insecure-api-signal",
+   "path": "src/main.cpp",
+   "line": 90,
+   "first_seen": "2026-10-23",
+   "due": "2027-01-21"
+  }
+ ]
+}
