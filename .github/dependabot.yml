@@ -1,0 +1,30 @@
+# Dependabot: security updates only, one grouped PR per ecosystem (SECURITY-CI.md).
+# Version updates are suppressed (open-pull-requests-limit: 0); actions stay pinned by full commit SHA
+# and are moved deliberately. Dependabot alerts and security updates must be enabled in
+# Settings -> Code security for the security group to open PRs.
+# The wallet has no package-manager lockfile (Qt and OpenSSL come from build.sh/scripts at pinned
+# versions; nlohmann/json and QR Code are vendored in src/3rdparty), so github-actions is the one
+# ecosystem here. (src/scripts/docker/Dockerfile is upstream's retired Qt 5 build image; Dependabot
+# security updates do not cover Docker base images, so it is not listed.)
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
+  # The hash-locked pip files of the security tooling itself (contrib/semgrep/requirements.txt, the same
+  # in every Yellowback repo, and .github/secops/zizmor-requirements.txt).
+  - package-ecosystem: pip
+    directories: [ /contrib/semgrep, /.github/secops ]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      security:
+        applies-to: security-updates
+        patterns: ["*"]

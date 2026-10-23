@@ -1,0 +1,5 @@
+{
+  "_comment": "Accepted Semgrep findings (contrib/semgrep/README.md, 'Accepting a finding'). findings: fingerprint -> {rule, path, reason, by, date}. rule_paths: [{rule (glob), paths (globs), reason, by, date}]. Every entry needs a reason a reviewer can check.",
+  "findings": {},
+  "rule_paths": []
+}

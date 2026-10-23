@@ -1,0 +1,9 @@
+# gitleaks findings accepted with a reason (SECURITY-CI.md). One fingerprint per line
+# (<commit>:<file>:<rule>:<line>); only test vectors and public constants belong here, never a real secret.
+#
+# tests/yellowbacktab_test.cpp: MEMBER_KEY / "memberkey" is a made-up compressed secp256k1 *public* key
+# (03 followed by a sequential hex pattern) in the mock node's set_* replies; matched by generic-api-key.
+# Checked 2026-10-23.
+ea28af340628c7c3417df89a4dcd26ce37f1bc94:tests/yellowbacktab_test.cpp:generic-api-key:114
+ea28af340628c7c3417df89a4dcd26ce37f1bc94:tests/yellowbacktab_test.cpp:generic-api-key:1589
+fa1fcfcadf44e0951c95f49f201915c2c39de4b4:tests/yellowbacktab_test.cpp:generic-api-key:3139

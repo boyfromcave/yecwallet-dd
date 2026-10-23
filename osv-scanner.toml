@@ -1,0 +1,7 @@
+# OSV-Scanner policy (secops.yml, SECURITY-CI.md). A known vulnerability is either fixed (bump the lockfile)
+# or accepted here with a reason and an expiry of at most 90 days:
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2027-01-15
+# reason = "why it does not reach this repository, checked by whom"

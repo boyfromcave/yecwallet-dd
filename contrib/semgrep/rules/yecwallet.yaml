@@ -1,0 +1,120 @@
+# YecWallet-specific Semgrep rules, scanned beside the pinned rule packs (contrib/semgrep/README.md).
+# metadata.bucket pins a rule's bucket; without it the bucket follows severity/impact/confidence.
+# Tests: yecwallet.cpp next to this file (`semgrep --test contrib/semgrep/rules`, run by secops.yml).
+rules:
+  - id: yecwallet.secrets.secret-logged
+    languages: [cpp]
+    paths:
+      include: ["src/**"]
+    patterns:
+      - pattern-either:
+          - pattern-inside: $LOGGER->write(...)
+          - pattern-inside: $LOGGER.write(...)
+          - pattern-inside: qDebug() << ...
+          - pattern-inside: qInfo() << ...
+          - pattern-inside: qWarning() << ...
+          - pattern-inside: qCritical() << ...
+          - pattern-inside: qDebug(...)
+          - pattern-inside: qWarning(...)
+      - pattern: $SECRET
+      # An identifier or member access (not a string literal) naming a secret.
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: ^(?:[A-Za-z_][\w.>()\-]*?)?(?i:passw(or)?d|passphrase|rpcpass|seed|mnemonic|privkey|private_?key|spendingkey|secret)\w*$
+    message: >-
+      A value that looks like an RPC password, passphrase, seed phrase or private key reaches the
+      wallet log (Logger::write writes yecwallet.log in plain text) or Qt's debug output. Log that the
+      secret was set or used, never its value.
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: high
+      impact: HIGH
+      likelihood: LOW
+      confidence: MEDIUM
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+
+  - id: yecwallet.secrets.secret-in-qsettings
+    languages: [cpp]
+    paths:
+      include: ["src/**"]
+    patterns:
+      - pattern-either:
+          - pattern: $S.setValue($KEY, ...)
+          - pattern: $S->setValue($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i)^".*(passw|passphrase|seed|mnemonic|privkey|private_?key|spendingkey|secret).*"$
+    message: >-
+      A secret-looking value is written to QSettings, which stores it in plain text (an INI file, a
+      plist or the Windows registry) readable by any process of the user. Seed phrases and keys must
+      never be persisted by the wallet; credentials belong in ycash.conf (written 0600) or the cookie file.
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: high
+      impact: HIGH
+      likelihood: LOW
+      confidence: HIGH
+      cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
+
+  - id: yecwallet.process.shell-or-command-string
+    languages: [cpp]
+    paths:
+      include: ["src/**"]
+    pattern-either:
+      - pattern: system(...)
+      - pattern: std::system(...)
+      - pattern: popen(...)
+      - pattern: _popen(...)
+      - pattern: QProcess::execute($CMD)
+      - pattern: QProcess::startDetached($CMD)
+      - pattern: $P.startCommand(...)
+      - pattern: $P->startCommand(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $P.start($PROG, ...)
+              - pattern: $P->start($PROG, ...)
+              - pattern: QProcess::startDetached($PROG, ...)
+              - pattern: QProcess::execute($PROG, ...)
+          - metavariable-regex:
+              metavariable: $PROG
+              regex: (?i)^"(/bin/|/usr/bin/)?(sh|bash|zsh|dash|cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+    message: >-
+      ycashd and the helper binaries are started as program + QStringList arguments, never through a
+      shell or a single command string (Qt splits it on spaces and quotes): a path or setting with a
+      space, quote or shell metacharacter would change what runs (CWE-78).
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: high
+      impact: HIGH
+      likelihood: LOW
+      confidence: HIGH
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command"]
+
+  - id: yecwallet.tls.verification-disabled
+    languages: [cpp]
+    paths:
+      include: ["src/**"]
+    pattern-either:
+      - pattern: QSslSocket::VerifyNone
+      - pattern: QSslSocket::QueryPeer
+      - pattern: $X.ignoreSslErrors()
+      - pattern: $X->ignoreSslErrors()
+      - pattern: curl_easy_setopt($H, CURLOPT_SSL_VERIFYPEER, 0)
+      - pattern: curl_easy_setopt($H, CURLOPT_SSL_VERIFYPEER, 0L)
+      - pattern: curl_easy_setopt($H, CURLOPT_SSL_VERIFYHOST, 0)
+      - pattern: curl_easy_setopt($H, CURLOPT_SSL_VERIFYHOST, 0L)
+    message: >-
+      TLS certificate verification is turned off. A remote node, price feed or update check reached
+      without verification can be impersonated by anyone on the path. Ignore only named, expected
+      QSslError values (ignoreSslErrors(const QList<QSslError>&)) for a pinned certificate.
+    severity: ERROR
+    metadata:
+      category: security
+      bucket: critical
+      impact: HIGH
+      likelihood: MEDIUM
+      confidence: HIGH
+      cwe: ["CWE-295: Improper Certificate Validation"]

@@ -1,0 +1,58 @@
+name: codeql
+
+# CodeQL (GitHub's free code scanning for public repositories), security-extended suite, results to
+# Security -> Code scanning (one category per language). SECURITY-CI.md describes every security leg.
+#
+#   c-cpp     build-mode none: CodeQL reads the sources without the Qt 6 build (the QTest job in
+#             yecwallet-tests.yml owns that), so no compiler database and no Qt download here.
+#   python    tests/check-rpc-contract.py and the helper scripts.
+#   actions   the workflows themselves (zizmor in secops.yml is the gate; CodeQL adds its queries).
+#
+# Report only: an alert never fails a PR here (pre-existing alerts would block every PR); new alerts
+# show on the PR's code scanning check and in the Security tab.
+on:
+  push:
+    branches: [ upgrade/vault ]
+  pull_request:
+  schedule:
+    - cron: '29 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    # Fork PRs get no security-events: write token, so they cannot upload; run on this repo's PRs.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ c-cpp, python, actions ]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+          config: |
+            paths-ignore:
+              - src/3rdparty
+              - singleapplication
+              - contrib/semgrep/rules
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: codeql-${{ matrix.language }}
