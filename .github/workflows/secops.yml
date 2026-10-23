@@ -1,0 +1,207 @@
+name: secops
+
+# The security legs besides Semgrep (semgrep.yml) and CodeQL (codeql.yml); SECURITY-CI.md describes each.
+#
+#   zizmor        every workflow in .github/workflows, default persona; fails on any finding.
+#   gitleaks      PR: the PR's own commits, fails on a new leak. Push to upgrade/vault: the pushed
+#                 commits. Nightly 03:43 UTC and dispatch: the full history. Accepted hits are
+#                 fingerprints in .gitleaksignore, each with a reason.
+#   osv-scanner   every lockfile in the tree (here the hash-locked pip files of the tooling; the
+#                 wallet itself vendors its C++ libraries); fails on a known vulnerability not
+#                 listed in osv-scanner.toml with a reason and an expiry.
+#   rule-tests    the local Semgrep rules against their test cases (contrib/semgrep/rules/*.cpp).
+#
+# Tools are installed at exact versions: release binaries checked against a recorded sha256, zizmor and
+# semgrep from hash-locked requirements. Results go to the step summary and, as SARIF, to
+# Security -> Code scanning (categories zizmor, gitleaks, osv-scanner); nothing opens a PR or an issue.
+on:
+  push:
+    branches: [ upgrade/vault ]
+  pull_request:
+  schedule:
+    - cron: '43 3 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: secops-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GITLEAKS_VERSION: '8.30.1'
+  GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'  # gitleaks_8.30.1_linux_x64.tar.gz
+  OSV_SCANNER_VERSION: '2.6.0'
+  OSV_SCANNER_SHA256: 'ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108'  # osv-scanner_linux_amd64
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install zizmor (hash-locked)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r .github/secops/zizmor-requirements.txt
+          echo "$RUNNER_TEMP/zizmor/bin" >> "$GITHUB_PATH"
+      - name: zizmor
+        env:
+          # Online audits (impostor commits, known-vulnerable actions) read public data with this token.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rc=0
+          zizmor --format sarif .github/workflows > zizmor.sarif || true
+          zizmor --format plain .github/workflows > zizmor.txt 2>&1 || rc=$?
+          { echo '### zizmor'; echo '```'; cat zizmor.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          cat zizmor.txt
+          exit "$rc"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: zizmor-sarif
+          path: zizmor.sarif
+          retention-days: 14
+          if-no-files-found: ignore
+
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (sha256-checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          range=''
+          if [ "$EVENT" = pull_request ]; then
+            range="$(git merge-base "$PR_BASE" "$PR_HEAD")..$PR_HEAD"
+          elif [ "$EVENT" = push ] && [ -n "$PUSH_BEFORE" ] && ! printf '%s' "$PUSH_BEFORE" | grep -Eq '^0+$'; then
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          fi
+          args=(git --redact --no-banner --exit-code 1 --report-format sarif --report-path gitleaks.sarif)
+          if [ -n "$range" ]; then
+            echo "gitleaks: commits $range"
+            args+=(--log-opts="$range")
+          else
+            echo "gitleaks: full history"
+          fi
+          rc=0
+          gitleaks "${args[@]}" . || rc=$?
+          { echo '### gitleaks'; if [ "$rc" = 0 ]; then echo "no leaks (${range:-full history})"; else echo "**leaks found** (${range:-full history}); see the job log (values redacted) and Code scanning"; fi; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: gitleaks-sarif
+          path: gitleaks.sarif
+          retention-days: 14
+          if-no-files-found: ignore
+
+  osv-scanner:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner (sha256-checked)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan every lockfile
+        run: |
+          rc=0
+          osv-scanner scan source --recursive --config osv-scanner.toml --format sarif --output-file osv.sarif . || true
+          osv-scanner scan source --recursive --config osv-scanner.toml --format markdown --output-file osv.md . || rc=$?
+          # 0 = clean, 1 = vulnerabilities, 128 = no package sources found; anything else is a tool error.
+          { echo '### osv-scanner'; cat osv.md 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
+          cat osv.md 2>/dev/null || true
+          if [ "$rc" = 128 ]; then echo "::notice::osv-scanner found no lockfiles"; rc=0; fi
+          exit "$rc"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: osv-sarif
+          path: osv.sarif
+          retention-days: 14
+          if-no-files-found: ignore
+
+  rule-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install semgrep (hash-locked, as semgrep.yml)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r contrib/semgrep/requirements.txt
+      - name: The local rules against their test cases
+        run: '"$RUNNER_TEMP/semgrep/bin/semgrep" --metrics=off --disable-version-check --test contrib/semgrep/rules'
+
+  code-scanning:
+    # One upload job holds security-events: write; the scanning jobs stay read-only.
+    needs: [ zizmor, gitleaks, osv-scanner ]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { tool: zizmor, artifact: zizmor-sarif, file: zizmor.sarif }
+          - { tool: gitleaks, artifact: gitleaks-sarif, file: gitleaks.sarif }
+          - { tool: osv-scanner, artifact: osv-sarif, file: osv.sarif }
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        id: dl
+        continue-on-error: true
+        with:
+          name: ${{ matrix.artifact }}
+          path: sarif
+      - name: Check the SARIF exists
+        id: has
+        env:
+          FILE: sarif/${{ matrix.file }}
+        run: if [ -s "$FILE" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "::notice::no SARIF from this tool"; fi
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        if: ${{ steps.has.outputs.ok == 'true' }}
+        with:
+          sarif_file: sarif/${{ matrix.file }}
+          category: ${{ matrix.tool }}

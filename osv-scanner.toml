@@ -1,0 +1,27 @@
+# OSV-Scanner policy (secops.yml, SECURITY-CI.md). A known vulnerability is either fixed (bump the lockfile)
+# or accepted here with a reason and an expiry of at most 90 days:
+#
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = 2027-01-15
+# reason = "why it does not reach this repository, checked by whom"
+
+# contrib/semgrep/requirements.txt is the Semgrep CLI's hash-locked environment, kept identical in every
+# Yellowback repository (contrib/semgrep/README.md) and only ever installed on the CI runner or a
+# developer's laptop to scan this repository; nothing in it ships with the wallet. It moves in one
+# coordinated change across the repositories (with config.json "semgrep_version"), not here alone.
+# Checked 2026-10-23; revisit at the next shared requirements refresh or by the expiry.
+[[IgnoredVulns]]
+id = "GHSA-6q48-6c7w-9gw2"
+ignoreUntil = 2027-01-20
+reason = "certifi 2026.7.22 in the Semgrep tooling env (alias PYSEC-2026-4320): semgrep runs with --metrics=off and no registry, rule packs are fetched by git (system CA store), so certifi's bundle is not used for any connection; fixed in 2026.10.19, taken at the next coordinated requirements refresh"
+
+[[IgnoredVulns]]
+id = "GHSA-84m7-p3x7-pcfv"
+ignoreUntil = 2027-01-20
+reason = "mcp 1.29.0 in the Semgrep tooling env: only semgrep's optional MCP server imports it, and scan.py never starts it; fixed in 1.30.0, taken at the next coordinated requirements refresh"
+
+[[IgnoredVulns]]
+id = "GHSA-xcq7-p3pf-p88h"
+ignoreUntil = 2027-01-20
+reason = "opentelemetry-api 1.37.0 in the Semgrep tooling env: tracing is off (no --trace, --metrics=off), so no exporter runs; fixed in 1.45.1, taken at the next coordinated requirements refresh"
