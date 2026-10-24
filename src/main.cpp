@@ -32,6 +32,10 @@ public:
 
     virtual bool handleSignal(int signal) = 0;
 
+    // Once the QApplication exists: deliver the signals caught so far, and from then on each one,
+    // to handleSignal() on the main thread (POSIX; a no-op on Windows).
+    void dispatchSignalsToMainThread();
+
 private:
     int _mask;
 };
@@ -41,6 +45,14 @@ private:
 #ifndef _WIN32
 
 #include <signal.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <QSocketNotifier>
+
+// Self-pipe: the signal handler only write(2)s the signal number here (async-signal-safe); the
+// main thread reads it through a QSocketNotifier and calls handleSignal() outside signal context.
+static int g_signalPipe[2] = {-1, -1};
 
 #else
 
@@ -62,6 +74,17 @@ SignalHandler::SignalHandler(int mask) : _mask(mask)
     assert(g_handler == NULL);
     g_handler = this;
 
+#ifndef _WIN32
+    if (pipe(g_signalPipe) == 0) {
+        for (int fd : g_signalPipe) {
+            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
+    } else {
+        g_signalPipe[0] = g_signalPipe[1] = -1;
+    }
+#endif //_WIN32
+
     for (int i=0;i<numSignals;i++)
     {
         int logical = 0x1 << i;
@@ -69,7 +92,11 @@ SignalHandler::SignalHandler(int mask) : _mask(mask)
         {
 #ifndef _WIN32
             int sig = POSIX_logicalToPhysical(logical);
-            bool failed = signal(sig, POSIX_handleFunc) == SIG_ERR;
+            struct sigaction sa = {};
+            sa.sa_handler = POSIX_handleFunc;
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = SA_RESTART;
+            bool failed = g_signalPipe[1] < 0 || sigaction(sig, &sa, nullptr) != 0;
             assert(!failed);
             (void)failed; // Silence the warning in non _DEBUG; TODO: something better
 
@@ -87,9 +114,26 @@ SignalHandler::~SignalHandler()
         int logical = 0x1 << i;
         if (_mask & logical)
         {
-            signal(POSIX_logicalToPhysical(logical), SIG_DFL);
+            struct sigaction sa = {};
+            sa.sa_handler = SIG_DFL;
+            sigemptyset(&sa.sa_mask);
+            sigaction(POSIX_logicalToPhysical(logical), &sa, nullptr);
         }
     }
+#endif //_WIN32
+}
+
+void SignalHandler::dispatchSignalsToMainThread()
+{
+#ifndef _WIN32
+    if (g_signalPipe[0] < 0)
+        return;
+    auto* notifier = new QSocketNotifier(g_signalPipe[0], QSocketNotifier::Read, qApp);
+    QObject::connect(notifier, &QSocketNotifier::activated, notifier, [this]() {
+        unsigned char sig;
+        while (read(g_signalPipe[0], &sig, 1) == 1)
+            handleSignal(POSIX_physicalToLogical(sig));
+    });
 #endif //_WIN32
 }
 
@@ -129,11 +173,12 @@ int POSIX_physicalToLogical(int signal)
 #ifndef _WIN32
 void POSIX_handleFunc(int signal)
 {
-    if (g_handler)
-    {
-        int signo = POSIX_physicalToLogical(signal);
-        g_handler->handleSignal(signo);
-    }
+    // Signal context: async-signal-safe calls only (write(2), errno).
+    int saved = errno;
+    unsigned char sig = (unsigned char)signal;
+    ssize_t n = write(g_signalPipe[1], &sig, 1);
+    (void)n; // a full pipe already holds a pending signal
+    errno = saved;
 }
 #endif //_WIN32
 
@@ -154,6 +199,7 @@ public:
 #endif
 
         SingleApplication a(argc, argv, true);
+        dispatchSignalsToMainThread();
 
         // Command line parser
         QCommandLineParser parser;

@@ -184,12 +184,17 @@ jobs:
       repo: ${{ steps.ref.outputs.repo }}
       sha: ${{ steps.ref.outputs.sha }}
     steps:
+      # The ref resolves only to the node repository's own code: a branch or tag of it (only its
+      # owner pushes those), or a commit that one of its line branches contains (compare API). A
+      # bare commit is refused otherwise: GitHub serves a fork PR's commits by SHA from the parent
+      # repository, and this job builds the tree and saves the depends and node-bin caches.
       - name: Resolve the node branch
         id: ref
         env:
           LINE: ${{ inputs.node_line }}
           NODE_REF: ${{ inputs.node_ref }}
           BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$LINE" = ycash6 ]; then repo=$NODE_REPO_YCASH6; record=feature/yellowback; else repo=$NODE_REPO_YCASH_DD; record=feature/yellowback-price-attest; fi
@@ -204,7 +209,14 @@ jobs:
             esac
           fi
           if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
-            sha=$ref
+            sha=
+            for b in upgrade/vault harden/yellowback upgrade/vault-in-term upgrade/quantum-vaults "$record"; do
+              st=$(gh api "repos/$repo/compare/$ref...$b" -q .status 2>/dev/null || true)
+              if [ "$st" = ahead ] || [ "$st" = identical ]; then sha=$ref; echo "node commit $ref is on $repo $b"; break; fi
+            done
+            [ -n "$sha" ] || { echo "::error::$ref is not a commit of a $repo line branch"; exit 1; }
+          elif ! printf '%s' "$ref" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+            echo "::error::node_ref is not a branch, tag or commit name"; exit 1
           else
             sha=$(git ls-remote "https://github.com/$repo.git" "refs/heads/$ref" "refs/tags/$ref^{}" "refs/tags/$ref" | awk 'NR==1{print $1}')
           fi
@@ -238,7 +250,7 @@ jobs:
             node/depends/x86_64-pc-linux-gnu
             node/depends/built
             node/depends/sources
-          key: depends-${{ runner.os }}-${{ steps.ref.outputs.repo }}-${{ hashFiles('node/depends/packages/**', 'node/depends/Makefile', 'node/depends/hosts/**', 'node/depends/builders/**') }}
+          key: depends-${{ runner.os }}-${{ steps.ref.outputs.repo }}-${{ hashFiles('node/depends/packages/**', 'node/depends/patches/**', 'node/depends/Makefile', 'node/depends/funcs.mk', 'node/depends/hosts/**', 'node/depends/builders/**') }}
       - name: Build depends
         if: steps.cache-bin.outputs.cache-hit != 'true' && steps.cache-depends.outputs.cache-hit != 'true'
         working-directory: node
