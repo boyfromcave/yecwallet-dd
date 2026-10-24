@@ -97,6 +97,15 @@
       "reason": "Test fixtures and documentation examples, not secrets (checked 2026-10-23): MEMBER_KEY in the QTest suites is a made-up compressed public key with a sequential hex pattern, and docs/yellowback-rpc-contract.json's example keyid is a sequential placeholder. A secret anywhere else is still reported.",
       "by": "semgrep CI setup",
       "date": "2026-10-23"
+    },
+    {
+      "rule": "python.lang.security.audit.dangerous-subprocess-use-audit",
+      "paths": [
+        "contrib/secops/**"
+      ],
+      "reason": "contrib/secops/code-scanning-triage.py runs gh api as an argv list without a shell; the arguments are constants plus the repository name the code-scanning workflow supplies, and the script runs only inside that workflow. Same acceptance as the other workspace repos (checked 2026-10-24).",
+      "by": "secops CI setup",
+      "date": "2026-10-24"
     }
   ]
 }
