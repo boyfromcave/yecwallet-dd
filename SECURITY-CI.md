@@ -1,6 +1,6 @@
 # Security CI
 
-Three workflows scan this repository; none of them opens an issue, and only Semgrep's `sync` job and
+Three workflows scan this repository and a fourth (`code-scanning.yml`) triages the alerts; none of them opens an issue, and only Semgrep's `sync` job and
 Dependabot open PRs (at most four Semgrep bucket PRs, and one grouped security PR per ecosystem).
 Every other result goes to the run's step summary and, as SARIF, to *Security â†’ Code scanning*.
 
@@ -12,6 +12,7 @@ Every other result goes to the run's step summary and, as SARIF, to *Security â†
 | Workflow security | `secops.yml` `zizmor` | PR, push, nightly 03:43 UTC | fails on any zizmor finding (default persona) | summary, code scanning `zizmor` |
 | Secrets | `secops.yml` `gitleaks` | PR (the PR's commits), push (pushed commits), nightly + dispatch (full history) | fails on a leak not in `.gitleaksignore` | summary (values redacted), code scanning `gitleaks` |
 | Dependency vulnerabilities | `secops.yml` `osv-scanner` | PR, push, nightly | fails on a known vulnerability not accepted in `osv-scanner.toml` | summary, code scanning `osv-scanner` |
+| Code-scanning triage | `code-scanning.yml` | push to `upgrade/vault` changing the dismissals file, nightly 03:53 UTC, dispatch (`dry_run`) | none; dismisses alerts listed in `contrib/secops/code-scanning-dismissals.json` | job log, artifact `code-scanning-alerts` |
 | Dependency updates | `.github/dependabot.yml` | GitHub's schedule | security updates only, grouped per ecosystem | one PR per ecosystem |
 
 What each covers here:
@@ -43,7 +44,10 @@ Always with a reason a reviewer can check, in the same PR as the change that nee
 - **OSV-Scanner**: an `[[IgnoredVulns]]` entry in `osv-scanner.toml` with `reason` and an `ignoreUntil`
   at most 90 days out; otherwise bump the dependency.
 - **zizmor**: fix the workflow; an inline `# zizmor: ignore[<audit>]` only with a comment saying why.
-- **CodeQL**: dismiss the alert in Code scanning with a reason.
+- **Code-scanning alerts** (CodeQL or any tool): a false positive, test-only hit or accepted risk is an
+  entry in `contrib/secops/code-scanning-dismissals.json` (tool, rule, path glob, reason, comment);
+  `.github/workflows/code-scanning.yml` dismisses the matching alerts, not the web UI. A real finding is
+  fixed, never listed.
 
 ## Tool versions
 
