@@ -1,0 +1,14 @@
+{
+ "bucket": "low",
+ "sla_days": 180,
+ "findings": [
+  {
+   "fingerprint": "01cda0faae99f8b0",
+   "rule": "python.lang.security.audit.dangerous-subprocess-use-audit",
+   "path": "contrib/secops/code-scanning-triage.py",
+   "line": 29,
+   "first_seen": "2026-10-24",
+   "due": "2027-04-22"
+  }
+ ]
+}
