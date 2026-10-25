@@ -3775,7 +3775,7 @@ private slots:
         // IT-8 verbatim (tests/check-rpc-contract.py --spec checks it against the generated spec's §8.1)
         const QString promise = YellowbackTab::inTermPromise();
         QVERIFY(promise.startsWith("Your YEC is locked for the term you choose. You can redeem at any time by paying back the YED you minted;"));
-        QVERIFY(promise.contains("an early-redeem fee of 5 %, 2.5 % or 1 % of your collateral for a short, medium or long term."));
+        QVERIFY(promise.contains("an early-redeem fee of 5 %, 2.5 % or 1 % of your debt for a short, medium or long term."));
         QVERIFY(promise.contains("If your collateral falls below 125 % of your debt at the attested price, anyone may close your vault by paying your debt;"));
         QVERIFY(promise.contains("which, at the threshold, is usually nothing."));
         QVERIFY(promise.endsWith("Before that happens, your wallet will warn you, and redeeming stops it."));
