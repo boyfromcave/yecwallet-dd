@@ -4224,7 +4224,7 @@ private slots:
         QVERIFY2(h.ctl.deadlineWarnings().isEmpty(), qPrintable(h.ctl.deadlineWarnings().join("\n")));
         QVERIFY(vault.underwaterAt > 0 && vault.canRedeem);                       // D-IT-15: the owner may redeem in term
         // IT-9 against the real node: yed_estimateredeem in term quotes the early-redeem fee, and the
-        // wallet's own recomputation (FEE-1 + earlyRedeemFeeBps[A] of the collateral) agrees with it
+        // wallet's own recomputation (FEE-1' + earlyRedeemFeeBps[A] of the debt at pMint) agrees with it
         json quote;
         QString quoteErr;
         h.ctl.estimateRedeem(mintTxid, [&](const json& q) { quote = q; }, [&](const QString& e) { quoteErr = e; });

@@ -118,7 +118,7 @@ at a wrong price. The QTest checks the Overview and every confirmation dialog fo
 `docs/plans/yellowback-in-term-claims-plan.md` IT-7..IT-9).** When `yed_getinfo.params.inTermClaims` is
 true the wallet judges a vault by the threshold, not by its heights: the owner may redeem at any
 height, and before the lock height the redeem also pays the early-redeem fee
-(`params.earlyRedeemFeeBps`, 5 / 2.5 / 1 % of the collateral for class A / B / C); anyone may claim the
+(`params.earlyRedeemFeeBps`, 5 / 2.5 / 1 % of the debt at the vault's mint price for class A / B / C, IT-9′); anyone may claim the
 vault, in term too, once its collateral is under θ × debt at the claim price (`claimThresholdBps`,
 125 %). On the Vaults page the Act-by cell names the vault's claimable-at price (`underwaterAt`),
 turns orange with a "WARNING" while the tip's claim price is within 25 % above it
