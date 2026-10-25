@@ -168,7 +168,7 @@ namespace Params {   // contract: yed_getinfo.params
     // rpcversion 6 (in-term claims, IT-7 / IT-9)
     constexpr const char* IN_TERM_CLAIMS      = "inTermClaims";      // true: a vault is claimable in term once under the threshold
     constexpr const char* CLAIM_THRESHOLD_BPS = "claimThresholdBps"; // θ: RED-4 (12500 = 125 %)
-    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // [A, B, C]: of the collateral, a redeem before lockHeight
+    constexpr const char* EARLY_REDEEM_FEE_BPS = "earlyRedeemFeeBps"; // [A, B, C]: of the debt at pMint (IT-9'), a redeem before lockHeight
     constexpr const char* SIGMA_MULT_MAX_BPS  = "sigmaMultMaxBps";   // 10000: the volatility multiplier is pinned at 1
     // rpcversion 7 (post-quantum owners, quantum spec §6.2)
     constexpr const char* PQ                  = "pq";                // the ParamsPq object

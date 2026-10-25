@@ -65,20 +65,21 @@ together. Under a lone `GLOBAL_RATIO` halt, or once `yed_getinfo.supplyCapReache
 halt bit (the cap is soft above `params.recapRatioBps`), or both, minting is *limited* while
 `mintableClasses` is non-empty: `YellowbackController::mintLimit()` explains which restriction
 applies (the supply in circulation, the cap and its share of issued YEC value; the global ratio
-and its floor), the Overview says "limited to class A", the cap row reads "$2,600.00 of $2,500.00
-cap — class A only" instead of a negative headroom, and the lock lengths of the other classes are
+and its floor), the Overview says "limited to class C" (the class whose base ratio reaches the recapitalisation floor), the cap row
+reads "$26,000.00 of $25,000.00 cap — class C only" instead of a negative headroom, and the lock lengths of the other classes are
 greyed out. `mintBlocker(cents, class)` lets a qualifying class through even when
 `supplyCents + cents` exceeds the cap, and refuses the others by name; while the cap still has
 room, an amount that would cross it is checked against the classes whose minimum ratio after the
 volatility multiplier (`baseRatioBps × sigmaMultBps / 10⁴`) reaches the floor. An empty
 `mintableClasses` (or any other halt bit) is *paused*. With `mintRequiresArmed` and the
-attestation layer not ARMED, the Mint page and Renew are paused by name; disabled classes (empty
-term ranges) are not offered and the page says only class A can be minted; `MAX_MINT` is $2,500
-off regtest (the contract does not report it).
+attestation layer not ARMED, the Mint page and Renew are paused by name; a disabled class (an empty
+term range) is not offered (none is disabled on the current parameters: A, B and C are enabled, D-IT-9); the
+largest mint is `params.maxMintCents`, $100,000 (D-Q-24).
 
 **Deadlines.** Every ACTIVE vault states its lock and claim heights with estimated dates (the
-table and the action line). From `claimHeight − 1 day` (1,152 blocks) the banner warns
-persistently about the vault (a VOID one: release). Several such vaults share one banner line,
+table and the action line). In the legacy height mode (a node without `inTermClaims`) the banner warns
+persistently from `claimHeight − 1 day` (1,152 blocks); with in-term claims the claimable price decides
+(the rpcversion 6 section below). The banner warns about the vault (a VOID one: release). Several such vaults share one banner line,
 with each vault's warning in its tooltip. The banner area carries only warnings: the "consensus
 rules since height N" line shows only while the upgrade is pending (once active, the Overview's
 Rules row says it), and information lines (locked YED outputs, the node's own quote) sit at the
@@ -107,18 +108,17 @@ lacks a command answers JSON-RPC `-32601`; the dialog reports that the node does
 
 **Copy.** The wallet never describes Yellowback as "trustless" (CI: `grep -rn 'trustless' src/`)
 and never mentions a federation. What enforcement means follows the upgrade's trust statement:
-every full node checks, as Ycash consensus rules, that the collateral cannot leave the vault
-before its lock height, that only the owner's key spends it before the claim height, and that it
-is released only against the burn of the vault's debt; after the claim height anyone may claim
-an underwater vault, after a delay in which a member of the attestor set can cancel a claim made
-at a wrong price. The QTest checks the Overview and every confirmation dialog for this
+every full node checks, as Ycash consensus rules, that the collateral is released only against the
+burn of the vault's debt: by the owner at any height (with the early-redeem fee before the lock
+height), or, once the vault is under water at 125 % of its debt at the attested price, by anyone,
+after a delay in which the attestor set can cancel a claim made at a wrong price. The QTest checks the Overview and every confirmation dialog for this
 (`Harness::copyIsClean`: no "trustless", "federat", "abandon" or "enforcing pool").
 
 **rpcversion 6: in-term claims (branch `upgrade/vault-in-term`; the workspace's
 `docs/plans/yellowback-in-term-claims-plan.md` IT-7..IT-9).** When `yed_getinfo.params.inTermClaims` is
 true the wallet judges a vault by the threshold, not by its heights: the owner may redeem at any
 height, and before the lock height the redeem also pays the early-redeem fee
-(`params.earlyRedeemFeeBps`, 5 / 2.5 / 1 % of the collateral for class A / B / C); anyone may claim the
+(`params.earlyRedeemFeeBps`, 5 / 2.5 / 1 % of the debt at the vault's mint price for class A / B / C, IT-9′); anyone may claim the
 vault, in term too, once its collateral is under θ × debt at the claim price (`claimThresholdBps`,
 125 %). On the Vaults page the Act-by cell names the vault's claimable-at price (`underwaterAt`),
 turns orange with a "WARNING" while the tip's claim price is within 25 % above it
