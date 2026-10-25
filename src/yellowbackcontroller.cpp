@@ -1881,7 +1881,7 @@ QString YellowbackController::explainError(const QString& e) {
     if (is(Errors::MINTPOL_UNARMED))
         return tr("Minting is paused: this network requires the attestation layer to be ARMED for every mint, and it is not at the reference height. Nothing was sent.");
     if (is(Errors::MINT_BAD_LOCK))
-        return tr("The lock length falls in no enabled term class (on mainnet and testnet only class A is enabled; B and C are disabled).");
+        return tr("The lock length falls in no enabled term class.");
     if (is(Errors::CLAIM_BURN_ABOVE_MAX))
         return tr("The claim would burn more YED than the vault's debt you confirmed, so nothing was sent. Re-check the claimable list and confirm again.");
     if (is(Errors::COLLATERAL_ABOVE_MAX))
