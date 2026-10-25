@@ -1880,8 +1880,14 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("The collateral this mint needs exceeds the maximum amount of YEC.");
     if (is(Errors::MINTPOL_UNARMED))
         return tr("Minting is paused: this network requires the attestation layer to be ARMED for every mint, and it is not at the reference height. Nothing was sent.");
-    if (is(Errors::MINT_BAD_LOCK))
+    if (is(Errors::MINT_BAD_LOCK)) {
+        // The node names the enabled ranges and any disabled class in a trailing parenthesis; echo it rather
+        // than hard-coding which classes a network enables (all three on mainnet and testnet, D-IT-9).
+        const int open = e.indexOf('('), close = e.lastIndexOf(')');
+        if (open >= 0 && close > open)
+            return tr("The lock length falls in no enabled term class. The node reports: %1.").arg(e.mid(open + 1, close - open - 1));
         return tr("The lock length falls in no enabled term class.");
+    }
     if (is(Errors::CLAIM_BURN_ABOVE_MAX))
         return tr("The claim would burn more YED than the vault's debt you confirmed, so nothing was sent. Re-check the claimable list and confirm again.");
     if (is(Errors::COLLATERAL_ABOVE_MAX))
