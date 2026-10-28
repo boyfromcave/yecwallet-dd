@@ -59,6 +59,8 @@ struct YellowbackPosition {
     int     emergencyOpenAt = -1;      // v3: the first reference height an emergency claim may cite; null (-1) unless noticed
     bool    canNotice       = false;   // v3, listpositions only: this node could post a notice now
     qint64  earlyRedeemFeeZat = 0;     // rpcversion 6 (IT-9), listpositions only: a redeem now pays it on top of the protocol fee (rpcversion 8: of the debt at pMint)
+    bool    spendPending    = false;   // a transaction spending the vault waits in the mempool (a newer node; false when absent)
+    QString spendTxid;                 // that transaction; "" when absent
 
     static YellowbackPosition fromJson(const json& j);
     /** "SLH-DSA-SHA2-128s" | "FN-DSA-512" | "scheme <n>": the owner's post-quantum signature scheme. */
@@ -140,8 +142,35 @@ struct YellowbackTx {
     QString payee;              // "" when null
     bool    unbacked        = false;
     bool    expired         = false;
+    qint64  time            = 0;       // the block time (Unix seconds, UTC); 0 while unconfirmed or on a node without `time`
+    QString carrierTxid;               // plan A6: the carrier of a two-step action; "" when absent
+    QString mainTxid;                  // plan A6: the main transaction the carrier led to; "" when absent
+    QString carrierOutcome;            // pending | completed | lapsed | swept; "" when absent
 
     static YellowbackTx fromJson(const json& j);
+    /** The row failed: expired, or its carrier lapsed or was swept without a main transaction. */
+    bool failed() const;
+    /** The row is waiting: unconfirmed, or its carrier is still pending. */
+    bool pending() const;
+};
+
+// One row of yed_listaddresses (a newer node), or of the wallet's own fallback list on an older one.
+struct YellowbackAddress {
+    QString address;
+    QString label;
+    qint64  confirmedCents = -1;       // -1 when unknown (the fallback list)
+    int     txCount        = -1;       // -1 when unknown
+    qint64  lastUsed       = -1;       // Unix seconds, or a height on a node that reports one; -1 never / unknown
+    static YellowbackAddress fromJson(const json& j);
+};
+
+// W3 (DigiByte v9.26.7 wave 5, 46a7c0de): what the ordinary Transactions tab says about a stock
+// listtransactions row that is a Yellowback transaction, joined by txid to yed_listtransactions.
+struct YellowbackTxAnnotation {
+    QString label;                     // "Yellowback mint: collateral locked", "YED sent", ...
+    qint64  yedCents  = 0;             // the YED it moved for this wallet, signed (+ received / minted, - sent / burned)
+    bool    hasYed    = false;         // the YED column shows a figure (a carrier moves none)
+    QString tooltip;
 };
 
 // Tolerant readers for RPC replies: a missing or null field yields the default instead of
@@ -178,6 +207,38 @@ namespace YellowbackFormat {
     QString haltReason(const QString& name);               // haltMask name -> sentence
     QString voidReason(const QString& verdict);            // MINT verdict -> sentence
     QString sourceTier(int tier);                          // v3 flags.tier -> "exchange APIs" | "mixed" | "aggregator"
+    // W4 (DigiByte v9.26.7 ea78ad18, 3f09a4a9, b00d185e): dates on screen follow the computer's regional
+    // settings; an export carries ISO-8601 UTC and plain decimals, never the display forms.
+    QString localDateTime(const QDateTime& dt);            // QLocale's short date and time, local time
+    QString localDate(const QDateTime& dt);                // QLocale's short date
+    QString unixTimeLocal(qint64 unixSeconds);             // localDateTime of a block time; "-" for 0
+    QString isoUtc(qint64 unixSeconds);                    // "2026-10-28T14:05:09Z"; "" for 0
+    QString plainDollars(qint64 cents);                    // "1234.50", "-40.00": no symbol, no grouping, '.' decimal
+    /** W3: the ordinary tab's annotation of a Yellowback row (and of its carrier, `asCarrier`). Pure. */
+    YellowbackTxAnnotation stockAnnotation(const YellowbackTx& t, bool asCarrier = false);
+    /** W2: "Redemption pending (txid…)" for a vault whose spend waits in the mempool; "" otherwise. */
+    QString spendPendingText(const YellowbackPosition& p);
+}
+
+// W5 (DigiByte v9.26.7 943bf9e9, 5e0f27ec, ba84ed96): the Yellowback tab's colours follow the theme.
+// YecWallet's dark and matrix themes paint light text on a dark window (res/css/dark.css, matrix.css);
+// the default theme follows the platform palette. Light colours are the ones the tab always used.
+namespace YellowbackTheme {
+    /** "dark" and "matrix" are dark; "light" and "blue" are light; any other (the default theme) follows
+     *  the palette's window lightness. Pure. */
+    bool    isDarkTheme(const QString& themeName, const QPalette& palette);
+    void    setDark(bool dark);                            // set by YellowbackTab::applyTheme
+    bool    dark();
+    QColor  attentionBackground();                         // a vault exposed now (claimable, noticed, claiming)
+    QColor  warningBackground();                           // a vault the owner should act on soon
+    QColor  pendingBackground();                           // a vault whose spend waits in the mempool
+    QColor  failedForeground();                            // expired, lapsed, claimable: red
+    QColor  pendingForeground();                           // unconfirmed or waiting: a neutral blue, never the failure red
+    QColor  cautionForeground();                           // a burn, an unbacked row, near the threshold: amber
+    QColor  mutedForeground();                             // closed rows
+    /** Label stylesheets: "muted" (secondary text, was #444), "hint" (an inline refusal, was #a33), and the
+     *  boxed banners "warning", "ok", "error", "info", "note"; "" for an unknown kind. */
+    QString labelCss(const QString& kind);
 }
 
 // Positions (vaults) table, pattern of src/balancestablemodel.h.
@@ -386,16 +447,25 @@ public:
 
     enum Column {
         Type = 0,
+        Date,            // W4: the block time in the computer's regional format (yed_listtransactions.time)
         Amount,
         Confirmations,
         Height,
         Verdict,
-        Txid
+        Txid,
+        ColumnCount
     };
+    /** W4: the role a sorting proxy reads: the raw value (cents, seconds, height), not the display string. */
+    static constexpr int SortRole = Qt::UserRole + 1;
 
     void setNewData(const QList<YellowbackTx>& txs, int currentHeight);
     const YellowbackTx* txAt(int row) const;
     QString getTxId(int row) const;
+    /** W4: the rows as CSV: plain-decimal dollars, ISO-8601 UTC dates, the txid and the carrier columns. Pure. */
+    static QString toCsv(const QList<YellowbackTx>& txs);
+    QString toCsv() const { return toCsv(*modeldata); }
+    /** The signed amount a row shows (a send or burn negative). */
+    static qint64 signedAmount(const YellowbackTx& t);
 
     int      rowCount(const QModelIndex& parent) const override;
     int      columnCount(const QModelIndex& parent) const override;

@@ -179,6 +179,16 @@ void MainWindow::doClose() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    // Yellowback W7 (DigiByte v9.26.7 e7254dcc): a two-step action finishes only while the node runs, and the
+    // bundled node stops with the wallet. Ask first (a shutdown signal, doClose(), is not asked).
+    if (event != nullptr && rpc != nullptr && rpc->getYellowback() != nullptr) {
+        const QString warning = rpc->getYellowback()->closeWarning();
+        if (!warning.isEmpty() &&
+            QMessageBox::question(this, tr("Yellowback action in progress"), warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+            event->ignore();
+            return;
+        }
+    }
     QSettings s;
 
     s.setValue("geometry", saveGeometry());
@@ -1846,6 +1856,8 @@ void MainWindow::slot_change_theme(const QString& theme_name)
       this->setStyleSheet(""); // reset styles    
       this->setStyleSheet(styleSheet);
     }
+    // Yellowback W5: the tab's own colours follow the theme
+    if (yellowbackTab != nullptr) yellowbackTab->applyTheme(saved_theme_name);
 
 }
 

@@ -29,7 +29,7 @@ mined.
 | Action | Before the confirmation | The call | After |
 |---|---|---|---|
 | **Mint** (Mint page) | amount in `[MIN_MINT, MAX_MINT]`, the mint gate from `yed_getstats` (`haltMask` names, `mintingAllowed`, `mintableClasses`, cap headroom) and `yed_getinfo.mintRequiresArmed`, class derived from the lock length (`params.classes`), a fresh `yed_estimatecollateral <cents> <lockBlocks>` (`requiredZat`, `termClass`, `lockHeight`, `claimHeight`, `minRatioBps`, `baseRatioBps`, `sigmaMultBps`, `pMint`, `refHeight`, rpcversion 8: `protocolFeeCents`, `protocolFeeZat`), the payee from `yed_getfeepayee <refHeight>` (`default.payoutAddress`, `preferred`; `fee-no-eligible-payee` is shown as "none"); the page's fee line from `yed_estimatefee <cents>` | `yed_mint <cents> <lockBlocks> [from] "" false <maxCollateralZat>` (`from` = a `ys1…` funding address) | `txid`, `vault`, `termClass`, `lockHeight`, `claimHeight`, `collateralZat`, `feeZat`, `payee`, `fundedFrom`, `warning`; the wallet.dat backup nag is raised |
-| **Send** (Send page) | prefix check (`ye`/`yt`/`yr` from `yed_getinfo.network`), `s1…`/`ys…`/`z…` refused locally, amount ≥ `MIN_OUTPUT`, confirmed balance, `yed_validateaddress` (`isvalid`, `reason`) | `yed_send <address> <cents>` | `txid`, `changeCents`, `expiryHeight`; a `change-floor` refusal's two workable amounts ("send N cents … or at most M cents") are parsed into the hint |
+| **Send** (Send page) | prefix check (`ye`/`yt`/`yr` from `yed_getinfo.network`), `s1…`/`ys…`/`z…` refused locally, amount ≥ `MIN_OUTPUT`, spendable balance (`yed_getbalance.spendableCents`, else `confirmedCents`), `yed_validateaddress` (`isvalid`, `reason`), then the dry run `yed_estimatesend {address: cents}`: an unworkable reply (`change-floor`, `insufficient-yed`) stops before the confirmation with its `alternatives`; a workable one puts the coins, the change and the YEC fee (`networkFeeZat`, when the node reports it) in the confirmation. A node without the dry run falls back to the whole-balance change check | `yed_send <address> <cents>` | `txid`, `changeCents`, `expiryHeight`; a `change-floor` refusal's two workable amounts ("send N cents … or at most M cents") are parsed into the hint |
 | **Redeem** (Vaults row, Redeem page) | ACTIVE at or past `lockHeight`, `mintedCents` ≤ confirmed YED, the fees and payee from `yed_estimateredeem <vaultTxid>` (rpcversion 8: on every node; `pMint`, `protocolFeeCents`, `protocolFeeZat`, `earlyRedeemFeeCents`, `earlyRedeemFeeZat`), destination (Redeem page: a fresh own address, or one of the wallet's `s1…`/`ys1…` addresses) | `yed_redeem <vaultTxid> [to]` | `txid`, `burnedCents`, `feeZat`, `payee`, `collateralOut`, `to` |
 | **Renew** (Vaults row) | from `lockHeight`, one confirmation for both legs | `yed_redeem`, then, once `yed_listpositions` reads the vault CLOSED, `yed_mint` of the same debt with the vault's lock length (or the shortest enabled one), held to the confirmed `maxCollateralZat` | a notice per leg; a mint that cannot be built (minting paused, price past the cap, the vault claimed instead) stops the renewal and sends nothing else |
 | **Claim** (Claim page) | a `yed_listclaimable` row (`vault`, `ownerAddress`, `collateralZat`, `mintedCents`, `feeZat`, `claimHeight`, `underwaterAt`, `pClaim`); `mintedCents` ≤ confirmed YED; a transparent destination | `yed_claim <vaultTxid> [to] "" false <minOutZat> <maxBurnCents>` | the debt is burned and the collateral, less the owner's residual, moves into a claimant intent that waits `CLAIM_DELAY`; the vault is CLAIMING |
@@ -46,6 +46,24 @@ plus the network fee); a **redemption** pays its pool fee and the network fee fr
 (`collateralOut` is the vault value less the fees); a **claim** pays the pool fee, any attestation
 fee and the network fee from the claimant's own YEC, because the vault's value goes into the
 intents. The dialogs and the Claimable table's tooltip say the same.
+
+**Fields a newer node adds** (the DigiByte v9.26.7 review's follow-ups; each is read when present and the
+wallet keeps its earlier behaviour when an older node omits it, `// optional` in `src/yellowbackrpc.h`):
+`yed_getbalance.spendableCents` (Send, Redeem, Renew and Claim gate on it); `yed_listpositions` /
+`yed_getvault` `spendPending` + `spendTxid` (the vault row reads "Redemption pending (txid)" and offers
+neither Redeem nor Renew; `vault-spend-pending` is explained); `yed_estimatecollateral.mintBlocked` +
+`mintBlockedReason` (the Mint page names the refusal and keeps Mint off); `yed_estimatesend.networkFeeZat`;
+`yed_listtransactions` `time`, `carrierTxid`, `mainTxid`, `carrierOutcome` (the Date column, the CSV
+export, pending and failed rows in different colours, and the ordinary Transactions tab's carrier rows);
+`yed_listaddresses [includeEmpty]` and `yed_getnewaddress [type] [label]` (the Receive page's past
+addresses with the labels wallet.dat holds; an older node gets the client address book's labels, and a
+label it refuses is kept there only); `too-many-coins`. The ordinary Transactions tab joins stock
+`listtransactions` rows to `yed_listtransactions` by txid: a mint reads "Yellowback mint: collateral
+locked", a YED payment "YED sent" / "YED received", and the YED column (also in its CSV export, as a
+plain decimal) carries the YED each moved. The Yellowback Transactions page sorts by value and exports
+CSV (plain-decimal dollars, ISO-8601 UTC dates, every txid); dates on screen follow the regional
+settings. Closing YecWallet while a two-step action waits for its carrier asks first. The tab's colours
+come from `YellowbackTheme` (light, or dark under the dark and matrix themes or a dark platform palette).
 
 A claim of this wallet whose vault was cancelled (`yed_getvault` answers `vault-not-found`) is
 listed on Pending claims with the sentence that its burn was re-issued to the claimant (CAN-1). Settings offers
