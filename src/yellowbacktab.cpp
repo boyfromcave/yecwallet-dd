@@ -21,6 +21,9 @@
 #include "ui_yellowbackmint.h"
 
 #include <QSignalBlocker>
+#include <QSortFilterProxyModel>
+#include <QTableWidget>
+#include <QSaveFile>
 #include <QScrollArea>
 #include <QFormLayout>
 #include <QToolButton>
@@ -53,7 +56,9 @@ YellowbackTab::YellowbackTab(MainWindow* main, QWidget* parent) : QWidget(parent
         return ok;
     };
 
+    pastRows = new QList<YellowbackAddress>();
     setupPages();
+    applyTheme();
 
     ui->lblBanner->setText(tr("Yellowback: waiting for the node..."));
     ui->lblBanner->setVisible(true);
@@ -81,6 +86,7 @@ YellowbackTab::~YellowbackTab() {
     delete uiSettings;
     delete uiAttestors;
     delete ui;
+    delete pastRows;
 }
 
 // ── Construction ──────────────────────────────────────────────────────────────────────────
@@ -199,7 +205,13 @@ void YellowbackTab::setController(YellowbackController* controller) {
     if (ctl == nullptr) return;
 
     uiOverview->tblRecent->setModel(ctl->transactionsModel());
-    uiTx->tblTransactions->setModel(ctl->transactionsModel());
+    // W4: the Transactions page sorts by the underlying values (YellowbackTxModel::SortRole), newest first
+    txSort = new QSortFilterProxyModel(this);
+    txSort->setSourceModel(ctl->transactionsModel());
+    txSort->setSortRole(YellowbackTxModel::SortRole);
+    uiTx->tblTransactions->setModel(txSort);
+    uiTx->tblTransactions->setSortingEnabled(true);
+    uiTx->tblTransactions->sortByColumn(YellowbackTxModel::Date, Qt::DescendingOrder);
     positionsFilter = new YellowbackPositionsFilter(this);
     positionsFilter->setSourceModel(ctl->positionsModel());
     uiPositions->tblPositions->setModel(positionsFilter);
@@ -216,7 +228,7 @@ void YellowbackTab::setController(YellowbackController* controller) {
     QObject::connect(ctl, &YellowbackController::attestorsUpdated,    this, [=, this]() { updateAttestors(); });
     QObject::connect(ctl, &YellowbackController::selectionUpdated,    this, [=, this]() { updateMintAttest(); });
     QObject::connect(ctl, &YellowbackController::statsUpdated,        this, [=, this]() { updateBanner(); updateOverview(); updateMintGate(); });
-    QObject::connect(ctl, &YellowbackController::balanceUpdated,      this, [=, this]() { updateBalances(); });
+    QObject::connect(ctl, &YellowbackController::balanceUpdated,      this, [=, this]() { updateBalances(); refreshPastAddresses(); });
     QObject::connect(ctl, &YellowbackController::positionsUpdated,    this, [=, this]() { updatePositions(); updateRedeemPage(); updateBanner(); continueRenew(); });
     QObject::connect(ctl, &YellowbackController::claimableUpdated,    this, [=, this]() { updateClaimPage(); });
     QObject::connect(ctl, &YellowbackController::pendingClaimsUpdated, this, [=, this]() { updatePendingClaims(); });
@@ -240,6 +252,39 @@ void YellowbackTab::setController(YellowbackController* controller) {
     updatePendingClaims();
     updateMintAttest();
     updateSettingsPage();
+    refreshPastAddresses();
+}
+
+// ── Theme (W5) ────────────────────────────────────────────────────────────────────────────
+
+void YellowbackTab::applyTheme(const QString& themeName) {
+    if (applyingTheme) return;
+    applyingTheme = true;
+    const QString name = themeName.isEmpty() ? Settings::getInstance()->get_theme_name() : themeName;
+    YellowbackTheme::setDark(YellowbackTheme::isDarkTheme(name, palette()));
+    const QList<QPair<QLabel*, const char*>> styled = {
+        { ui->lblBanner, "warning" }, { ui->lblStatus, "ok" }, { ui->lblBackupNag, "error" },
+        { uiMint->lblGate, "warning" }, { uiMint->lblDivergence, "warning" }, { uiMint->lblClassNote, "muted" }, { uiMint->lblMintHint, "hint" },
+        { uiAttestors->lblArming, "info" }, { uiAttestors->lblMembership, "note" }, { uiAttestors->lblAttestorAction, "muted" },
+        { uiClaim->lblClaimHint, "muted" }, { uiOverview->lblNotes, "muted" }, { uiPositions->lblVaultAction, "muted" },
+        { uiRedeem->lblRedeemHint, "hint" }, { uiSend->lblSendHint, "hint" },
+        { lblPendingAction, "muted" }, { lblCancelledClaims, "hint" },
+    };
+    for (const auto& l : styled) {
+        if (l.first == nullptr) continue;
+        QString css = YellowbackTheme::labelCss(l.second);
+        if (l.first == uiOverview->lblNotes) css.replace("; }", "; padding: 2px 6px; }");
+        l.first->setStyleSheet(css);
+    }
+    // the tables repaint with the theme's row colours
+    for (QTableView* t : findChildren<QTableView*>()) t->viewport()->update();
+    applyingTheme = false;
+}
+
+void YellowbackTab::changeEvent(QEvent* event) {
+    // the platform's dark mode (or a new application palette) under the default theme
+    if (event->type() == QEvent::PaletteChange) applyTheme();
+    QWidget::changeEvent(event);
 }
 
 // ── Banner / enabling ─────────────────────────────────────────────────────────────────────
@@ -326,7 +371,7 @@ void YellowbackTab::notice(const QString& title, const QString& text, bool isErr
 // only appends what the identifier means.
 void YellowbackTab::failed(const QString& what, const QString& e) {
     QString msg = tr("%1 failed: %2").arg(what).arg(e);
-    QString why = YellowbackController::explainError(e);
+    QString why = YellowbackController::explainErrorFor(e, what);   // W6: insufficient-yec says what this action needs YEC for
     if (!why.isEmpty()) msg += "\n\n" % why;
     notice(tr("%1 failed").arg(what), msg, true);
 }
@@ -502,8 +547,15 @@ void YellowbackTab::updateBalances() {
     if (ctl == nullptr) return;
     uiOverview->lblYedConfirmed->setText(YellowbackFormat::cents(ctl->confirmedCents()));
     uiOverview->lblYedUnconfirmed->setText(YellowbackFormat::cents(ctl->unconfirmedCents()));
-    uiSend->lblAvailable->setText(YellowbackFormat::cents(ctl->confirmedCents()) %
-        (ctl->unconfirmedCents() > 0 ? tr("  (+ %1 unconfirmed, not spendable yet)").arg(YellowbackFormat::cents(ctl->unconfirmedCents())) : ""));
+    // W1 (DigiByte v9.26.7 639542cb): Send offers what the node can spend now, not the confirmed total, which
+    // still counts YED the wallet's own unconfirmed transactions have spent (yed_getbalance.spendableCents)
+    const qint64 spendableCents = ctl->spendableCents();
+    QString avail = YellowbackFormat::cents(spendableCents);
+    if (ctl->reportsSpendable() && spendableCents < ctl->confirmedCents())
+        avail += tr("  (of %1 confirmed: the rest is spent by your own unconfirmed transactions)").arg(YellowbackFormat::cents(ctl->confirmedCents()));
+    if (ctl->unconfirmedCents() > 0)
+        avail += tr("  (+ %1 unconfirmed, not spendable yet)").arg(YellowbackFormat::cents(ctl->unconfirmedCents()));
+    uiSend->lblAvailable->setText(avail);
 }
 
 // ── Receive ───────────────────────────────────────────────────────────────────────────────
@@ -519,14 +571,87 @@ void YellowbackTab::setupReceive() {
         if (receiveAddress.isEmpty()) return;
         AddressBook::getInstance()->addAddressLabel(uiReceive->txtLabel->text().trimmed(), receiveAddress);
         uiReceive->lblReceiveStatus->setText(tr("Label saved."));
+        refreshPastAddresses();
     });
     QRegularExpressionValidator* v = new QRegularExpressionValidator(QRegularExpression(Settings::labelRegExp), uiReceive->txtLabel);
     uiReceive->txtLabel->setValidator(v);
+    uiReceive->lblLabelTitle->setText(tr("Label (typed before New address, it is kept with the address in wallet.dat by a node that supports it; Save label keeps it in this wallet's address book)"));
+    uiReceive->lblLabelTitle->setWordWrap(true);
+
+    // W8 (DigiByte v9.26.7 5539554c, b3cb2482): the addresses this wallet has handed out, with their labels and activity
+    lblPastAddresses = new QLabel(tr("Past receive addresses"), pages[Receive]);
+    lblPastAddresses->setObjectName("lblPastAddresses");
+    lblPastAddresses->setWordWrap(true);
+    tblPastAddresses = new QTableWidget(0, 5, pages[Receive]);
+    tblPastAddresses->setObjectName("tblPastAddresses");
+    tblPastAddresses->setHorizontalHeaderLabels({ tr("Address"), tr("Label"), tr("YED"), tr("Transactions"), tr("Last used") });
+    tblPastAddresses->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    tblPastAddresses->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tblPastAddresses->horizontalHeader()->setStretchLastSection(true);
+    tblPastAddresses->verticalHeader()->setVisible(false);
+    tblPastAddresses->setMinimumHeight(tblPastAddresses->verticalHeader()->defaultSectionSize() * 5);
+    tblPastAddresses->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(tblPastAddresses, &QTableWidget::customContextMenuRequested, [=, this](const QPoint& pos) {
+        auto* item = tblPastAddresses->itemAt(pos);
+        if (item == nullptr) return;
+        const QString addr = tblPastAddresses->item(item->row(), 0)->text();
+        QMenu menu(this);
+        menu.addAction(tr("Copy address"), [=]() { QGuiApplication::clipboard()->setText(addr); });
+        menu.exec(tblPastAddresses->viewport()->mapToGlobal(pos));
+    });
+    if (auto* box = qobject_cast<QBoxLayout*>(pages[Receive]->layout())) {
+        // above the trailing spacer
+        const int at = std::max(0, box->count() - 1);
+        box->insertWidget(at, lblPastAddresses);
+        box->insertWidget(at + 1, tblPastAddresses, 1);
+    }
+}
+
+QList<YellowbackAddress> YellowbackTab::pastAddresses() const {
+    return *pastRows;
+}
+
+void YellowbackTab::refreshPastAddresses() {
+    if (ctl == nullptr || !ctl->isAvailable()) return;
+    auto isYed = [this](const QString& a) { return ctl->looksLikeYellowbackAddress(a); };
+    ctl->listAddresses(true,
+        [=, this](const json& rows) {
+            showPastAddresses(YellowbackController::pastAddresses(rows, AddressBook::getInstance()->getAllAddressLabels(), isYed), true);
+        },
+        [=, this](const QString& e) {
+            // an older node has no yed_listaddresses: the labels this wallet keeps itself, without balances
+            if (!YellowbackController::isMethodNotFound(e)) { lblPastAddresses->setText(tr("Past receive addresses (yed_listaddresses failed: %1)").arg(e)); return; }
+            showPastAddresses(YellowbackController::pastAddresses(json(nullptr), AddressBook::getInstance()->getAllAddressLabels(), isYed), false);
+        });
+}
+
+void YellowbackTab::showPastAddresses(const QList<YellowbackAddress>& rows, bool fromNode) {
+    *pastRows = rows;
+    lblPastAddresses->setText(fromNode
+        ? tr("Past receive addresses (%1), with the labels your node keeps in wallet.dat:").arg(rows.size())
+        : tr("Past receive addresses you labelled (%1). Your node does not list its Yellowback addresses (yed_listaddresses), so these come from this wallet's address book, without balances.").arg(rows.size()));
+    tblPastAddresses->setRowCount(rows.size());
+    for (int r = 0; r < rows.size(); r++) {
+        const YellowbackAddress& a = rows[r];
+        const QString lastUsed = a.lastUsed < 0 ? (fromNode ? tr("never") : QString("-"))
+                               : a.lastUsed >= 1000000000 ? YellowbackFormat::unixTimeLocal(a.lastUsed)
+                               : tr("height %1").arg(a.lastUsed);
+        const QStringList cells = { a.address, a.label,
+                                    a.confirmedCents >= 0 ? YellowbackFormat::cents(a.confirmedCents) : QString("-"),
+                                    a.txCount >= 0 ? QString::number(a.txCount) : QString("-"), lastUsed };
+        for (int c = 0; c < cells.size(); c++) {
+            auto* item = new QTableWidgetItem(cells[c]);
+            if (c == 0) item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+            tblPastAddresses->setItem(r, c, item);
+        }
+    }
+    tblPastAddresses->resizeColumnsToContents();
 }
 
 void YellowbackTab::newReceiveAddress() {
     if (ctl == nullptr) return;
     uiReceive->lblReceiveStatus->setText(tr("Creating address..."));
+    const QString label = uiReceive->txtLabel->text().trimmed();
     ctl->getNewAddress(
         [=, this](const json& r) {
             QString addr = r.is_string() ? QString::fromStdString(r.get<json::string_t>())
@@ -538,6 +663,9 @@ void YellowbackTab::newReceiveAddress() {
                 uiReceive->lblReceiveStatus->setText(tr("This is a %1 Yellowback address (prefix %2). Send only YED here.")
                     .arg(ctl->network()).arg(ctl->addressPrefix()) %
                     (ctl->isPqYellowbackAddress(addr) ? " " % tr("It is a post-quantum (Falcon) address.") : QString()));
+                // W8: the label also goes to the client address book, the one an older node's wallet has
+                if (!label.isEmpty()) AddressBook::getInstance()->addAddressLabel(label, addr);
+                refreshPastAddresses();
             };
             if (!ctl->isPqYellowbackAddress(addr)) { show(); return; }
             // rpcversion 7 (C-10): a 53-character address is shown only once the node confirms it is not a
@@ -554,7 +682,7 @@ void YellowbackTab::newReceiveAddress() {
         },
         [=, this](const QString& e) {
             uiReceive->lblReceiveStatus->setText(tr("yed_getnewaddress failed: ") % e);
-        });
+        }, label);
 }
 
 // ── Send ──────────────────────────────────────────────────────────────────────────────────
@@ -613,6 +741,10 @@ void YellowbackTab::setupSend() {
         uiSend->lblSendStatus->clear();
     });
     QObject::connect(uiSend->btnSend, &QPushButton::clicked, [=, this]() { doSend(); });
+    // W1 (DigiByte v9.26.7 6c35b138): the change rule, where the amount is typed
+    uiSend->txtAmount->setToolTip(tr("Change must be zero or at least %1, the smallest YED output. Your node picks coins so that the change is "
+                                     "$0.00 or at least %1, and when no choice works it names the nearest amounts that do. The network fee is paid "
+                                     "in YEC, not from this amount.").arg(YellowbackFormat::cents(YellowbackRpc::MIN_OUTPUT_CENTS)));
 
     auto validateLive = [=, this]() {
         if (ctl == nullptr) return;
@@ -659,22 +791,14 @@ void YellowbackTab::doSend() {
         uiSend->lblSendHint->setText(tr("The smallest YED payment is %1.").arg(YellowbackFormat::cents(minOut)));
         return;
     }
-    if (cents > ctl->confirmedCents()) {
-        uiSend->lblSendHint->setText(tr("Only %1 is confirmed and spendable.").arg(YellowbackFormat::cents(ctl->confirmedCents())));
+    if (cents > ctl->spendableCents()) {
+        uiSend->lblSendHint->setText(tr("Only %1 is confirmed and spendable.").arg(YellowbackFormat::cents(ctl->spendableCents())));
         return;
     }
     // Change floor (§4.6): the node refuses with `change-floor` when change would be under the
-    // minimum output. This is only a first check on the whole balance; the node's message
-    // names the exact workable amounts for the inputs it selected.
-    qint64 change = ctl->confirmedCents() - cents;
-    if (change > 0 && change < minOut) {
-        uiSend->lblSendHint->setText(tr("This amount would leave %1 of change, below the %2 minimum. Send exactly %3 (everything) or at most %4.")
-            .arg(YellowbackFormat::cents(change))
-            .arg(YellowbackFormat::cents(minOut))
-            .arg(YellowbackFormat::cents(ctl->confirmedCents()))
-            .arg(YellowbackFormat::cents(ctl->confirmedCents() - minOut)));
-        return;
-    }
+    // minimum output. W1 (DigiByte v9.26.7 639542cb): the node's dry run (yed_estimatesend) decides it on
+    // the coins it would actually select, before the confirmation; a node without the dry run falls
+    // back to this first check on the whole balance.
     uiSend->lblSendHint->clear();
 
     ctl->validateAddress(addr,
@@ -690,42 +814,76 @@ void YellowbackTab::doSend() {
                 uiSend->lblSendHint->setText(tr("Refused: ") % refusal);
                 return;
             }
-            QString text = tr("Send %1 of YED to\n%2\n\nThe YEC network fee is paid from your transparent YEC. "
-                              "This transfer is transparent and cannot be undone.")
-                              .arg(YellowbackFormat::cents(cents)).arg(addr);
-            if (!confirm(tr("Confirm Yellowback transfer"), text))
-                return;
-
-            uiSend->btnSend->setEnabled(false);
-            uiSend->lblSendStatus->setText(tr("Sending..."));
-            ctl->send(addr, cents,
-                [=, this](const json& r) {
-                    uiSend->btnSend->setEnabled(actionsEnabled);
-                    QString txid = YellowbackJson::toStr(r, YellowbackRpc::SendResult::TXID);
-                    uiSend->lblSendStatus->setText(tr("Sent %1. txid: %2 (change %3, expires at height %4 unless mined)")
-                        .arg(YellowbackFormat::cents(cents)).arg(txid)
-                        .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, YellowbackRpc::SendResult::CHANGE_CENTS)))
-                        .arg(YellowbackJson::toInt(r, YellowbackRpc::SendResult::EXPIRY_HEIGHT)));
-                    uiSend->txtAmount->clear();
-                    ctl->refresh(true);
+            ctl->estimateSend(addr, cents,
+                [=, this](const json& est) {
+                    const QString why = YellowbackController::describeSendEstimate(est, minOut);
+                    if (!why.isEmpty()) { uiSend->lblSendHint->setText(why); return; }   // nothing to confirm: the send would be refused
+                    confirmSend(addr, cents, est);
                 },
                 [=, this](const QString& e) {
-                    uiSend->btnSend->setEnabled(actionsEnabled);
-                    uiSend->lblSendStatus->setText(tr("yed_send failed: ") % e);
-                    // change-floor (§4.6): the node names the two amounts that work for the
-                    // inputs it selected — offer them in the hint so the user can pick one.
-                    qint64 all = 0, atMost = 0;
-                    if (e.startsWith(YellowbackRpc::Errors::CHANGE_FLOOR, Qt::CaseInsensitive) || e.contains("(C20)")) {
-                        uiSend->lblSendHint->setText(YellowbackController::parseChangeFloor(e, &all, &atMost)
-                            ? tr("The change left over would be below the %1 minimum. Send exactly %2 (everything the node selected) or at most %3.")
-                                  .arg(YellowbackFormat::cents(ctl->minOutputCents())).arg(YellowbackFormat::cents(all)).arg(YellowbackFormat::cents(atMost))
-                            : tr("The change left over would be below the minimum output; the node's message names the amounts that work."));
+                    if (!YellowbackController::isMethodNotFound(e)) {
+                        uiSend->lblSendHint->setText(tr("yed_estimatesend failed: ") % e);
+                        return;
                     }
-                    failed("yed_send", e);
+                    // a node without the dry run: the whole-balance check, then the node's own refusal names the amounts
+                    const qint64 change = ctl->spendableCents() - cents;
+                    if (change > 0 && change < minOut) {
+                        uiSend->lblSendHint->setText(tr("This amount would leave %1 of change, below the %2 minimum. Send exactly %3 (everything) or at most %4.")
+                            .arg(YellowbackFormat::cents(change)).arg(YellowbackFormat::cents(minOut))
+                            .arg(YellowbackFormat::cents(ctl->spendableCents())).arg(YellowbackFormat::cents(ctl->spendableCents() - minOut)));
+                        return;
+                    }
+                    confirmSend(addr, cents, json::object());
                 });
         },
         [=, this](const QString& e) {
             uiSend->lblSendHint->setText(tr("yed_validateaddress failed: ") % e);
+        });
+}
+
+// W1: the confirmation shows what the dry run found (the coins, the change, the YEC fee), then the one yed_send call
+void YellowbackTab::confirmSend(const QString& addr, qint64 cents, const json& est) {
+    using namespace YellowbackRpc;
+    QString plan;
+    if (YellowbackJson::has(est, EstimateSend::WORKABLE)) {
+        const qint64 change = YellowbackJson::toInt(est, EstimateSend::CHANGE_CENTS);
+        const int inputs = est.find(EstimateSend::INPUTS) != est.end() && est[EstimateSend::INPUTS].is_array() ? (int)est[EstimateSend::INPUTS].size() : 0;
+        plan = tr("It spends %1 YED coin(s) worth %2; %3 comes back to this wallet as change.")
+                   .arg(inputs).arg(YellowbackFormat::cents(YellowbackJson::toInt(est, EstimateSend::SELECTED_CENTS)))
+                   .arg(YellowbackFormat::cents(change)) % "\n";
+    }
+    QString text = tr("Send %1 of YED to\n%2\n\n").arg(YellowbackFormat::cents(cents)).arg(addr) % plan %
+                   YellowbackController::sendFeeLine(est) % "\n\n" %
+                   tr("This transfer is transparent and cannot be undone.");
+    if (!confirm(tr("Confirm Yellowback transfer"), text))
+        return;
+
+    uiSend->btnSend->setEnabled(false);
+    uiSend->lblSendStatus->setText(tr("Sending..."));
+    ctl->send(addr, cents,
+        [=, this](const json& r) {
+            uiSend->btnSend->setEnabled(actionsEnabled);
+            QString txid = YellowbackJson::toStr(r, YellowbackRpc::SendResult::TXID);
+            uiSend->lblSendStatus->setText(tr("Sent %1. txid: %2 (change %3, expires at height %4 unless mined)")
+                .arg(YellowbackFormat::cents(cents)).arg(txid)
+                .arg(YellowbackFormat::cents(YellowbackJson::toInt(r, YellowbackRpc::SendResult::CHANGE_CENTS)))
+                .arg(YellowbackJson::toInt(r, YellowbackRpc::SendResult::EXPIRY_HEIGHT)));
+            uiSend->txtAmount->clear();
+            ctl->refresh(true);
+        },
+        [=, this](const QString& e) {
+            uiSend->btnSend->setEnabled(actionsEnabled);
+            uiSend->lblSendStatus->setText(tr("yed_send failed: ") % e);
+            // change-floor (§4.6): the node names the two amounts that work for the
+            // inputs it selected — offer them in the hint so the user can pick one.
+            qint64 all = 0, atMost = 0;
+            if (e.startsWith(YellowbackRpc::Errors::CHANGE_FLOOR, Qt::CaseInsensitive) || e.contains("(C20)")) {
+                uiSend->lblSendHint->setText(YellowbackController::parseChangeFloor(e, &all, &atMost)
+                    ? tr("The change left over would be below the %1 minimum. Send exactly %2 (everything the node selected) or at most %3.")
+                          .arg(YellowbackFormat::cents(ctl->minOutputCents())).arg(YellowbackFormat::cents(all)).arg(YellowbackFormat::cents(atMost))
+                    : tr("The change left over would be below the minimum output; the node's message names the amounts that work."));
+            }
+            failed("yed_send", e);
         });
 }
 
@@ -744,7 +902,7 @@ void YellowbackTab::setupMint() {
     QObject::connect(uiMint->txtAmount, &QLineEdit::textChanged, [=, this](const QString&) { estimateTimer->start(); });
     QObject::connect(uiMint->cmbTier, &QComboBox::currentIndexChanged, [=, this](int) { estimateTimer->start(); });
     QObject::connect(uiMint->cmbFundFrom, &QComboBox::currentIndexChanged, [=, this](int) {
-        if (ctl != nullptr) uiMint->lblYecAvailable->setText(Settings::getZECDisplayFormat(ctl->yecBalanceAt(fundingSource())));
+        updateYecAvailable();
         estimateTimer->start();
     });
     QObject::connect(uiMint->btnMint, &QPushButton::clicked, [=, this]() { doMint(); });
@@ -795,7 +953,20 @@ void YellowbackTab::refreshFundingSources() {
     }
     int idx = keep.isEmpty() ? 0 : uiMint->cmbFundFrom->findData(keep);
     uiMint->cmbFundFrom->setCurrentIndex(idx < 0 ? 0 : idx);
-    uiMint->lblYecAvailable->setText(ctl != nullptr ? Settings::getZECDisplayFormat(ctl->yecBalanceAt(fundingSource())) : "-");
+    updateYecAvailable();
+}
+
+// W6 (DigiByte v9.26.7 635af77f): "YEC available" is what the node's builders can select: coins with at least one
+// confirmation (the stock balances count listunspent 0, so they include coins the mint cannot use yet)
+void YellowbackTab::updateYecAvailable() {
+    if (ctl == nullptr) { uiMint->lblYecAvailable->setText("-"); return; }
+    const double usable = ctl->confirmedYecAt(fundingSource());
+    const double total  = ctl->yecBalanceAt(fundingSource());
+    QString text = Settings::getZECDisplayFormat(usable);
+    if (total > usable + 1e-9)
+        text += tr("  (+ %1 unconfirmed, usable once confirmed)").arg(Settings::getZECDisplayFormat(total - usable));
+    uiMint->lblYecAvailable->setText(text);
+    uiMint->lblYecAvailable->setToolTip(tr("Confirmed, unlocked YEC only: your node funds a mint from coins with at least one confirmation."));
 }
 
 void YellowbackTab::updateMintGate() {
@@ -818,7 +989,7 @@ void YellowbackTab::updateMintGate() {
     }
     bool estimateCurrent = haveAmount && estimateZat >= 0 && estimateCents == cents &&
                            estimateLockBlocks == uiMint->cmbTier->currentData().toInt();
-    uiMint->btnMint->setEnabled(actionsEnabled && blocker.isEmpty() && estimateCurrent);
+    uiMint->btnMint->setEnabled(actionsEnabled && blocker.isEmpty() && estimateCurrent && !estimateBlocked);
 }
 
 void YellowbackTab::applyMintableClasses() {
@@ -841,6 +1012,7 @@ void YellowbackTab::requestEstimate() {
     int lockBlocks = uiMint->cmbTier->currentData().toInt();
     if (!parseDollars(uiMint->txtAmount->text(), &cents) || cents <= 0 || lockBlocks <= 0) {
         estimateZat = -1;
+        estimateBlocked = false;
         uiMint->lblCollateral->setText("-");
         uiMint->lblUnlock->setText("-");
         uiMint->lblRatio->setText("-");
@@ -855,6 +1027,7 @@ void YellowbackTab::requestEstimate() {
     }
     if (cents < ctl->minMintCents() || cents > ctl->maxMintCents()) {
         estimateZat = -1;
+        estimateBlocked = false;
         uiMint->lblMintHint->setText(tr("A mint must be between %1 and %2.")
             .arg(YellowbackFormat::cents(ctl->minMintCents())).arg(YellowbackFormat::cents(ctl->maxMintCents())));
         updateMintGate();
@@ -892,6 +1065,7 @@ void YellowbackTab::requestEstimate() {
             estimateCents      = cents;
             estimateLockBlocks = lockBlocks;
             estimateZat        = YellowbackJson::toInt(e, REQUIRED_ZAT, -1);
+            estimateBlocked    = false;
             uiMint->lblRatio->setText(tr("%1 (base %2 × σ %3)")
                 .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(e, MIN_RATIO_BPS)))
                 .arg(YellowbackFormat::bpsAsPercent(YellowbackJson::toInt(e, BASE_RATIO_BPS)))
@@ -922,18 +1096,27 @@ void YellowbackTab::requestEstimate() {
             uiMint->lblUnlock->setText(YellowbackFormat::heightWithEstimate(lock, ctl->height()) %
                 tr("  — class %1, claim height %2; dates are estimates at 75 s/block")
                     .arg(YellowbackJson::toStr(e, TERM_CLASS)).arg(YellowbackJson::toInt(e, CLAIM_HEIGHT)));
-            double haveZec = ctl->yecBalanceAt(fundingSource());
+            double haveZec = ctl->confirmedYecAt(fundingSource());
             if ((double)estimateZat / 100000000.0 > haveZec)
                 uiMint->lblMintHint->setText(fundingSource().isEmpty()
                     ? tr("You have %1 of transparent YEC; this mint needs %2 plus the fees. Choose a shielded address above to fund it from there instead.")
                           .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat))
                     : tr("The selected shielded address holds %1 of YEC; this mint needs %2 plus the fees.")
                           .arg(Settings::getZECDisplayFormat(haveZec)).arg(YellowbackFormat::zec(estimateZat)));
+            // A newer node says whether yed_mint would refuse now, with the identifier it would throw
+            estimateBlocked = YellowbackJson::toBool(e, MINT_BLOCKED);
+            if (estimateBlocked) {
+                const QString id = YellowbackJson::toStr(e, MINT_BLOCKED_REASON);
+                const QString more = YellowbackController::explainErrorFor(id, YellowbackRpc::MINT);
+                uiMint->lblMintHint->setText(tr("Your node would refuse this mint now: %1").arg(id.isEmpty() ? tr("(no reason given)") : id) %
+                                             (more.isEmpty() ? QString() : " " % more));
+            }
             updateMintGate();
         },
         [=, this](const QString& err) {
             if (seq != estimateSeq) return;
             estimateZat = -1;
+            estimateBlocked = false;
             uiMint->lblCollateral->setText("-");
             uiMint->lblMintHint->setText(tr("yed_estimatecollateral failed: ") % err);
             // v3: mint10-diverged is the one refusal with its own banner (§4.8 Mint row)
@@ -1039,11 +1222,11 @@ void YellowbackTab::doMint() {
                                   "after a delay in which a member of the attestor set can cancel a claim made at a wrong price.\n\n"))
                     .arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::zec(collateral))
                     .arg(lockBlocks).arg(termClass).arg((qint64)lockBlocks * SECONDS_PER_BLOCK / 86400)
-                    .arg(lockHeight).arg(YellowbackFormat::estimateDate(lockHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"))
+                    .arg(lockHeight).arg(YellowbackFormat::localDate(YellowbackFormat::estimateDate(lockHeight, ctl->height())) % tr(", estimated"))
                     .arg(claimHeight).arg(ratio).arg(price).arg(refHeight).arg(feeLine)
                     .arg(from.isEmpty() ? tr("your transparent YEC") : tr("shielded address %1").arg(from))
                     .arg(YellowbackFormat::zec(maxCollateral))
-                    .arg(YellowbackFormat::estimateDate(claimHeight, ctl->height()).toString("yyyy-MM-dd") % tr(", estimated"));
+                    .arg(YellowbackFormat::localDate(YellowbackFormat::estimateDate(claimHeight, ctl->height())) % tr(", estimated"));
                 if (inTerm)
                     text += tr("You can redeem at any time by paying back the %1 of YED; redeeming before height %2 also costs an early-redeem fee of %3 of the debt (%4). "
                                "If the vault's collateral falls below %5 of its debt at the attested claim price, anyone may close it by paying its debt, in term too; "
@@ -1240,12 +1423,19 @@ QString YellowbackTab::claimSummary(const json& r) const {
 YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition& p, int height, const json& params, qint64 pClaim) {
     using namespace YellowbackRpc::Position;
     VaultActions a;
+    // W2 (DigiByte v9.26.7 00136af6): a spend of this vault already waits in the mempool (a newer node reports it):
+    // a second redeem would conflict with it, so none of the actions is offered until it is mined or expires
+    if (p.spendPending && (p.status == STATUS_ACTIVE || p.status == STATUS_VOID)) {
+        a.text = tr("%1: the vault closes when that transaction is mined. Redeem and Renew come back only if it expires unmined.")
+                     .arg(YellowbackFormat::spendPendingText(p));
+        return a;
+    }
     if (p.status == STATUS_ACTIVE && YellowbackJson::toBool(params, YellowbackRpc::Params::IN_TERM_CLAIMS)) {
         // rpcversion 6 (in-term claims, IT-1 / IT-2 / IT-9, D-IT-15): the owner redeems at any height; before the
         // lock height that costs the early-redeem fee; anyone may claim once the vault is under the threshold
         const qint64 theta = YellowbackJson::toInt(params, YellowbackRpc::Params::CLAIM_THRESHOLD_BPS, 11000);
         const qint64 feeBps = YellowbackController::earlyRedeemFeeBpsFor(params, p.termClass);
-        const QString lockDate = YellowbackFormat::estimateDate(p.lockHeight, height).toString("yyyy-MM-dd HH:mm");
+        const QString lockDate = YellowbackFormat::localDateTime(YellowbackFormat::estimateDate(p.lockHeight, height));
         a.redeem = p.canRedeem || height >= p.lockHeight;
         a.renew  = height >= p.lockHeight;      // a renewal before the term ends would pay the early-redeem fee: offered from the lock height
         a.text = tr("Redeem burns %1 of your YED and pays %2 from the collateral; the rest returns to you.")
@@ -1301,8 +1491,8 @@ YellowbackTab::VaultActions YellowbackTab::vaultActions(const YellowbackPosition
                                 .arg(r->outpoint()).arg(r->releaseHeight);
     } else if (p.status == STATUS_ACTIVE) {
         // H-9.2: the two deadlines as dates, on every ACTIVE vault
-        const QString lockDate  = YellowbackFormat::estimateDate(p.lockHeight, height).toString("yyyy-MM-dd HH:mm");
-        const QString claimDate = YellowbackFormat::estimateDate(p.claimHeight, height).toString("yyyy-MM-dd HH:mm");
+        const QString lockDate  = YellowbackFormat::localDateTime(YellowbackFormat::estimateDate(p.lockHeight, height));
+        const QString claimDate = YellowbackFormat::localDateTime(YellowbackFormat::estimateDate(p.claimHeight, height));
         if (p.canRedeem || height >= p.lockHeight) {
             a.redeem = true;
             a.renew  = true;
@@ -1451,15 +1641,20 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
     const bool isVoid = p.status == Position::STATUS_VOID;
     const QString what = isVoid ? tr("Release") : tr("Redeem");
     const QString dest = to.isEmpty() ? tr("a fresh transparent address of this wallet") : to;
+    if (p.spendPending) {
+        notice(what, tr("%1: this vault already has a redemption waiting in the mempool. It closes when that is mined; "
+                        "a second one would conflict with it.").arg(YellowbackFormat::spendPendingText(p)), true);
+        return;
+    }
     // rpcversion 6 (D-IT-15): under in-term claims an ACTIVE vault is the owner's to redeem at any height
     const bool inTerm = !isVoid && ctl->inTermClaims();
     if (!inTerm && ctl->height() < p.lockHeight) {
         notice(what, tr("The vault is locked until height %1 (the chain is at %2). Every Ycash node enforces that lock.").arg(p.lockHeight).arg(ctl->height()));
         return;
     }
-    if (!isVoid && p.mintedCents > ctl->confirmedCents()) {
-        notice(what, tr("Redeeming burns %1 of YED but only %2 is confirmed in this wallet.")
-            .arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
+    if (!isVoid && p.mintedCents > ctl->spendableCents()) {
+        notice(what, tr("Redeeming burns %1 of YED but only %2 is confirmed and spendable in this wallet.")
+            .arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents())), true);
         return;
     }
 
@@ -1502,7 +1697,7 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
                "makes this transaction about 8 KB; your node signs it in about 0.25-0.6 s.\n\n"
                "Your own node builds the transaction, checks it against the Yellowback consensus rules, signs it and sends it; "
                "nothing is committed if that check fails.")
-            .arg(p.txid).arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
+            .arg(p.txid).arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents()))
             .arg(feeLine).arg(YellowbackFormat::zec(p.collateralZat - feeZat)).arg(dest)
             .arg(YellowbackFormat::zec(YellowbackController::pqOwnerSpendFeeZatFor(ctl->params()))));
     };
@@ -1514,7 +1709,7 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
             [=, this](const json& q) {
                 if (!YellowbackJson::toBool(q, EstimateRedeem::CAN_REDEEM)) {
                     const QString why = YellowbackJson::toStr(q, EstimateRedeem::ERROR);
-                    const QString more = YellowbackController::explainError(why);
+                    const QString more = YellowbackController::explainErrorFor(why, YellowbackRpc::REDEEM);
                     notice(tr("Redeem not possible"), tr("The node would refuse this redeem now: %1").arg(why.isEmpty() ? tr("(no reason given)") : why) %
                                                     (more.isEmpty() ? QString() : "\n\n" % more), true);
                     return;
@@ -1562,13 +1757,14 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
     const QString what = tr("Renew");
     if (renew.active) { notice(what, tr("A renewal is already in progress (vault %1).").arg(renew.vaultTxid), true); return; }
     if (p.status != Position::STATUS_ACTIVE) { notice(what, tr("Only an ACTIVE vault can be renewed."), true); return; }
+    if (p.spendPending) { notice(what, tr("%1: this vault cannot be renewed while that transaction waits.").arg(YellowbackFormat::spendPendingText(p)), true); return; }
     if (ctl->height() < p.lockHeight) {
         notice(what, tr("The vault is locked until height %1 (the chain is at %2). Every Ycash node enforces that lock.").arg(p.lockHeight).arg(ctl->height()));
         return;
     }
-    if (p.mintedCents > ctl->confirmedCents()) {
+    if (p.mintedCents > ctl->spendableCents()) {
         notice(what, tr("Renewing first redeems the vault, which burns %1 of YED, but only %2 is confirmed in this wallet.")
-            .arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
+            .arg(YellowbackFormat::cents(p.mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents())), true);
         return;
     }
     const int lockBlocks = ctl->renewLockBlocks(p);
@@ -1606,11 +1802,11 @@ void YellowbackTab::renewVault(const YellowbackPosition& p) {
                                         "These are two transactions. If the mint cannot be built when the redeem confirms (minting paused, or the price moved past the cap), "
                                         "the vault stays redeemed, nothing else is sent, and the wallet tells you. "
                                         "Back up wallet.dat after the renewal: the new vault's post-quantum owner key exists only there.")
-                    .arg(p.txid).arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(feeLine)
+                    .arg(p.txid).arg(YellowbackFormat::cents(cents)).arg(YellowbackFormat::cents(ctl->spendableCents())).arg(feeLine)
                     .arg(YellowbackFormat::zec(p.collateralZat - redeemFee)).arg(YellowbackFormat::zec(collateral)).arg(YellowbackFormat::zec(maxCollateral))
                     .arg(lockBlocks).arg(cls)
-                    .arg(newLock).arg(YellowbackFormat::estimateDate(newLock, ctl->height()).toString("yyyy-MM-dd"))
-                    .arg(newClaim).arg(YellowbackFormat::estimateDate(newClaim, ctl->height()).toString("yyyy-MM-dd"))
+                    .arg(newLock).arg(YellowbackFormat::localDate(YellowbackFormat::estimateDate(newLock, ctl->height())))
+                    .arg(newClaim).arg(YellowbackFormat::localDate(YellowbackFormat::estimateDate(newClaim, ctl->height())))
                     .arg(ratio).arg(price);
                 if (!confirm(tr("Confirm renew"), text)) return;
                 uiPositions->lblVaultAction->setText(tr("Renew: redeeming..."));
@@ -1702,7 +1898,7 @@ void YellowbackTab::continueRenew() {
                         (int)YellowbackJson::toInt(m, MintResult::REF_HEIGHT, ctl->refHeightNow()), done,
                         [=, this](const QString& err) { stop(err); });
                 },
-                [=, this](const QString& err) { stop(tr("yed_mint failed: %1").arg(err) % [&]() { QString x = YellowbackController::explainError(err); return x.isEmpty() ? QString() : QString("\n\n") % x; }()); });
+                [=, this](const QString& err) { stop(tr("yed_mint failed: %1").arg(err) % [&]() { QString x = YellowbackController::explainErrorFor(err, YellowbackRpc::MINT); return x.isEmpty() ? QString() : QString("\n\n") % x; }()); });
         },
         [=, this](const QString& err) { stop(tr("yed_estimatecollateral failed: %1").arg(err)); });
 }
@@ -1801,7 +1997,7 @@ void YellowbackTab::updateClaimPage() {
     uiClaim->lblClaimHint->setText(tr("%n claimable vault(s). A claim burns the vault's debt from your confirmed YED (%1 available), pays the fees from your YEC and "
                                       "moves the collateral, less the owner's residual, into a claim intent you release after %2 blocks (Pending claims page). "
                                       "Select a row and press Claim.", "", n)
-                                       .arg(YellowbackFormat::cents(ctl->confirmedCents())).arg(ctl->claimDelay()) % above);
+                                       .arg(YellowbackFormat::cents(ctl->spendableCents())).arg(ctl->claimDelay()) % above);
 }
 
 // v3: which clause opened the claim and what the claim must give back (RED-5), from the
@@ -1835,9 +2031,9 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
             .arg(c.vault).arg(YellowbackFormat::price(c.underwaterAt)), true);
         return;
     }
-    if (c.mintedCents > ctl->confirmedCents()) {
+    if (c.mintedCents > ctl->spendableCents()) {
         notice(tr("Claim"), tr("A claim burns %1 of YED but only %2 is confirmed in this wallet.")
-            .arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())), true);
+            .arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents())), true);
         return;
     }
     // D-U1: a claim intent commits a transparent recipient script; the node refuses a Sapling one (bad-address)
@@ -1874,7 +2070,7 @@ void YellowbackTab::claimVault(const YellowbackClaimable& c, const QString& to) 
                       "%17 "
                       "Your own node builds the claim in two steps (the carrier with the price proof now, the claim when it confirms) "
                       "and checks it against the Yellowback consensus rules before it signs and sends it.")
-        .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents()))
+        .arg(txid).arg(c.ownerAddress).arg(YellowbackFormat::cents(c.mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents()))
         .arg(YellowbackController::dollarsAndYec(YellowbackController::protocolFeeCentsFor(ctl->params(), c.mintedCents), c.feeZat, c.pMint))
         .arg(YellowbackFormat::zec(youGet)).arg(YellowbackFormat::zec(c.collateralZat)).arg(dest)
         .arg(describeClaimPath(c)).arg(YellowbackFormat::zec(minOut))
@@ -1935,7 +2131,7 @@ void YellowbackTab::setupPendingClaims() {
     lblPendingAction = new QLabel(pages[PendingClaims]);
     lblPendingAction->setObjectName("lblPendingAction");
     lblPendingAction->setWordWrap(true);
-    lblPendingAction->setStyleSheet("QLabel { color: #444; }");
+    lblPendingAction->setObjectName("lblPendingAction");   // its colour comes from applyTheme (W5)
     layout->addWidget(lblPendingAction);
     QHBoxLayout* buttons = new QHBoxLayout();
     buttons->addStretch(1);
@@ -1952,7 +2148,7 @@ void YellowbackTab::setupPendingClaims() {
     lblCancelledClaims = new QLabel(pages[PendingClaims]);
     lblCancelledClaims->setObjectName("lblCancelledClaims");
     lblCancelledClaims->setWordWrap(true);
-    lblCancelledClaims->setStyleSheet("QLabel { color: #8a1f1f; }");
+    lblCancelledClaims->setObjectName("lblCancelledClaims");
     lblCancelledClaims->setVisible(false);
     layout->addWidget(lblCancelledClaims);
     btnReleaseClaim->setEnabled(false);
@@ -2322,12 +2518,43 @@ void YellowbackTab::setupTransactions() {
     QObject::connect(uiTx->tblTransactions, &QTableView::customContextMenuRequested, [=, this](const QPoint& pos) {
         showTxContextMenu(uiTx->tblTransactions, pos);
     });
+    // W4: the export (DigiByte v9.26.7 ea78ad18, 3f09a4a9): a dated file name, plain decimals, ISO-8601 UTC dates
+    auto* exportButton = new QPushButton(tr("Export CSV…"), pages[Transactions]);
+    exportButton->setObjectName("btnExportCsv");
+    exportButton->setToolTip(tr("Every Yellowback transaction listed here as a CSV file: dollar amounts as plain decimals, dates in UTC (ISO-8601), and every txid in full."));
+    if (auto* box = qobject_cast<QBoxLayout*>(pages[Transactions]->layout())) {
+        auto* row = new QHBoxLayout();
+        row->addStretch(1);
+        row->addWidget(exportButton);
+        box->addLayout(row);
+    }
+    QObject::connect(exportButton, &QPushButton::clicked, [=, this]() {
+        QDir docs(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+        const QString path = QFileDialog::getSaveFileName(this, tr("Export Yellowback transactions"), docs.filePath(defaultCsvName()), tr("CSV file (*.csv)"));
+        if (path.isEmpty()) return;
+        QString error;
+        if (!exportTransactionsCsv(path, &error)) notice(tr("Export failed"), tr("The file was not saved: %1").arg(error), true);
+    });
+}
+
+QString YellowbackTab::defaultCsvName() {
+    return "yellowback-transactions-" % QDateTime::currentDateTime().toString("yyyyMMdd") % ".csv";
+}
+
+bool YellowbackTab::exportTransactionsCsv(const QString& path, QString* error) const {
+    if (ctl == nullptr) { if (error) *error = tr("not connected"); return false; }
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { if (error) *error = f.errorString(); return false; }
+    f.write(ctl->transactionsModel()->toCsv().toUtf8());
+    if (!f.commit()) { if (error) *error = f.errorString(); return false; }
+    return true;
 }
 
 void YellowbackTab::showTxContextMenu(QTableView* table, const QPoint& pos) {
     if (ctl == nullptr) return;
     auto index = table->indexAt(pos);
     if (!index.isValid()) return;
+    if (auto* proxy = qobject_cast<QSortFilterProxyModel*>(table->model())) index = proxy->mapToSource(index);   // W4: the sorted page
     auto tx = ctl->transactionsModel()->txAt(index.row());
     if (tx == nullptr) return;
     QString txid = tx->txid, type = tx->type, verdict = tx->verdict;   // copies: the model may reset
@@ -2418,9 +2645,9 @@ void YellowbackTab::updateRedeemPage() {
         // rpcversion 8: both fees are dollars of the debt at the vault's stored mint price, shown in dollars and YEC
         uiRedeem->lblCollateral->setText(YellowbackFormat::zec(sel->collateralZat) %
             (isVoid ? QString() : "  " % tr("minus %1").arg(YellowbackController::redeemFeesText(ctl->params(), *sel, early))));
-        bool enough = isVoid || sel->mintedCents <= ctl->confirmedCents();
-        uiRedeem->lblRedeemHint->setText(enough ? QString() : tr("You need %1 of confirmed YED to burn but have %2.")
-                .arg(YellowbackFormat::cents(sel->mintedCents)).arg(YellowbackFormat::cents(ctl->confirmedCents())));
+        bool enough = isVoid || sel->mintedCents <= ctl->spendableCents();
+        uiRedeem->lblRedeemHint->setText(enough ? QString() : tr("You need %1 of confirmed, spendable YED to burn but have %2.")
+                .arg(YellowbackFormat::cents(sel->mintedCents)).arg(YellowbackFormat::cents(ctl->spendableCents())));
         uiRedeem->btnStart->setText(isVoid ? tr("Release…") : tr("Redeem…"));
         uiRedeem->btnStart->setEnabled(actionsEnabled && enough);
     }
@@ -2680,7 +2907,7 @@ void YellowbackTab::registerAttestor(const QString& bondYec, int lockBlocks) {
         .arg(QString::number(bondYec.toDouble(), 'f', 8)).arg(YellowbackFormat::zec(minZat)).arg(YellowbackFormat::blocksAndDuration(maturity));
     if (lockBlocks > 0)
         text += tr("The bond script also carries a locktime of height %1 (%2 blocks, estimated %3).\n")
-            .arg(locktime).arg(lockBlocks).arg(YellowbackFormat::estimateDate(locktime, ctl->height()).toString("yyyy-MM-dd"));
+            .arg(locktime).arg(lockBlocks).arg(YellowbackFormat::localDate(YellowbackFormat::estimateDate(locktime, ctl->height())));
     const QString advice = bondHeadroomAdvice(bondZat, ap);
     if (!advice.isEmpty()) text += "\n" % advice % "\n";
     text += tr("\nYour node sends a join act to the set %1…; the member becomes eligible for bundles at least %2 blocks after the join confirms, and gets its seq number then (see the table).\n")

@@ -118,6 +118,8 @@ YellowbackPosition YellowbackPosition::fromJson(const json& j) {
     p.emergencyOpenAt = (int)YellowbackJson::toInt(j, EMERGENCY_OPEN_AT, -1);
     p.canNotice     = YellowbackJson::toBool(j, CAN_NOTICE);
     p.earlyRedeemFeeZat = YellowbackJson::toInt(j, EARLY_REDEEM_FEE_ZAT);
+    p.spendPending  = YellowbackJson::toBool(j, SPEND_PENDING);
+    p.spendTxid     = YellowbackJson::toStr (j, SPEND_TXID);
     return p;
 }
 
@@ -197,7 +199,31 @@ YellowbackTx YellowbackTx::fromJson(const json& j) {
     t.payee         = YellowbackJson::toStr (j, PAYEE);
     t.unbacked      = YellowbackJson::toBool(j, UNBACKED);
     t.expired       = YellowbackJson::toBool(j, EXPIRED) || t.verdict == VERDICT_EXPIRED;
+    t.time          = std::max<qint64>(0, YellowbackJson::toInt(j, TIME));
+    t.carrierTxid   = YellowbackJson::toStr (j, CARRIER_TXID);
+    t.mainTxid      = YellowbackJson::toStr (j, MAIN_TXID);
+    t.carrierOutcome = YellowbackJson::toStr(j, CARRIER_OUTCOME);
     return t;
+}
+
+bool YellowbackTx::failed() const {
+    using namespace YellowbackRpc::Transaction;
+    return expired || carrierOutcome == CARRIER_LAPSED || carrierOutcome == CARRIER_SWEPT;
+}
+
+bool YellowbackTx::pending() const {
+    return !failed() && (confirmations <= 0 || carrierOutcome == YellowbackRpc::Transaction::CARRIER_PENDING);
+}
+
+YellowbackAddress YellowbackAddress::fromJson(const json& j) {
+    using namespace YellowbackRpc::AddressRow;
+    YellowbackAddress a;
+    a.address        = YellowbackJson::toStr(j, ADDRESS);
+    a.label          = YellowbackJson::toStr(j, LABEL);
+    a.confirmedCents = YellowbackJson::toInt(j, CONFIRMED_CENTS, -1);
+    a.txCount        = (int)YellowbackJson::toInt(j, TX_COUNT, -1);
+    a.lastUsed       = YellowbackJson::toInt(j, LAST_USED, -1);
+    return a;
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────────────────
@@ -248,7 +274,121 @@ QString YellowbackFormat::heightWithEstimate(int height, int currentHeight) {
     if (height <= 0) return "-";
     if (currentHeight <= 0) return QString::number(height);
     auto dt = estimateDate(height, currentHeight);
-    return QString::number(height) % "  (~" % dt.toString("yyyy-MM-dd HH:mm") % ")";
+    return QString::number(height) % "  (~" % localDateTime(dt) % ")";
+}
+
+QString YellowbackFormat::localDateTime(const QDateTime& dt) {
+    return QLocale().toString(dt.toLocalTime(), QLocale::ShortFormat);
+}
+
+QString YellowbackFormat::localDate(const QDateTime& dt) {
+    return QLocale().toString(dt.toLocalTime().date(), QLocale::ShortFormat);
+}
+
+QString YellowbackFormat::unixTimeLocal(qint64 unixSeconds) {
+    if (unixSeconds <= 0) return QString("-");
+    return localDateTime(QDateTime::fromSecsSinceEpoch(unixSeconds, Qt::UTC));
+}
+
+QString YellowbackFormat::isoUtc(qint64 unixSeconds) {
+    if (unixSeconds <= 0) return QString();
+    return QDateTime::fromSecsSinceEpoch(unixSeconds, Qt::UTC).toString(Qt::ISODate);   // yyyy-MM-ddTHH:mm:ssZ
+}
+
+QString YellowbackFormat::plainDollars(qint64 c) {
+    const qint64 a = c < 0 ? -c : c;
+    return (c < 0 ? QString("-") : QString()) % QString::number(a / 100) % "." % QString("%1").arg(a % 100, 2, 10, QChar('0'));
+}
+
+YellowbackTxAnnotation YellowbackFormat::stockAnnotation(const YellowbackTx& t, bool asCarrier) {
+    using namespace YellowbackRpc::Transaction;
+    YellowbackTxAnnotation a;
+    if (asCarrier) {
+        // the first step of a two-step action: a plain YEC transaction carrying the price proof
+        a.label = QObject::tr("Yellowback carrier (%1)").arg(typeLabel(t.type).toLower());
+        a.tooltip = QObject::tr("The first step of a Yellowback %1: it carries the price proof and the YEC the main transaction %2 spends. It moves no YED.")
+                        .arg(typeLabel(t.type).toLower()).arg(t.txid);
+        if (t.carrierOutcome == CARRIER_LAPSED || t.carrierOutcome == CARRIER_SWEPT)
+            a.label = QObject::tr("Yellowback carrier (%1 failed)").arg(typeLabel(t.type).toLower());
+        return a;
+    }
+    a.hasYed = true;
+    a.yedCents = YellowbackTxModel::signedAmount(t);
+    if (t.type == TYPE_MINT) {
+        a.label = QObject::tr("Yellowback mint: collateral locked");
+        a.tooltip = QObject::tr("A Yellowback mint: the YEC this row shows leaving went into a vault of this wallet as collateral (it is not sent away), "
+                                "and %1 of YED was minted to this wallet. Redeem the vault to get the collateral back.").arg(cents(t.amountCents));
+    } else if (t.type == TYPE_SEND) {
+        a.label = t.amountCents == 0 && t.yedOut > 0 ? QObject::tr("YED self-transfer") : QObject::tr("YED sent");
+        a.tooltip = QObject::tr("A YED transfer: %1 of YED left this wallet; the YEC amount is the carrier value and the network fee.").arg(cents(std::abs(t.amountCents)));
+    } else if (t.type == TYPE_RECEIVE) {
+        a.label = QObject::tr("YED received");
+        a.tooltip = QObject::tr("A YED payment: %1 of YED arrived; the small YEC amount is the output's carrier value, not the payment.").arg(cents(t.amountCents));
+    } else if (t.type == TYPE_REDEEM) {
+        a.label = rowLabel(t.type, t.path, t.burned) == typeLabel(t.type) ? QObject::tr("Yellowback redeem: collateral returned") : QObject::tr("Yellowback claim released");
+        a.yedCents = -std::abs(t.burned);
+        a.tooltip = QObject::tr("A Yellowback redemption: %1 of YED was burned and the vault's collateral came back to this wallet.").arg(cents(std::abs(t.burned)));
+    } else if (t.type == TYPE_CLAIM || t.type == TYPE_CLAIMED) {
+        a.label = t.type == TYPE_CLAIM ? QObject::tr("Yellowback claim") : QObject::tr("Yellowback: vault claimed");
+        a.yedCents = -std::abs(t.burned);
+        a.tooltip = QObject::tr("A Yellowback claim; YED burned: %1.").arg(cents(std::abs(t.burned)));
+    } else if (t.type == TYPE_BURN) {
+        a.label = QObject::tr("YED burned (spent as plain YEC)");
+        a.tooltip = QObject::tr("A Yellowback output was spent as plain YEC: the YED it carried was destroyed.");
+    } else {
+        a.label = QObject::tr("Yellowback: %1").arg(typeLabel(t.type));
+        a.hasYed = a.yedCents != 0;
+    }
+    if (t.failed()) {
+        a.label += QObject::tr(" (failed)");
+        a.hasYed = false;
+        a.yedCents = 0;
+    }
+    return a;
+}
+
+QString YellowbackFormat::spendPendingText(const YellowbackPosition& p) {
+    if (!p.spendPending) return QString();
+    return p.spendTxid.isEmpty() ? QObject::tr("Redemption pending")
+                                 : QObject::tr("Redemption pending (%1…)").arg(p.spendTxid.left(16));
+}
+
+// ── Theme ─────────────────────────────────────────────────────────────────────────────────
+
+static bool themeDark = false;
+
+bool YellowbackTheme::isDarkTheme(const QString& name, const QPalette& palette) {
+    const QString n = name.trimmed().toLower();
+    if (n == "dark" || n == "matrix") return true;
+    if (n == "light" || n == "blue")  return false;
+    return palette.color(QPalette::Window).lightness() < 128;
+}
+
+void   YellowbackTheme::setDark(bool d) { themeDark = d; }
+bool   YellowbackTheme::dark()          { return themeDark; }
+QColor YellowbackTheme::attentionBackground() { return themeDark ? QColor(110, 38, 44)  : QColor(255, 210, 210); }
+QColor YellowbackTheme::warningBackground()   { return themeDark ? QColor(112, 76, 20)  : QColor(255, 232, 190); }
+QColor YellowbackTheme::pendingBackground()   { return themeDark ? QColor(36, 64, 104)  : QColor(214, 228, 248); }
+QColor YellowbackTheme::failedForeground()    { return themeDark ? QColor(255, 128, 128) : QColor(Qt::red); }
+QColor YellowbackTheme::pendingForeground()   { return themeDark ? QColor(130, 180, 255) : QColor(30, 90, 170); }
+QColor YellowbackTheme::cautionForeground()   { return themeDark ? QColor(255, 190, 90)  : QColor(200, 100, 0); }
+QColor YellowbackTheme::mutedForeground()     { return themeDark ? QColor(160, 160, 160) : QColor(Qt::gray); }
+
+QString YellowbackTheme::labelCss(const QString& kind) {
+    // Each boxed banner sets its text colour with its background, so it reads the same on any theme;
+    // the dark variants are the light ones' hues at low lightness with light text.
+    struct Box { const char* bg; const char* fg; const char* border; };
+    auto box = [](const Box& b) {
+        return QString("QLabel { background-color: %1; color: %2; border: 1px solid %3; padding: 6px; }").arg(b.bg).arg(b.fg).arg(b.border);
+    };
+    if (kind == "muted")   return themeDark ? QString("QLabel { color: #b8b8b8; }") : QString("QLabel { color: #444; }");
+    if (kind == "hint")    return themeDark ? QString("QLabel { color: #ff9090; }") : QString("QLabel { color: #a33; }");
+    if (kind == "warning") return box(themeDark ? Box{"#4a3a10", "#ffe9a8", "#8a6d1f"} : Box{"#fff3cd", "#5c4400", "#e0c56e"});
+    if (kind == "ok")      return box(themeDark ? Box{"#1f3a22", "#c8ecc9", "#4d7a50"} : Box{"#e7f1e7", "#1e4620", "#a9c9aa"});
+    if (kind == "error")   return box(themeDark ? Box{"#4a1c22", "#ffc9cf", "#8a3a44"} : Box{"#f8d7da", "#58151c", "#e8a0a8"});
+    if (kind == "info")    return box(themeDark ? Box{"#1c2c44", "#cfe0fa", "#41608c"} : Box{"#eef3fb", "#1f3a5f", "#b9cbe6"});
+    if (kind == "note")    return box(themeDark ? Box{"#34341f", "#ececc8", "#6a6a40"} : Box{"#f4f4ec", "#3a3a1f", "#d8d8b9"});
+    return QString();
 }
 
 QString YellowbackFormat::typeLabel(const QString& type) {
@@ -424,7 +564,7 @@ const YellowbackPosition* YellowbackPositionsModel::positionAt(int row) const {
 QList<YellowbackPosition> YellowbackPositionsModel::redeemable() const {
     QList<YellowbackPosition> out;
     for (auto& p : *modeldata)
-        if (p.canRedeem) out.append(p);
+        if (p.canRedeem && !p.spendPending) out.append(p);   // W2: not while a redemption of it waits in the mempool
     return out;
 }
 
@@ -454,18 +594,20 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
         // The rows that need the owner's attention, loud enough to find in a long list: a vault
         // under a claim notice, or past its claim height while active, is exposed (red); one in
         // its grace window is the owner's to redeem now (orange). Closed rows stay plain.
+        // W2: a vault whose redemption waits in the mempool is neither exposed nor actionable: the neutral pending colour
+        if (p.spendPending && p.status != STATUS_CLAIMING) return QBrush(YellowbackTheme::pendingBackground());
         if (p.status == STATUS_ACTIVE && inTerm) {
             // rpcversion 6: red when claimable now or noticed, orange while the claim price nears the threshold
-            if (p.claimable || p.noticed)        return QBrush(QColor(255, 210, 210));
-            if (nearThreshold(p, pClaim))         return QBrush(QColor(255, 232, 190));
+            if (p.claimable || p.noticed)        return QBrush(YellowbackTheme::attentionBackground());
+            if (nearThreshold(p, pClaim))         return QBrush(YellowbackTheme::warningBackground());
             return QVariant();
         }
         if (p.status == STATUS_ACTIVE) {
-            if (p.noticed || (currentHeight > 0 && currentHeight >= p.claimHeight)) return QBrush(QColor(255, 210, 210));
-            if (currentHeight > 0 && currentHeight >= p.lockHeight)              return QBrush(QColor(255, 232, 190));
+            if (p.noticed || (currentHeight > 0 && currentHeight >= p.claimHeight)) return QBrush(YellowbackTheme::attentionBackground());
+            if (currentHeight > 0 && currentHeight >= p.lockHeight)              return QBrush(YellowbackTheme::warningBackground());
         }
-        if (p.status == STATUS_VOID && currentHeight > 0 && currentHeight >= p.lockHeight) return QBrush(QColor(255, 232, 190));
-        if (p.status == STATUS_CLAIMING) return QBrush(QColor(255, 210, 210));
+        if (p.status == STATUS_VOID && currentHeight > 0 && currentHeight >= p.lockHeight) return QBrush(YellowbackTheme::warningBackground());
+        if (p.status == STATUS_CLAIMING) return QBrush(YellowbackTheme::attentionBackground());
         return QVariant();
     }
 
@@ -474,17 +616,18 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
         if (index.column() == Ratio && p.status == STATUS_ACTIVE) {
             // red under the claim threshold θ; orange within WARN_MARGIN_BPS above it
             const qint64 r = ratioBps(p, pFast > 0 ? pFast : pClaim);
-            if (r >= 0 && r < thetaBps)   { b.setColor(Qt::red); return b; }
-            if (r >= 0 && r < thetaBps * (10000 + WARN_MARGIN_BPS) / 10000) { b.setColor(QColor(200, 100, 0)); return b; }
+            if (r >= 0 && r < thetaBps)   { b.setColor(YellowbackTheme::failedForeground()); return b; }
+            if (r >= 0 && r < thetaBps * (10000 + WARN_MARGIN_BPS) / 10000) { b.setColor(YellowbackTheme::cautionForeground()); return b; }
         }
+        if (index.column() == ActBy && p.spendPending) { b.setColor(YellowbackTheme::pendingForeground()); return b; }
         if (index.column() == ActBy && p.status == STATUS_ACTIVE && inTerm) {
-            if (p.claimable)                { b.setColor(Qt::red); return b; }
-            if (nearThreshold(p, pClaim))   { b.setColor(QColor(200, 100, 0)); return b; }
+            if (p.claimable)                { b.setColor(YellowbackTheme::failedForeground()); return b; }
+            if (nearThreshold(p, pClaim))   { b.setColor(YellowbackTheme::cautionForeground()); return b; }
             return QVariant();
         }
-        if (index.column() == ActBy && p.status == STATUS_ACTIVE && currentHeight > 0 && currentHeight >= p.lockHeight) { b.setColor(Qt::red); return b; }
-        if (p.status == STATUS_VOID || p.status == STATUS_CLAIMING) b.setColor(Qt::red);
-        else if (p.status == STATUS_CLOSED || p.status == STATUS_CLAIMED) b.setColor(Qt::gray);
+        if (index.column() == ActBy && p.status == STATUS_ACTIVE && currentHeight > 0 && currentHeight >= p.lockHeight) { b.setColor(YellowbackTheme::failedForeground()); return b; }
+        if (p.status == STATUS_VOID || p.status == STATUS_CLAIMING) b.setColor(YellowbackTheme::failedForeground());
+        else if (p.status == STATUS_CLOSED || p.status == STATUS_CLAIMED) b.setColor(YellowbackTheme::mutedForeground());
         else return QVariant();
         return b;
     }
@@ -494,11 +637,13 @@ QVariant YellowbackPositionsModel::data(const QModelIndex& index, int role) cons
             case Status: {
                 QString s = p.status;
                 if (p.status == STATUS_VOID && !p.voidReason.isEmpty()) s += " (" % p.voidReason % ")";
+                if (p.spendPending && p.status != STATUS_CLAIMING) s += " — " % YellowbackFormat::spendPendingText(p).toLower();
                 return s;
             }
             case Minted:       return YellowbackFormat::cents(p.mintedCents);
             case Collateral:   return YellowbackFormat::zec(p.collateralZat);
-            case ActBy:        return actBy(p, currentHeight, inTerm, pClaim);
+            case ActBy:        return p.spendPending && p.status != STATUS_CLAIMING ? YellowbackFormat::spendPendingText(p) % tr(": the vault closes when it is mined")
+                                                                               : actBy(p, currentHeight, inTerm, pClaim);
             case Ratio: {
                 if (p.status != STATUS_ACTIVE) return QString("-");
                 const qint64 r = ratioBps(p, pFast > 0 ? pFast : pClaim);
@@ -698,7 +843,7 @@ QVariant YellowbackClaimableModel::data(const QModelIndex& index, int role) cons
     }
 
     if (role == Qt::ForegroundRole && !c.claimable) {
-        QBrush b; b.setColor(Qt::gray); return b;   // rpcversion 6: listed, but a claim would be refused
+        QBrush b; b.setColor(YellowbackTheme::mutedForeground()); return b;   // rpcversion 6: listed, but a claim would be refused
     }
 
     if (role == Qt::ToolTipRole) {
@@ -788,10 +933,10 @@ QVariant YellowbackAttestorsModel::data(const QModelIndex& index, int role) cons
 
     if (role == Qt::ForegroundRole) {
         QBrush b;
-        if (a.bondFrozen && index.column() == BondFrozen)                { b.setColor(Qt::red); return b; }
-        if (a.status == STATUS_EJECTED || a.status == STATUS_WITHDRAWN) b.setColor(Qt::gray);
-        else if (a.status == STATUS_DORMANT)                            b.setColor(QColor(200, 100, 0));
-        else if (a.pinned)                                              b.setColor(Qt::red);
+        if (a.bondFrozen && index.column() == BondFrozen)                { b.setColor(YellowbackTheme::failedForeground()); return b; }
+        if (a.status == STATUS_EJECTED || a.status == STATUS_WITHDRAWN) b.setColor(YellowbackTheme::mutedForeground());
+        else if (a.status == STATUS_DORMANT)                            b.setColor(YellowbackTheme::cautionForeground());
+        else if (a.pinned)                                              b.setColor(YellowbackTheme::failedForeground());
         else return QVariant();
         return b;
     }
@@ -957,7 +1102,7 @@ QVariant YellowbackPendingClaimsModel::headerData(int section, Qt::Orientation o
 // ── Transactions model ────────────────────────────────────────────────────────────────────
 
 YellowbackTxModel::YellowbackTxModel(QObject* parent) : QAbstractTableModel(parent) {
-    headers << tr("Type") << tr("Amount") << tr("Confirmations") << tr("Height") << tr("Verdict") << tr("Txid");
+    headers << tr("Type") << tr("Date") << tr("Amount") << tr("Confirmations") << tr("Height") << tr("Verdict") << tr("Txid");
     modeldata = new QList<YellowbackTx>();
 }
 
@@ -983,6 +1128,40 @@ QString YellowbackTxModel::getTxId(int row) const {
     return t ? t->txid : QString();
 }
 
+qint64 YellowbackTxModel::signedAmount(const YellowbackTx& t) {
+    using namespace YellowbackRpc::Transaction;
+    if (t.type == TYPE_SEND || t.type == TYPE_BURN) return -std::abs(t.amountCents);
+    return t.amountCents;
+}
+
+// W4 (DigiByte v9.26.7 ea78ad18, 3f09a4a9): one row per transaction, amounts as plain decimals (no symbol,
+// no grouping, whatever the unit setting), dates ISO-8601 in UTC, every id in full. RFC 4180 quoting.
+QString YellowbackTxModel::toCsv(const QList<YellowbackTx>& txs) {
+    auto q = [](const QString& v) -> QString {
+        QString e = v;
+        e.replace('"', "\"\"");
+        return QString("\"" % e % "\"");
+    };
+    QStringList lines;
+    lines << QStringList({ "Date (UTC)", "Type", "Amount (USD)", "YED in (USD)", "YED out (USD)", "Burned (USD)", "Protocol fee (YEC)",
+                           "Confirmations", "Height", "Verdict", "Txid", "Carrier txid", "Main txid", "Carrier outcome" }).join(',');
+    for (const YellowbackTx& t : txs) {
+        QStringList row;
+        row << q(YellowbackFormat::isoUtc(t.time))
+            << q(t.expired ? t.type % " (expired)" : t.type)
+            << YellowbackFormat::plainDollars(signedAmount(t))
+            << YellowbackFormat::plainDollars(t.yedIn)
+            << YellowbackFormat::plainDollars(t.yedOut)
+            << YellowbackFormat::plainDollars(t.burned)
+            << QString::number((double)t.feeZat / 100000000.0, 'f', 8)
+            << QString::number(t.confirmations)
+            << (t.height > 0 ? QString::number(t.height) : QString())
+            << q(t.verdict) << q(t.txid) << q(t.carrierTxid) << q(t.mainTxid) << q(t.carrierOutcome);
+        lines << row.join(',');
+    }
+    return lines.join("\r\n") % "\r\n";
+}
+
 int YellowbackTxModel::rowCount(const QModelIndex&) const {
     if (loading) return 1;
     return modeldata->size();
@@ -1005,10 +1184,23 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
         (index.column() == Amount || index.column() == Confirmations || index.column() == Height))
         return QVariant(Qt::AlignRight | Qt::AlignVCenter);
 
+    if (role == SortRole) {
+        switch (index.column()) {
+            case Date:          return t.time > 0 ? QVariant(t.time) : QVariant((qint64)std::numeric_limits<qint64>::max());   // unconfirmed sorts newest
+            case Amount:        return signedAmount(t);
+            case Confirmations: return t.confirmations;
+            case Height:        return t.height > 0 ? t.height : std::numeric_limits<int>::max();
+            default:            return data(index, Qt::DisplayRole);
+        }
+    }
+
     if (role == Qt::ForegroundRole) {
+        // W5 (DigiByte v9.26.7 77a5b156): a failed row (expired, a lapsed or swept carrier) and a waiting one
+        // (unconfirmed, its carrier pending) have different colours: waiting is not a fault
         QBrush b;
-        if (t.expired || t.confirmations <= 0) { b.setColor(Qt::red); return b; }
-        if (t.type == TYPE_BURN || t.unbacked) { b.setColor(QColor(200, 100, 0)); return b; }
+        if (t.failed())  { b.setColor(YellowbackTheme::failedForeground()); return b; }
+        if (t.pending()) { b.setColor(YellowbackTheme::pendingForeground()); return b; }
+        if (t.type == TYPE_BURN || t.unbacked) { b.setColor(YellowbackTheme::cautionForeground()); return b; }
         return QVariant();
     }
 
@@ -1021,14 +1213,13 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
                 if (t.type == TYPE_SEND && t.amountCents == 0 && t.yedOut > 0) s = tr("self-transfer");
                 if (t.unbacked) s += tr(" (unbacked)");
                 if (t.expired)  s += tr(" (expired)");
+                else if (t.carrierOutcome == CARRIER_LAPSED) s += tr(" (failed: carrier lapsed)");
+                else if (t.carrierOutcome == CARRIER_SWEPT)  s += tr(" (failed: carrier reclaimed)");
+                else if (t.carrierOutcome == CARRIER_PENDING) s += tr(" (pending: price proof)");
                 return s;
             }
-            case Amount: {
-                qint64 a = t.amountCents;
-                if (t.type == TYPE_SEND || t.type == TYPE_BURN)
-                    a = -std::abs(a);
-                return YellowbackFormat::cents(a);
-            }
+            case Date:   return YellowbackFormat::unixTimeLocal(t.time);
+            case Amount: return YellowbackFormat::cents(signedAmount(t));
             case Confirmations: return t.expired ? tr("expired") : QString::number(t.confirmations);
             case Height:        return t.expired ? tr("expired") : t.height > 0 ? QString::number(t.height) : tr("unconfirmed");
             case Verdict:       return t.verdict;
@@ -1040,6 +1231,15 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
         if (t.expired)
             return tr("This transaction was never mined and has passed its expiry height. "
                       "It has no effect; any YED it would have moved is still yours.");
+        if (t.carrierOutcome == CARRIER_LAPSED || t.carrierOutcome == CARRIER_SWEPT)
+            return tr("This %1 did not complete: its carrier %2 passed its window without the main transaction. Nothing was minted or moved; "
+                      "the carrier's YEC comes back with \"Reclaim lapsed carriers\" on the Settings page%3.")
+                    .arg(YellowbackFormat::typeLabel(t.type).toLower()).arg(t.carrierTxid.isEmpty() ? t.txid : t.carrierTxid)
+                    .arg(t.carrierOutcome == CARRIER_SWEPT ? tr(" (already reclaimed)") : QString());
+        if (t.carrierOutcome == CARRIER_PENDING)
+            return tr("The carrier %1 is sent; the main transaction follows when it confirms (about one block).").arg(t.carrierTxid);
+        if (index.column() == Date && t.time > 0)
+            return tr("Block time %1 (UTC: %2)").arg(YellowbackFormat::unixTimeLocal(t.time)).arg(YellowbackFormat::isoUtc(t.time));
         if (YellowbackFormat::rowLabel(t.type, t.path, t.burned) != YellowbackFormat::typeLabel(t.type))
             return tr("A claim intent of a vault of yours was released after the claim delay: the vault is CLAIMED.");
         if (t.type == TYPE_BURN)

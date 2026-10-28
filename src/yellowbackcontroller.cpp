@@ -574,6 +574,8 @@ void YellowbackController::applyActivation(const json& a) {
 void YellowbackController::applyBalance(const json& b) {
     confirmed   = YellowbackJson::toInt(b, YellowbackRpc::Balance::CONFIRMED_CENTS);
     unconfirmed = YellowbackJson::toInt(b, YellowbackRpc::Balance::UNCONFIRMED_CENTS);
+    // W1: absent on a node from before the DigiByte v9.26.7 follow-ups; then confirmedCents stands in
+    spendable   = YellowbackJson::has(b, YellowbackRpc::Balance::SPENDABLE_CENTS) ? YellowbackJson::toInt(b, YellowbackRpc::Balance::SPENDABLE_CENTS) : -1;
     emit balanceUpdated();
 }
 
@@ -611,8 +613,21 @@ void YellowbackController::applyTransactions(const json& arr) {
     if (arr.is_array())
         for (auto& it : arr) list.append(YellowbackTx::fromJson(it));
     transactions->setNewData(list, indexHeight);
+    annotations = stockAnnotationsFor(list);
     rebuildPendingClaims();
     emit transactionsUpdated();
+}
+
+QHash<QString, YellowbackTxAnnotation> YellowbackController::stockAnnotationsFor(const QList<YellowbackTx>& txs) {
+    QHash<QString, YellowbackTxAnnotation> out;
+    for (const YellowbackTx& t : txs) {
+        if (t.txid.isEmpty()) continue;
+        // plan A6: a two-step action's carrier is a stock row of its own; it moves no YED
+        if (!t.carrierTxid.isEmpty() && t.carrierTxid != t.txid && !out.contains(t.carrierTxid))
+            out.insert(t.carrierTxid, YellowbackFormat::stockAnnotation(t, true));
+        out.insert(t.txid, YellowbackFormat::stockAnnotation(t));
+    }
+    return out;
 }
 
 void YellowbackController::refreshStats() {
@@ -829,6 +844,21 @@ double YellowbackController::yecBalance() const {
         // transparent coin: the node's builders select and sign it (quantum spec §3.3)
         if (Settings::isTAddress(it.key()) || Settings::isPQTAddress(it.key())) total += it.value();
     return total;
+}
+
+double YellowbackController::confirmedYecIn(const QList<UnspentOutput>& utxos, const QString& source) {
+    double total = 0.0;
+    for (const UnspentOutput& u : utxos) {
+        if (u.confirmations < 1 || !u.spendable) continue;   // the node's builders take confirmed coins only
+        const bool match = source.isEmpty() ? (Settings::isTAddress(u.address) || Settings::isPQTAddress(u.address)) : u.address == source;
+        if (match) total += u.amount.toDouble();
+    }
+    return total;
+}
+
+double YellowbackController::confirmedYecAt(const QString& source) const {
+    if (rpc == nullptr) return 0.0;
+    return confirmedYecIn(rpc->getModel()->getUTXOs(), source);
 }
 
 double YellowbackController::yecBalanceAt(const QString& source) const {
@@ -1095,8 +1125,100 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
 // ── Typed calls ───────────────────────────────────────────────────────────────────────────
 
 // rpcversion 7: the holder type is named explicitly (receiveAddressTypeFor), never "pqowner" (C-10)
-void YellowbackController::getNewAddress(OkFn ok, ErrFn err) {
-    call(YellowbackRpc::GETNEWADDRESS, json::array({receiveAddressTypeFor(paramsJson).toStdString()}), ok, err);
+void YellowbackController::getNewAddress(OkFn ok, ErrFn onError, const QString& label) {
+    const std::string type = receiveAddressTypeFor(paramsJson).toStdString();
+    if (label.isEmpty()) { call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, onError); return; }
+    // W8 (DigiByte v9.26.7 5539554c): the label is kept in wallet.dat by a node that takes it; one from before
+    // refuses the extra argument, and the address is created without it (the client address book keeps the label)
+    call(YellowbackRpc::GETNEWADDRESS, json::array({type, label.toStdString()}), ok,
+        [=, this](const QString& e) {
+            if (isIndexUnhealthy(e)) { if (onError) onError(e); return; }
+            call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, onError);
+        });
+}
+
+void YellowbackController::listAddresses(bool includeEmpty, OkFn ok, ErrFn err) {
+    call(YellowbackRpc::LISTADDRESSES, json::array({includeEmpty}), ok, err);
+}
+
+QList<YellowbackAddress> YellowbackController::pastAddresses(const json& nodeRows, const QList<QPair<QString, QString>>& book,
+                                                             std::function<bool(const QString&)> isYed) {
+    QList<YellowbackAddress> out;
+    auto bookLabel = [&](const QString& addr) {
+        for (const auto& e : book) if (e.second == addr) return e.first;
+        return QString();
+    };
+    if (nodeRows.is_array()) {
+        for (const auto& r : nodeRows) {
+            YellowbackAddress a = YellowbackAddress::fromJson(r);
+            if (a.address.isEmpty()) continue;
+            if (a.label.isEmpty()) a.label = bookLabel(a.address);
+            out.append(a);
+        }
+        std::stable_sort(out.begin(), out.end(), [](const YellowbackAddress& x, const YellowbackAddress& y) { return x.lastUsed > y.lastUsed; });
+        return out;
+    }
+    // An older node: the addresses this wallet labelled, from its own address book (no balances, no activity)
+    QSet<QString> seen;
+    for (const auto& e : book) {
+        if (seen.contains(e.second) || !(isYed ? isYed(e.second) : true)) continue;
+        seen.insert(e.second);
+        YellowbackAddress a;
+        a.address = e.second;
+        a.label   = e.first;
+        out.append(a);
+    }
+    return out;
+}
+
+void YellowbackController::estimateSend(const QString& addr, qint64 cents, OkFn ok, ErrFn err) {
+    json recipients = json::object();
+    recipients[addr.toStdString()] = cents;
+    call(YellowbackRpc::ESTIMATESEND, json::array({recipients}), ok, err);
+}
+
+QString YellowbackController::describeSendEstimate(const json& e, qint64 minOut) {
+    using namespace YellowbackRpc;
+    if (YellowbackJson::toBool(e, EstimateSend::WORKABLE, true)) return QString();
+    const QString id = YellowbackJson::toStr(e, EstimateSend::ERROR);
+    const qint64 spendableCents = YellowbackJson::toInt(e, EstimateSend::SPENDABLE_CENTS, -1);
+    const json& alt = YellowbackJson::obj(e, EstimateSend::ALTERNATIVES);
+    const bool hasBelow = YellowbackJson::has(alt, EstimateSendAlternatives::BELOW), hasAbove = YellowbackJson::has(alt, EstimateSendAlternatives::ABOVE);
+    QString text;
+    if (id.startsWith(Errors::INSUFFICIENT_YED))
+        text = spendableCents >= 0
+            ? tr("Only %1 of YED is spendable now: YED your own unconfirmed transactions have spent is not counted, and their change counts once it confirms.").arg(YellowbackFormat::cents(spendableCents))
+            : tr("This wallet's spendable YED is below the amount.");
+    else if (id.startsWith(Errors::CHANGE_FLOOR))
+        text = tr("No choice of your YED coins sends exactly this amount: the change would be below the %1 minimum output (change must be zero or at least %1).")
+                   .arg(YellowbackFormat::cents(minOut));
+    else
+        text = tr("The node would refuse this transfer: %1").arg(id.isEmpty() ? tr("(no reason given)") : id);
+    if (hasBelow && hasAbove)
+        text += " " % tr("Amounts that work: %1 or %2.").arg(YellowbackFormat::cents(YellowbackJson::toInt(alt, EstimateSendAlternatives::BELOW)))
+                                                       .arg(YellowbackFormat::cents(YellowbackJson::toInt(alt, EstimateSendAlternatives::ABOVE)));
+    else if (hasBelow)
+        text += " " % tr("The nearest amount that works: %1.").arg(YellowbackFormat::cents(YellowbackJson::toInt(alt, EstimateSendAlternatives::BELOW)));
+    else if (hasAbove)
+        text += " " % tr("The nearest amount that works: %1.").arg(YellowbackFormat::cents(YellowbackJson::toInt(alt, EstimateSendAlternatives::ABOVE)));
+    return text;
+}
+
+QString YellowbackController::sendFeeLine(const json& e) {
+    // DigiByte v9.26.7 65744b63: the fee is named in the coin that pays it
+    if (YellowbackJson::has(e, YellowbackRpc::EstimateSend::NETWORK_FEE_ZAT))
+        return tr("Network fee: about %1, paid from your transparent YEC (YED cannot pay it).")
+            .arg(YellowbackFormat::zec(YellowbackJson::toInt(e, YellowbackRpc::EstimateSend::NETWORK_FEE_ZAT)));
+    return tr("The YEC network fee is paid from your transparent YEC (YED cannot pay it); your node prices it by the transaction's size.");
+}
+
+QString YellowbackController::closeWarning(const QStringList& types) {
+    if (types.isEmpty()) return QString();
+    QStringList names;
+    for (const QString& t : types) names << YellowbackFormat::typeLabel(t).toLower();
+    return tr("A Yellowback %1 is waiting for its carrier to confirm (about one block). Your node builds the main transaction only while it runs, "
+              "and it stops when YecWallet closes: closing now leaves the %1 unfinished until its window passes, and its carrier's YEC then comes back "
+              "with \"Reclaim lapsed carriers\" on the Settings page.\n\nClose YecWallet anyway?").arg(names.join(", "));
 }
 
 void YellowbackController::validateAddress(const QString& addr, OkFn ok, ErrFn err) {
@@ -1250,7 +1372,9 @@ void YellowbackController::awaitPending(const QString& type, const QString& carr
     auto finished = std::make_shared<bool>(false);
     QTimer* timer = new QTimer(this);
     timer->setInterval(pendingPollMs);
-    auto stop = [=]() {
+    pendingTypes.append(type);   // W7: the main window asks before closing while this runs
+    auto stop = [=, this]() {
+        if (!*finished) pendingTypes.removeOne(type);
         *finished = true;
         timer->stop();
         timer->deleteLater();
@@ -1790,7 +1914,7 @@ QString YellowbackController::deadlineWarning(const YellowbackPosition& p, int h
     if (height <= 0 || (p.status != STATUS_ACTIVE && p.status != STATUS_VOID)) return QString();
     if (height < p.claimHeight - BLOCKS_PER_DAY) return QString();
     const QString vault = p.txid.left(12) % "…";
-    const QString when = YellowbackFormat::estimateDate(p.claimHeight, height).toString("yyyy-MM-dd HH:mm");
+    const QString when = YellowbackFormat::localDateTime(YellowbackFormat::estimateDate(p.claimHeight, height));
     if (p.status == STATUS_VOID) {
         if (height >= p.claimHeight)
             return tr("VOID vault %1 is past its claim height %2: anyone may take its collateral by the claim path. Release it now.").arg(vault).arg(p.claimHeight);
@@ -1825,6 +1949,26 @@ int YellowbackController::renewLockBlocks(const YellowbackPosition& p) const {
 }
 
 // ── Error identifiers (§4.5) ──────────────────────────────────────────────────────────────
+
+QString YellowbackController::explainErrorFor(const QString& e, const QString& action) {
+    using namespace YellowbackRpc;
+    auto is = [&](const char* id) { return e.startsWith(id, Qt::CaseInsensitive); };
+    if (is(Errors::INSUFFICIENT_YEC)) {
+        if (action == SEND)
+            return tr("A YED transfer pays its network fee in YEC, never in YED, and this wallet has too little confirmed, unlocked transparent YEC for it. "
+                      "Move some YEC to a transparent address of this wallet (and wait for a confirmation), then send again.");
+        if (action == REDEEM)
+            return tr("A redemption pays its protocol and network fees from the vault's own collateral, so the node needed YEC it could not find among this "
+                      "wallet's confirmed, unlocked coins (collateral an earlier redemption returned counts only once that is mined). Wait for a confirmation and try again.");
+        if (action == CLAIM)
+            return tr("A claim pays its network fee and its carrier from this wallet's confirmed, unlocked YEC (the YED it burns pays the debt, not the fee). "
+                      "Move some YEC to a transparent address of this wallet first.");
+        if (action == MINT || action.isEmpty())
+            return tr("The wallet cannot cover the collateral, the carrier and the fees from confirmed, unlocked YEC.");
+        return tr("This transaction's network fee is paid from YEC, and the wallet has too little confirmed, unlocked YEC for it.");
+    }
+    return explainError(e);
+}
 
 QString YellowbackController::explainError(const QString& e) {
     using namespace YellowbackRpc;
@@ -1912,6 +2056,12 @@ QString YellowbackController::explainError(const QString& e) {
         return tr("The bundle given to the node is not a bundle.");
     if (is(Errors::INSUFFICIENT_YEC))
         return tr("The wallet cannot cover the collateral, the carrier and the fees from confirmed, unlocked YEC.");
+    if (is(Errors::VAULT_SPEND_PENDING))
+        return tr("A transaction spending this vault (a redemption or a claim) is already waiting in the mempool. Wait for it to be mined, or to expire, "
+                  "before trying again: a second one would conflict with it.");
+    if (is(Errors::TOO_MANY_COINS))
+        return tr("Paying for this would take so many small YEC coins that the transaction would be too large to relay (pool payouts often leave many). "
+                  "Combine them first by sending YEC to yourself, wait for a confirmation, then try again.");
     if (is(Errors::NOTICE_STANDING))
         return tr("A claim notice already stands against this vault; a second one cannot reset its clock.");
     if (is(Errors::NOTICE_NOT_UNDERWATER))
