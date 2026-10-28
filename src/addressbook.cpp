@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "mainwindow.h"
 #include "controller.h"
+#include "yellowbackcontroller.h"
 
 
 AddressBookModel::AddressBookModel(QTableView *parent)
@@ -298,8 +299,17 @@ QString AddressBook::writeableFile() {
 
 
 // Add a new address/label to the database
+bool AddressBook::isBookAddress(const QString& address) {
+    if (Settings::isValidAddress(address) || Settings::isPQTAddress(address)) return true;
+    for (const char* network : { "main", "test", "regtest" })
+        if (YellowbackController::looksLikeYellowbackAddressOn(network, address)) return true;
+    return false;
+}
+
 void AddressBook::addAddressLabel(QString label, QString address) {
-    Q_ASSERT(Settings::isValidAddress(address));
+    // The Yellowback tab labels its YED receive addresses here too (Save label, and a label typed before New
+    // address): Settings::isValidAddress alone knows only Ycash addresses, so a Debug build aborted on them
+    Q_ASSERT(isBookAddress(address));
 
     // First, remove any existing label
     // Iterate over the list and remove the label/address

@@ -4,7 +4,13 @@
 
 TxTableModel::TxTableModel(QObject *parent)
      : QAbstractTableModel(parent) {
-    headers << QObject::tr("Type") << QObject::tr("Address") << QObject::tr("Date/Time") << QObject::tr("Confirmations") << QObject::tr("Amount");
+    headers << QObject::tr("Type") << QObject::tr("Address") << QObject::tr("Date/Time") << QObject::tr("Confirmations") << QObject::tr("Amount") << QObject::tr("YED");
+}
+
+void TxTableModel::setYellowbackAnnotations(const QHash<QString, YellowbackTxAnnotation>& annotations) {
+    ybAnnotations = annotations;
+    if (modeldata != nullptr && !modeldata->isEmpty())
+        emit dataChanged(index(0, 0), index(modeldata->size() - 1, columnCount(index(0, 0)) - 1));
 }
 
 TxTableModel::~TxTableModel() {
@@ -59,6 +65,12 @@ bool TxTableModel::exportToCsv(QString fileName) const {
     // Write out each row
     for (int row = 0; row < modeldata->length(); row++) {
         for (int col = 0; col < headers.length(); col++) {
+            // the YED column as a plain decimal (no symbol, no grouping), like DigiByte's separate DD column (ea78ad18)
+            if (col == Column::Yed) {
+                auto it = ybAnnotations.constFind(modeldata->at(row).txid);
+                out << "\"" << (it != ybAnnotations.constEnd() && it->hasYed ? YellowbackFormat::plainDollars(it->yedCents) : QString()) << "\",";
+                continue;
+            }
             out << "\"" << data(index(row, col), Qt::DisplayRole).toString() << "\",";
         }
         // Memo
@@ -106,10 +118,17 @@ void TxTableModel::updateAllData() {
  {
      // Align numeric columns (confirmations, amount) right
     if (role == Qt::TextAlignmentRole && 
-         (index.column() == Column::Confirmations || index.column() == Column::Amount))
+         (index.column() == Column::Confirmations || index.column() == Column::Amount || index.column() == Column::Yed))
         return QVariant(Qt::AlignRight | Qt::AlignVCenter);
 
     auto dat = modeldata->at(index.row());
+    auto yb = ybAnnotations.constFind(dat.txid);
+    const bool isYellowback = yb != ybAnnotations.constEnd();
+    if (role == Qt::DisplayRole && index.column() == Column::Type && isYellowback) return yb->label;
+    if (role == Qt::DisplayRole && index.column() == Column::Yed)
+        return isYellowback && yb->hasYed ? YellowbackFormat::cents(yb->yedCents) : QString();
+    if (role == Qt::ToolTipRole && isYellowback && (index.column() == Column::Type || index.column() == Column::Yed || index.column() == Column::Amount))
+        return QString(yb->tooltip % "\n\n" % QObject::tr("Ycash's own record of this transaction: %1 of YEC (%2).").arg(Settings::getZECDisplayFormat(dat.amount)).arg(dat.type));
     if (role == Qt::ForegroundRole) {
         if (dat.confirmations <= 0) {
             QBrush b;
@@ -188,7 +207,7 @@ void TxTableModel::updateAllData() {
 
  QVariant TxTableModel::headerData(int section, Qt::Orientation orientation, int role) const
  {
-     if (role == Qt::TextAlignmentRole && (section == Column::Confirmations || section == Column::Amount))
+     if (role == Qt::TextAlignmentRole && (section == Column::Confirmations || section == Column::Amount || section == Column::Yed))
         return QVariant(Qt::AlignRight | Qt::AlignVCenter);
 
      if (role == Qt::FontRole) {

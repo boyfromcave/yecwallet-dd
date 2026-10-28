@@ -22,7 +22,7 @@
     </layout>
    </item>
    <item>
-    <widget class="QLabel" name="lblRedeemHint"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property><property name="styleSheet"><string notr="true">QLabel { color: #a33; }</string></property></widget>
+    <widget class="QLabel" name="lblRedeemHint"><property name="text"><string/></property><property name="wordWrap"><bool>true</bool></property></widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="redeemButtons">

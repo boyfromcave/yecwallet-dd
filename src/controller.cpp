@@ -59,6 +59,10 @@ Controller::Controller(MainWindow* main) {
 
     // Yellowback: every yed_* call goes through this, on the same Connection
     yellowback = new YellowbackController(main, this);
+    // The ordinary Transactions tab labels Yellowback transactions from the Yellowback ledger (DigiByte v9.26.7 wave 5)
+    QObject::connect(yellowback, &YellowbackController::transactionsUpdated, yellowback, [=, this]() {
+        transactionsTableModel->setYellowbackAnnotations(yellowback->stockAnnotations());
+    });
 
     // Initialize the migration status to unavailable.
     this->migrationStatus.available = false;

@@ -38,6 +38,14 @@
 #include "yellowbackrpc.h"
 #include "vaultrpc.h"
 #include "settings.h"
+#include "txtablemodel.h"
+#include "zcashdrpc.h"
+#include "addressbook.h"
+#include "datamodel.h"
+#include <QTableWidget>
+#include <QSortFilterProxyModel>
+#include <QTimeZone>
+#include <QRegularExpression>
 
 using json = nlohmann::json;
 
@@ -2244,6 +2252,466 @@ private slots:
         h.tab.doSend();
         QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
         QVERIFY(h.label("lblSendHint").contains("Ycash address"));
+    }
+
+    // ── DigiByte v9.26.7 review, wallet follow-ups W1-W8 (REPORT-B-wallet) ──────────────────
+
+    // W1 (DigiByte 639542cb, 65744b63): Send runs the node's dry run before the confirmation, and the
+    // confirmation names the coins, the change and the YEC fee
+    void sendRunsDryRunBeforeConfirmation() {
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", RECIPIENT}, {"ismine", false}};
+        h.rpc.results[YellowbackRpc::ESTIMATESEND] = json::parse(R"({"amountCents": 4000, "recipients": 1, "workable": true, "stage": "greedy",
+            "inputs": [{"txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "vout": 1, "cents": 10000}],
+            "selectedCents": 10000, "changeCents": 6000, "spendableCents": 10000, "error": "", "alternatives": null, "networkFeeZat": 12345})");
+        h.rpc.results[YellowbackRpc::SEND] = json::parse(R"({"txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "changeCents": 6000, "expiryHeight": 371})");
+        h.sendTo(RECIPIENT, "40");
+        h.tab.doSend();
+        QCOMPARE(h.rpc.count(YellowbackRpc::ESTIMATESEND), 1);
+        json recipients = json::object(); recipients[RECIPIENT] = 4000;
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::ESTIMATESEND), json::array({recipients}));
+        int estAt = -1, sendAt = -1;
+        for (int i = 0; i < h.rpc.calls.size(); i++) {
+            if (h.rpc.calls[i].method == YellowbackRpc::ESTIMATESEND) estAt = i;
+            if (h.rpc.calls[i].method == YellowbackRpc::SEND) sendAt = i;
+        }
+        QVERIFY(estAt >= 0 && sendAt > estAt);                         // the dry run comes first
+        QCOMPARE(h.confirms.size(), 1);
+        const QString& c = h.confirms[0];
+        QVERIFY2(c.contains("Send $40.00 of YED"), qPrintable(c));
+        QVERIFY2(c.contains("1 YED coin(s) worth $100.00") && c.contains("$60.00 comes back"), qPrintable(c));
+        QVERIFY2(c.contains("Network fee: about " % YellowbackFormat::zec(12345)) && c.contains("YED cannot pay it"), qPrintable(c));
+        QCOMPARE(h.rpc.count(YellowbackRpc::SEND), 1);
+        // the change rule is on the amount field
+        auto amount = h.tab.page(YellowbackTab::Send)->findChild<QLineEdit*>("txtAmount");
+        QVERIFY2(amount->toolTip().contains("Change must be zero or at least $1.00"), qPrintable(amount->toolTip()));
+    }
+
+    // W1: a dry run that is not workable stops before the confirmation and names the amounts that work
+    void sendDryRunRefusalNamesAlternatives() {
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", RECIPIENT}, {"ismine", false}};
+        h.rpc.results[YellowbackRpc::ESTIMATESEND] = json::parse(R"({"amountCents": 9950, "recipients": 1, "workable": false, "stage": "none",
+            "inputs": [], "selectedCents": 0, "changeCents": 0, "spendableCents": 10000, "error": "change-floor",
+            "alternatives": {"below": 9900, "above": 10000}})");
+        h.sendTo(RECIPIENT, "99.50");
+        h.tab.doSend();
+        QVERIFY(h.confirms.isEmpty());
+        QCOMPARE(h.rpc.count(YellowbackRpc::SEND), 0);
+        const QString hint = h.label("lblSendHint");
+        QVERIFY2(hint.contains("change must be zero or at least $1.00") && hint.contains("$99.00") && hint.contains("$100.00"), qPrintable(hint));
+
+        h.rpc.results[YellowbackRpc::ESTIMATESEND] = json::parse(R"({"amountCents": 9000, "recipients": 1, "workable": false, "stage": "none",
+            "inputs": [], "selectedCents": 0, "changeCents": 0, "spendableCents": 6000, "error": "insufficient-yed",
+            "alternatives": {"below": 6000, "above": null}})");
+        h.sendTo(RECIPIENT, "90");
+        h.tab.doSend();
+        QVERIFY(h.confirms.isEmpty());
+        QVERIFY2(h.label("lblSendHint").contains("Only $60.00 of YED is spendable") && h.label("lblSendHint").contains("$60.00."), qPrintable(h.label("lblSendHint")));
+
+        // a node without the dry run: the confirmation follows, with the generic fee sentence
+        h.rpc.results.remove(YellowbackRpc::ESTIMATESEND);
+        h.rpc.results[YellowbackRpc::SEND] = json::parse(R"({"txid": "ab", "changeCents": 0, "expiryHeight": 371})");
+        h.sendTo(RECIPIENT, "40");
+        h.tab.doSend();
+        QCOMPARE(h.confirms.size(), 1);
+        QVERIFY2(h.confirms[0].contains("paid from your transparent YEC") && !h.confirms[0].contains("coin(s) worth"), qPrintable(h.confirms[0]));
+    }
+
+    // W1 (DigiByte 639542cb): Send gates on yed_getbalance.spendableCents, not on the confirmed total that still
+    // counts YED the wallet's own unconfirmed send spent; a node without the field keeps the confirmed figure
+    void sendGatesOnSpendableCents() {
+        Harness h;
+        h.feedActive();
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr),
+                   json{{"confirmedCents", 10000}, {"unconfirmedCents", 6000}, {"spendableCents", 0}, {"height", 331}},
+                   json(nullptr), json(nullptr), json(nullptr));
+        QCOMPARE(h.ctl.spendableCents(), (qint64)0);
+        QVERIFY(h.ctl.reportsSpendable());
+        QVERIFY2(h.label("lblAvailable").startsWith("$0.00") && h.label("lblAvailable").contains("of $100.00 confirmed"), qPrintable(h.label("lblAvailable")));
+        h.sendTo(RECIPIENT, "50");
+        h.tab.doSend();
+        QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS) + h.rpc.count(YellowbackRpc::ESTIMATESEND) + h.rpc.count(YellowbackRpc::SEND), 0);
+        QVERIFY2(h.label("lblSendHint").contains("Only $0.00 is confirmed and spendable"), qPrintable(h.label("lblSendHint")));
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), balanceReply(10000), json(nullptr), json(nullptr), json(nullptr));
+        QVERIFY(!h.ctl.reportsSpendable());
+        QCOMPARE(h.ctl.spendableCents(), (qint64)10000);
+    }
+
+    // W2 (DigiByte 00136af6): a vault with a spend in the mempool says so and offers neither Redeem nor Renew
+    void vaultSpendPendingDisablesRedeemAndRenew() {
+        Harness h;
+        json p = positionActive();
+        p["canRedeem"] = true;
+        h.feedActive(390, json::array({p}));                           // past lockHeight 380: Redeem and Renew both offered
+        h.selectRow("tblPositions", 0);
+        QVERIFY(h.button("btnRedeem")->isEnabled());
+        QVERIFY(h.button("btnRenew")->isEnabled());
+        QCOMPARE(h.ctl.positionsModel()->redeemable().size(), 1);
+
+        p["spendPending"] = true;
+        p["spendTxid"] = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        h.feedActive(390, json::array({p}));
+        h.selectRow("tblPositions", 0);
+        const YellowbackPosition pos = YellowbackPosition::fromJson(p);
+        QVERIFY(pos.spendPending);
+        const auto a = YellowbackTab::vaultActions(pos, 390, infoActive()["params"]);
+        QVERIFY(!a.redeem && !a.renew && !a.release);
+        QVERIFY2(a.text.contains("Redemption pending (abcdef0123456789"), qPrintable(a.text));
+        QVERIFY(!h.button("btnRedeem")->isEnabled());
+        QVERIFY(!h.button("btnRenew")->isEnabled());
+        QVERIFY2(h.label("lblVaultAction").contains("Redemption pending"), qPrintable(h.label("lblVaultAction")));
+        auto m = h.ctl.positionsModel();
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::DisplayRole).toString().contains("redemption pending"));
+        QVERIFY(m->data(m->index(0, YellowbackPositionsModel::ActBy), Qt::DisplayRole).toString().startsWith("Redemption pending (abcdef"));
+        QCOMPARE(m->data(m->index(0, YellowbackPositionsModel::Status), Qt::BackgroundRole).value<QBrush>().color(), YellowbackTheme::pendingBackground());
+        QVERIFY(m->redeemable().isEmpty());                            // nor on the Redeem page
+        // and the action itself refuses before any call
+        h.rpc.calls.clear();
+        h.tab.redeemVault(pos);
+        QCOMPARE(h.rpc.count(YellowbackRpc::ESTIMATEREDEEM), 0);
+        QCOMPARE(h.errorNotices.size(), 1);
+        QVERIFY2(h.errorNotices[0].contains("already has a redemption waiting"), qPrintable(h.errorNotices[0]));
+        h.tab.renewVault(pos);
+        QCOMPARE(h.rpc.count(YellowbackRpc::REDEEM), 0);
+        QVERIFY(YellowbackController::explainError("vault-spend-pending: a spend of the vault is in the mempool").contains("already waiting in the mempool"));
+    }
+
+    // W3 (DigiByte 46a7c0de, wave 5): the ordinary Transactions tab and its CSV label Yellowback transactions
+    // from the Yellowback ledger (joined by txid), with their YED in a column of its own
+    void stockTransactionsAnnotatedFromYellowbackLedger() {
+        Harness h;
+        const QString mintTxid = "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8";
+        const QString carrier  = "cc1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7cc";
+        const QString recvTxid = "ee1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7ee";
+        const QString other    = "001f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e700";
+        json mint = txMint(); mint["carrierTxid"] = carrier.toStdString(); mint["mainTxid"] = mintTxid.toStdString(); mint["carrierOutcome"] = "completed";
+        json recv = txRow("receive", recvTxid.toUtf8().constData()); recv["amountCents"] = 2500; recv["yedIn"] = 2500; recv["yedOut"] = 0;
+        h.ctl.feed(infoActive(), statsOpen(), activationActive(), json(nullptr), json(nullptr), json(nullptr), json::array({mint, recv}));
+        QCOMPARE(h.ctl.stockAnnotations().size(), 3);                 // the mint, its carrier, the receipt
+
+        TxTableModel model(nullptr);
+        QList<TransactionItem> items = {
+            { "send",    1700000400, "s1Unknownscript", mintTxid, -251.25628141, 1, "", "" },
+            { "send",    1700000300, "s1Self",          carrier,  -0.0002,       2, "", "" },
+            { "receive", 1700000200, "s1Recv",          recvTxid,  0.0001,       3, "", "" },
+            { "receive", 1700000100, "s1Plain",         other,     1.5,          4, "", "" },
+        };
+        model.addTData(items);
+        model.setYellowbackAnnotations(h.ctl.stockAnnotations());
+        auto rowOf = [&](const QString& txid) { for (int r = 0; r < model.rowCount(QModelIndex()); r++) if (model.getTxId(r) == txid) return r; return -1; };
+        auto cell = [&](const QString& txid, int col, int role = Qt::DisplayRole) { return model.data(model.index(rowOf(txid), col), role).toString(); };
+        QCOMPARE(model.columnCount(QModelIndex()), 6);
+        QCOMPARE(model.headerData(TxTableModel::Yed, Qt::Horizontal, Qt::DisplayRole).toString(), QString("YED"));
+        QCOMPARE(cell(mintTxid, TxTableModel::Type), QString("Yellowback mint: collateral locked"));
+        QCOMPARE(cell(mintTxid, TxTableModel::Yed), QString("$1,000.00"));
+        QVERIFY(cell(mintTxid, TxTableModel::Type, Qt::ToolTipRole).contains("not sent away"));
+        QCOMPARE(cell(carrier, TxTableModel::Type), QString("Yellowback carrier (mint)"));
+        QCOMPARE(cell(carrier, TxTableModel::Yed), QString());
+        QCOMPARE(cell(recvTxid, TxTableModel::Type), QString("YED received"));
+        QCOMPARE(cell(recvTxid, TxTableModel::Yed), QString("$25.00"));
+        QCOMPARE(cell(other, TxTableModel::Type), QString("receive"));  // an ordinary YEC row is untouched
+        QCOMPARE(cell(other, TxTableModel::Yed), QString());
+
+        QTemporaryDir dir;
+        const QString path = dir.filePath("stock.csv");
+        QVERIFY(model.exportToCsv(path));
+        QFile f(path); QVERIFY(f.open(QIODevice::ReadOnly));
+        const QString csv = QString::fromUtf8(f.readAll());
+        QVERIFY2(csv.section('\n', 0, 0).contains("\"YED\""), qPrintable(csv));
+        QVERIFY2(csv.contains("\"Yellowback mint: collateral locked\"") && csv.contains("\"1000.00\""), qPrintable(csv));
+        QVERIFY2(csv.contains("\"YED received\"") && csv.contains("\"25.00\""), qPrintable(csv));
+
+        // a mint whose carrier lapsed moved no YED: it is labelled failed and its YED column stays empty
+        mint["carrierOutcome"] = "lapsed";
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({mint}));
+        model.setYellowbackAnnotations(h.ctl.stockAnnotations());
+        QVERIFY2(cell(mintTxid, TxTableModel::Type).endsWith("(failed)"), qPrintable(cell(mintTxid, TxTableModel::Type)));
+        QCOMPARE(cell(mintTxid, TxTableModel::Yed), QString());
+        QCOMPARE(cell(carrier, TxTableModel::Type), QString("Yellowback carrier (mint failed)"));
+    }
+
+    // W4 (DigiByte ea78ad18, 3f09a4a9, b00d185e): the Yellowback CSV export, regional dates on screen, sorting by value
+    void yellowbackCsvExportAndDates() {
+        Harness h;
+        json mint = txMint(); mint["time"] = 1700000000;
+        json send = txRow("send", "5e1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e75e");
+        send["amountCents"] = 4000; send["yedIn"] = 10000; send["yedOut"] = 6000; send["time"] = 1700000600; send["feeZat"] = 0;
+        json pending = txRow("receive", "9e1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e79e");
+        pending["confirmations"] = 0; pending["height"] = -1; pending["amountCents"] = 1234; pending["time"] = nullptr;
+        h.ctl.feed(infoActive(), statsOpen(), activationActive(), json(nullptr), json(nullptr), json(nullptr), json::array({mint, send, pending}));
+        auto m = h.ctl.transactionsModel();
+        const QString csv = m->toCsv();
+        const QStringList lines = csv.split("\r\n", Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 4);
+        QVERIFY2(lines[0].startsWith("Date (UTC),Type,Amount (USD)") && lines[0].contains("Txid"), qPrintable(lines[0]));
+        QVERIFY2(lines[1].startsWith("\"2023-11-14T22:13:20Z\",\"mint\",1000.00,0.00,1000.00,0.00,0.62814071,1,332,"), qPrintable(lines[1]));
+        QVERIFY2(lines[1].contains("\"6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8\""), qPrintable(lines[1]));
+        QVERIFY2(lines[2].startsWith("\"2023-11-14T22:23:20Z\",\"send\",-40.00,100.00,60.00,"), qPrintable(lines[2]));
+        QVERIFY2(lines[3].startsWith("\"\",\"receive\",12.34,"), qPrintable(lines[3]));
+        // plain decimals whatever the display unit
+        Settings::getInstance()->setYellowbackUnitCents(true);
+        QVERIFY(m->toCsv() == csv);
+        Settings::getInstance()->setYellowbackUnitCents(false);
+        // the file the button writes is that text
+        QTemporaryDir dir;
+        const QString path = dir.filePath(YellowbackTab::defaultCsvName());
+        QVERIFY(YellowbackTab::defaultCsvName().startsWith("yellowback-transactions-") && path.endsWith(".csv"));
+        QVERIFY(h.tab.exportTransactionsCsv(path));
+        QFile f(path); QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(f.readAll()), csv);
+        QVERIFY(h.tab.findChild<QPushButton*>("btnExportCsv") != nullptr);
+        // on screen: the computer's regional format; "-" while unconfirmed
+        QCOMPARE(m->data(m->index(0, YellowbackTxModel::Date), Qt::DisplayRole).toString(),
+                 QLocale().toString(QDateTime::fromSecsSinceEpoch(1700000000, QTimeZone::utc()).toLocalTime(), QLocale::ShortFormat));
+        QCOMPARE(m->data(m->index(2, YellowbackTxModel::Date), Qt::DisplayRole).toString(), QString("-"));
+        QVERIFY(YellowbackFormat::heightWithEstimate(400, 331).contains(YellowbackFormat::localDateTime(YellowbackFormat::estimateDate(400, 331)).left(4)));
+        // the Transactions page sorts by the value, not the display string
+        QCOMPARE(m->data(m->index(1, YellowbackTxModel::Amount), YellowbackTxModel::SortRole).toLongLong(), (qint64)-4000);
+        auto table = h.tab.page(YellowbackTab::Transactions)->findChild<QTableView*>("tblTransactions");
+        auto proxy = qobject_cast<QSortFilterProxyModel*>(table->model());
+        QVERIFY(proxy != nullptr && table->isSortingEnabled());
+        QCOMPARE(proxy->sortRole(), (int)YellowbackTxModel::SortRole);
+        table->sortByColumn(YellowbackTxModel::Amount, Qt::AscendingOrder);
+        QCOMPARE(proxy->data(proxy->index(0, YellowbackTxModel::Txid)).toString(), QString("5e1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e75e"));
+        table->sortByColumn(YellowbackTxModel::Date, Qt::DescendingOrder);
+        QCOMPARE(proxy->data(proxy->index(0, YellowbackTxModel::Txid)).toString(), QString("9e1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e79e"));   // unconfirmed first
+    }
+
+    // W5 (DigiByte 943bf9e9, 5e0f27ec, ba84ed96, 77a5b156): the Yellowback tab's colours follow the theme; pending and
+    // failed rows differ; on the dark theme every label and banner keeps a readable contrast (rendered offscreen)
+    void darkThemeKeepsContrast() {
+        struct Reset { ~Reset() { YellowbackTheme::setDark(false); } } reset;
+        auto luminance = [](const QColor& c) {
+            auto ch = [](double v) { v /= 255.0; return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4); };
+            return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue());
+        };
+        auto contrast = [&](const QColor& a, const QColor& b) {
+            double x = luminance(a), y = luminance(b);
+            if (x < y) std::swap(x, y);
+            return (x + 0.05) / (y + 0.05);
+        };
+        auto cssColours = [](const QString& css, QColor* fg, QColor* bg) {
+            QRegularExpression c("(?<![-\\w])color:\\s*(#[0-9a-fA-F]{3,6})"), b("background-color:\\s*(#[0-9a-fA-F]{3,6})");
+            auto mc = c.match(css), mb = b.match(css);
+            if (mc.hasMatch()) *fg = QColor(mc.captured(1));
+            if (mb.hasMatch() && bg != nullptr) *bg = QColor(mb.captured(1));
+            return mc.hasMatch();
+        };
+        QPalette darkPalette; darkPalette.setColor(QPalette::Window, QColor(0x30, 0x33, 0x35));
+        QPalette lightPalette; lightPalette.setColor(QPalette::Window, QColor(0xef, 0xef, 0xef));
+        QVERIFY(YellowbackTheme::isDarkTheme("dark", lightPalette));
+        QVERIFY(YellowbackTheme::isDarkTheme("matrix", lightPalette));
+        QVERIFY(!YellowbackTheme::isDarkTheme("light", darkPalette));
+        QVERIFY(YellowbackTheme::isDarkTheme("default", darkPalette));
+        QVERIFY(!YellowbackTheme::isDarkTheme("default", lightPalette));
+
+        for (bool dark : { false, true }) {
+            YellowbackTheme::setDark(dark);
+            const QColor window = dark ? QColor(0x30, 0x33, 0x35) : QColor(0xef, 0xef, 0xef);
+            for (const char* kind : { "warning", "ok", "error", "info", "note" }) {
+                QColor fg, bg;
+                QVERIFY(cssColours(YellowbackTheme::labelCss(kind), &fg, &bg));
+                QVERIFY2(contrast(fg, bg) >= 4.5, qPrintable(QString("%1 %2: %3").arg(dark).arg(kind).arg(contrast(fg, bg))));
+            }
+            for (const char* kind : { "muted", "hint" }) {
+                QColor fg;
+                QVERIFY(cssColours(YellowbackTheme::labelCss(kind), &fg, nullptr));
+                QVERIFY2(contrast(fg, window) >= 4.5, qPrintable(QString("%1 %2: %3").arg(dark).arg(kind).arg(contrast(fg, window))));
+            }
+            // a waiting row is not painted as a failure
+            QVERIFY(YellowbackTheme::pendingForeground() != YellowbackTheme::failedForeground());
+            QVERIFY(contrast(YellowbackTheme::pendingForeground(), window) >= 3.0);
+            QVERIFY(contrast(YellowbackTheme::failedForeground(), window) >= 3.0);
+            // the row backgrounds keep the theme's text readable (white on dark, black on light)
+            for (const QColor& rowBg : { YellowbackTheme::attentionBackground(), YellowbackTheme::warningBackground(), YellowbackTheme::pendingBackground() })
+                QVERIFY2(contrast(rowBg, dark ? QColor(Qt::white) : QColor(Qt::black)) >= 4.5, qPrintable(rowBg.name()));
+        }
+        YellowbackTheme::setDark(false);
+
+        // the tab under YecWallet's dark theme: no label keeps the old #444 / #a33, and the rendered page's
+        // background against the muted text the theme gives is readable
+        Harness h;
+        QFile css(":/css/res/css/dark.css");
+        QVERIFY(css.open(QIODevice::ReadOnly));
+        h.tab.setStyleSheet(QString::fromUtf8(css.readAll()));
+        h.tab.applyTheme("dark");
+        QVERIFY(YellowbackTheme::dark());
+        for (QLabel* l : h.tab.findChildren<QLabel*>()) {
+            QVERIFY2(!l->styleSheet().contains("#444") && !l->styleSheet().contains("#a33"), qPrintable(l->objectName()));
+        }
+        json p = positionActive(); p["claimable"] = true;
+        h.feedActive(331, json::array({p}));
+        h.selectRow("tblPositions", 0);
+        auto action = h.tab.findChild<QLabel*>("lblVaultAction");
+        QVERIFY(!action->text().isEmpty());
+        action->resize(400, 60);
+        action->ensurePolished();
+        const QImage shot = action->grab().toImage();
+        QVERIFY(!shot.isNull());
+        const QColor background = shot.pixelColor(1, 1);
+        QVERIFY2(background.lightness() < 128, qPrintable(background.name()));       // dark.css paints the page dark
+        QColor muted;
+        QVERIFY(cssColours(action->styleSheet(), &muted, nullptr));
+        QVERIFY2(contrast(muted, background) >= 4.5, qPrintable(QString("%1 on %2").arg(muted.name()).arg(background.name())));
+        // the claimable row is the dark attention colour, under which the theme's white text reads
+        auto m = h.ctl.positionsModel();
+        const QColor rowBg = m->data(m->index(0, YellowbackPositionsModel::Status), Qt::BackgroundRole).value<QBrush>().color();
+        QCOMPARE(rowBg, YellowbackTheme::attentionBackground());
+        QVERIFY(rowBg.lightness() < 128);
+        // the transactions model: pending in the pending colour, expired in the failure colour
+        json pending = txMint(); pending["confirmations"] = 0;
+        json expired = txMint(); expired["expired"] = true; expired["verdict"] = "expired"; expired["txid"] = "ee";
+        h.ctl.feed(json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json(nullptr), json::array({pending, expired}));
+        auto t = h.ctl.transactionsModel();
+        QCOMPARE(t->data(t->index(0, YellowbackTxModel::Type), Qt::ForegroundRole).value<QBrush>().color(), YellowbackTheme::pendingForeground());
+        QCOMPARE(t->data(t->index(1, YellowbackTxModel::Type), Qt::ForegroundRole).value<QBrush>().color(), YellowbackTheme::failedForeground());
+        h.tab.applyTheme("light");
+        QVERIFY(!YellowbackTheme::dark());
+    }
+
+    // W6 (DigiByte 65744b63, 635af77f, b54e3861): insufficient-yec says what each action needs YEC for; too-many-coins
+    // is explained; the Mint page's "YEC available" counts confirmed coins only; a node's mintBlocked is shown
+    void insufficientYecExplainedPerAction() {
+        const QString e = "insufficient-yec: need 0.00012 YEC, have 0.00001";
+        const QString send   = YellowbackController::explainErrorFor(e, YellowbackRpc::SEND);
+        const QString redeem = YellowbackController::explainErrorFor(e, YellowbackRpc::REDEEM);
+        const QString mint   = YellowbackController::explainErrorFor(e, YellowbackRpc::MINT);
+        const QString claim  = YellowbackController::explainErrorFor(e, YellowbackRpc::CLAIM);
+        QVERIFY2(send.contains("never in YED") && !send.contains("collateral"), qPrintable(send));
+        QVERIFY2(redeem.contains("fees from the vault's own collateral") && redeem != mint, qPrintable(redeem));
+        QVERIFY2(mint.contains("collateral, the carrier and the fees"), qPrintable(mint));
+        QVERIFY2(claim.contains("network fee and its carrier"), qPrintable(claim));
+        QCOMPARE(YellowbackController::explainError(e), mint);   // the generic text stays the mint's
+        const QString coins = YellowbackController::explainErrorFor("too-many-coins: combine small coins first (send to yourself)", YellowbackRpc::MINT);
+        QVERIFY2(coins.contains("sending YEC to yourself"), qPrintable(coins));
+        // the Send refusal carries the send sentence
+        Harness h;
+        h.feedActive();
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", RECIPIENT}, {"ismine", false}};
+        h.rpc.errors[YellowbackRpc::SEND] = e;
+        h.sendTo(RECIPIENT, "40");
+        h.tab.doSend();
+        QCOMPARE(h.errorNotices.size(), 1);
+        QVERIFY2(h.errorNotices[0].contains("never in YED"), qPrintable(h.errorNotices[0]));
+
+        // confirmed coins only: an unconfirmed transparent coin and a watch-only one are left out
+        const QString t1 = "s" % QString(34, QChar('a')), t2 = "s" % QString(34, QChar('b'));
+        const QString z1 = "yregtestsapling" % QString(76, QChar('q'));
+        QList<UnspentOutput> utxos = {
+            { t1, "aa", "1.5", 3, true }, { t2, "bb", "2.0", 0, true }, { t1, "cc", "4.0", 2, false }, { z1, "dd", "0.75", 1, true },
+        };
+        QCOMPARE(YellowbackController::confirmedYecIn(utxos, QString()), 1.5);
+        QCOMPARE(YellowbackController::confirmedYecIn(utxos, z1), 0.75);
+        QCOMPARE(YellowbackController::confirmedYecIn(utxos, t2), 0.0);
+
+        // a newer node's estimate says yed_mint would refuse now: the page says why and Mint stays off
+        Harness m;
+        m.feedActive();
+        json est = estimateReply(); est["mintBlocked"] = true; est["mintBlockedReason"] = "mintpol-global-ratio";
+        m.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = est;
+        m.estimateFor("1000");
+        QVERIFY2(m.label("lblMintHint").contains("Your node would refuse this mint now: mintpol-global-ratio"), qPrintable(m.label("lblMintHint")));
+        QVERIFY(!m.button("btnMint")->isEnabled());
+        est["mintBlocked"] = false; est["mintBlockedReason"] = "";
+        m.rpc.results[YellowbackRpc::ESTIMATECOLLATERAL] = est;
+        m.estimateFor("1001");
+        QVERIFY(!m.label("lblMintHint").contains("would refuse"));
+    }
+
+    // W7 (DigiByte e7254dcc): closing while a two-step action waits for its carrier asks first
+    void closeAsksWhileTwoStepPending() {
+        QVERIFY(YellowbackController::closeWarning(QStringList()).isEmpty());
+        Harness h;
+        h.feedActive();
+        h.ctl.setPendingPollMs(10);
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array();
+        h.rpc.results[YellowbackRpc::GETTXINFO] = json{{"txid", "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8"}, {"type", "mint"}};
+        bool done = false;
+        h.ctl.awaitPending("mint", "5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c", 329,
+                           [&](const json&) { done = true; }, [&](const QString&) {});
+        QCOMPARE(h.ctl.pendingActionTypes(), QStringList({"mint"}));
+        const QString w = h.ctl.closeWarning();
+        QVERIFY2(w.contains("mint is waiting for its carrier") && w.contains("Close YecWallet anyway?") && w.contains("Reclaim lapsed carriers"), qPrintable(w));
+        QTest::qWait(50);
+        QVERIFY(!h.ctl.closeWarning().isEmpty());                      // still waiting
+        h.rpc.results[YellowbackRpc::LISTTRANSACTIONS] = json::array({txMint()});
+        QTRY_VERIFY_WITH_TIMEOUT(done, 2000);
+        QVERIFY(h.ctl.closeWarning().isEmpty());
+        QVERIFY(h.ctl.pendingActionTypes().isEmpty());
+    }
+
+    // W8 (DigiByte 5539554c, b3cb2482): the Receive page lists past addresses with the labels the node keeps,
+    // falls back to the client address book on an older node, and sends a typed label with yed_getnewaddress
+    void receiveListsPastAddresses() {
+        const QString a1 = "yrPastAddressOne" % QString(19, QChar('1')), a2 = "yrPastAddressTwo" % QString(19, QChar('1'));   // 35 characters
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("regtest", a2));
+        // the address book holds YED receive addresses as well as Ycash ones (its Debug assertion used to
+        // know only Ycash addresses and aborted on the Receive page's Save label)
+        QVERIFY(AddressBook::isBookAddress(a2));
+        QVERIFY(AddressBook::isBookAddress(RECIPIENT));
+        QVERIFY(AddressBook::isBookAddress("yb" % QString(51, QChar('2'))));          // a 53-character PQ YED address
+        QVERIFY(AddressBook::isBookAddress("s1NotAYellowbackAddress111111111111"));     // a Ycash transparent address
+        QVERIFY(!AddressBook::isBookAddress("yrTooShort"));
+        QVERIFY(!AddressBook::isBookAddress(QString()));
+        {
+            Harness h;
+            h.rpc.results[YellowbackRpc::LISTADDRESSES] = json::array({
+                {{"address", a2.toStdString()}, {"label", ""}, {"confirmedCents", 0}, {"txCount", 0}, {"lastUsed", nullptr}},
+                {{"address", a1.toStdString()}, {"label", "rent"}, {"confirmedCents", 2500}, {"txCount", 2}, {"lastUsed", 1700000000}},
+            });
+            h.feedActive();
+            QCOMPARE(h.rpc.lastParams(YellowbackRpc::LISTADDRESSES), json::array({true}));   // includeEmpty: unused ones too
+            auto t = h.tab.findChild<QTableWidget*>("tblPastAddresses");
+            QVERIFY(t != nullptr);
+            QCOMPARE(t->rowCount(), 2);
+            QCOMPARE(t->item(0, 0)->text(), a1);                           // newest use first
+            QCOMPARE(t->item(0, 1)->text(), QString("rent"));
+            QCOMPARE(t->item(0, 2)->text(), QString("$25.00"));
+            QCOMPARE(t->item(0, 3)->text(), QString("2"));
+            QCOMPARE(t->item(0, 4)->text(), YellowbackFormat::unixTimeLocal(1700000000));
+            QCOMPARE(t->item(1, 4)->text(), QString("never"));
+            QVERIFY(h.label("lblPastAddresses").contains("labels your node keeps"));
+        }
+        {
+            // an older node: the addresses this wallet labelled in its own address book
+            AddressBook::getInstance()->addAddressLabel("book-label", a2);
+            AddressBook::getInstance()->addAddressLabel("not-yed", "s1NotAYellowbackAddress111111111111");
+            Harness h;
+            h.feedActive();
+            auto rows = h.tab.pastAddresses();
+            bool found = false;
+            for (const auto& r : rows) { if (r.address == a2) found = r.label == "book-label" && r.confirmedCents < 0; QVERIFY(r.address.startsWith("yr")); }
+            QVERIFY(found);
+            QVERIFY(h.label("lblPastAddresses").contains("address book"));
+            AddressBook::getInstance()->removeAddressLabel("book-label", a2);
+            AddressBook::getInstance()->removeAddressLabel("not-yed", "s1NotAYellowbackAddress111111111111");
+        }
+        {
+            // a typed label goes to the node with the address; an older node that refuses it is asked without
+            Harness h;
+            h.feedActive();
+            h.rpc.results[YellowbackRpc::GETNEWADDRESS] = RECIPIENT;
+            h.setText(YellowbackTab::Receive, "txtLabel", "salary");
+            h.button("btnNewAddress")->click();
+            QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETNEWADDRESS), json::array({"p2pkh", "salary"}));
+            QCOMPARE(h.label("lblAddress"), QString(RECIPIENT));
+            QCOMPARE(AddressBook::getInstance()->getLabelForAddress(RECIPIENT), QString("salary"));
+            AddressBook::getInstance()->removeAddressLabel("salary", RECIPIENT);
+
+            auto inner = h.rpc.transport();
+            h.ctl.setTransport([&, inner](const QString& m, const json& params, YellowbackController::OkFn ok, YellowbackController::ErrFn err) {
+                if (m == YellowbackRpc::GETNEWADDRESS && params.size() > 1) { h.rpc.calls.append({m, params}); if (err) err("Error: yed_getnewaddress takes at most 1 argument"); return; }
+                inner(m, params, ok, err);
+            });
+            h.button("btnNewAddress")->click();
+            QCOMPARE(h.rpc.lastParams(YellowbackRpc::GETNEWADDRESS), json::array({"p2pkh"}));
+            QVERIFY2(h.label("lblReceiveStatus").startsWith("This is a regtest Yellowback address"), qPrintable(h.label("lblReceiveStatus")));
+            QCOMPARE(AddressBook::getInstance()->getLabelForAddress(RECIPIENT), QString("salary"));
+            AddressBook::getInstance()->removeAddressLabel("salary", RECIPIENT);
+        }
     }
 
     // ── rpcversion 7: post-quantum owners (quantum spec §4, §6.2; clients survey §2) ─────────

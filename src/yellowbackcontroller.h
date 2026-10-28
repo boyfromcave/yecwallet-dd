@@ -7,6 +7,7 @@
 
 #include "precompiled.h"
 #include "yellowbackmodels.h"
+#include "datamodel.h"
 
 using json = nlohmann::json;
 
@@ -151,7 +152,16 @@ public:
     static bool isOwnClaim(const YellowbackTx& t);   // a claim this wallet made (its YED was burned in it)
     qint64  confirmedCents() const { return confirmed; }
     qint64  unconfirmedCents() const { return unconfirmed; }
+    /** W1 (DigiByte v9.26.7 639542cb): yed_getbalance.spendableCents, the confirmed YED the wallet's own unconfirmed
+     *  transactions have not spent; confirmedCents on a node that does not report it. What Send and Redeem gate on. */
+    qint64  spendableCents() const { return spendable >= 0 ? spendable : confirmed; }
+    bool    reportsSpendable() const { return spendable >= 0; }
     double  yecBalance() const;                   // from the stock DataModel: every transparent address
+    /** W6 (DigiByte v9.26.7 635af77f): the YEC a Yellowback transaction can use from `source` ("" = every transparent
+     *  and PQ address, else that one address): coins with at least one confirmation only, as the node's
+     *  builders select (AvailableCoins with nMinDepth 1). Pure. */
+    static double confirmedYecIn(const QList<UnspentOutput>& utxos, const QString& source);
+    double  confirmedYecAt(const QString& source) const;
     // Plan I2: funding sources and collateral destinations. `source` is "" for the transparent
     // total, else one address (s1... or ys1...) whose balance the DataModel knows.
     double  yecBalanceAt(const QString& source) const;
@@ -334,7 +344,23 @@ public:
     typedef std::function<void(const QString& method, const json& params, OkFn ok, ErrFn err)> Transport;
     void setTransport(Transport t) { transport = t; }
 
-    void getNewAddress(OkFn ok, ErrFn err);
+    /** label: kept by the node in wallet.dat (yed_getnewaddress [type] [label], a newer node); an older node that
+     *  refuses the second argument is asked again without it. */
+    void getNewAddress(OkFn ok, ErrFn err, const QString& label = QString());
+    /** W8: yed_listaddresses [includeEmpty] (a newer node); `err` gets "Method not found" from an older one. */
+    void listAddresses(bool includeEmpty, OkFn ok, ErrFn err);
+    /** W8: the Receive page's past addresses: the node's yed_listaddresses rows when `nodeRows` is an array, else the
+     *  client address book's entries that `isYedAddress` accepts (labels only); a node row without a label takes
+     *  the address book's. Newest use first. Pure. */
+    static QList<YellowbackAddress> pastAddresses(const json& nodeRows, const QList<QPair<QString, QString>>& addressBook,
+                                                  std::function<bool(const QString&)> isYedAddress);
+    /** W1: yed_estimatesend {addr: cents}, the dry run of yed_send (H3). */
+    void estimateSend(const QString& addr, qint64 cents, OkFn ok, ErrFn err);
+    /** W1: what the Send page says about a yed_estimatesend reply that is not workable: the identifier's meaning,
+     *  the spendable YED, and the nearest workable amounts (alternatives); "" when the reply is workable. Pure. */
+    static QString describeSendEstimate(const json& estimate, qint64 minOutputCents);
+    /** W1: the YEC fee line of the Send confirmation from yed_estimatesend.networkFeeZat; the generic line when absent. Pure. */
+    static QString sendFeeLine(const json& estimate);
     void validateAddress(const QString& addr, OkFn ok, ErrFn err);
     void estimateCollateral(qint64 cents, int lockBlocks, OkFn ok, ErrFn err);
     // v3: the two-step commands are issued with wait = false (W7), so the reply comes back
@@ -385,6 +411,13 @@ public:
     void awaitPending(const QString& type, const QString& carrierTxid, int refHeight, OkFn done, ErrFn err,
                       const QString& vaultTxid = QString());
     void setPendingPollMs(int ms) { pendingPollMs = ms; }   // the QTest shortens it
+    /** W7: the types of the two-step actions awaitPending is following now (one entry per action). */
+    QStringList pendingActionTypes() const { return pendingTypes; }
+    /** W7 (DigiByte v9.26.7 e7254dcc): the question the main window asks before closing while a two-step action is
+     *  in flight: the bundled node stops with the wallet and the main transaction is built only by a running node.
+     *  "" when nothing is pending. Pure. */
+    static QString closeWarning(const QStringList& pendingTypes);
+    QString closeWarning() const { return closeWarning(pendingTypes); }
     void refreshSelection();                      // v3: public so the Mint page's retry can re-query it
     void getTxInfo(const QString& txid, OkFn ok, ErrFn err);
     void getVault(const QString& txid, OkFn ok, ErrFn err);
@@ -399,6 +432,12 @@ public:
     // What the node's refusal means to the user, keyed on the identifier that begins the message
     // (§4.5 error table); empty when the wallet has nothing to add to the verbatim message.
     static QString explainError(const QString& errorMessage);
+    /** W6 (DigiByte v9.26.7 65744b63): the same for the action that was refused (the method: yed_mint, yed_send,
+     *  yed_redeem, yed_claim, ...): insufficient-yec says what that action needs YEC for. Pure. */
+    static QString explainErrorFor(const QString& errorMessage, const QString& action);
+    /** W3: the ordinary Transactions tab's annotation of every Yellowback transaction (and carrier) by txid. */
+    const QHash<QString, YellowbackTxAnnotation>& stockAnnotations() const { return annotations; }
+    static QHash<QString, YellowbackTxAnnotation> stockAnnotationsFor(const QList<YellowbackTx>& txs);
     // change-floor: the two workable amounts the message names (§4.6), "send exactly `all` or at
     // most `atMost`"; false when the message carries no amounts (then only the text is shown).
     static bool parseChangeFloor(const QString& errorMessage, qint64* allCents, qint64* atMostCents);
@@ -491,7 +530,10 @@ private:
     QMap<QString, YellowbackClaimOutcome> outcomes;   // by claim txid
     qint64  confirmed   = 0;
     qint64  unconfirmed = 0;
+    qint64  spendable   = -1;      // yed_getbalance.spendableCents; -1 on a node that does not report it
     int     pendingPollMs = 5000;
+    QStringList pendingTypes;      // W7: the two-step actions in flight
+    QHash<QString, YellowbackTxAnnotation> annotations;   // W3
 };
 
 #endif // YELLOWBACKCONTROLLER_H

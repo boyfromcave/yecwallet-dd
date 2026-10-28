@@ -138,9 +138,16 @@ def main():
     elif int(m.group(1)) != contract.get("rpcversion"):
         findings.append("RPC_VERSION %s != contract rpcversion %s" % (m.group(1), contract.get("rpcversion")))
 
-    for method in RE_METHOD.findall(header_text):
-        if method not in contract:
-            findings.append("method %s is not a command in the contract" % method)
+    # A method marked `// optional` is one a node newer than this contract copy adds: it may be absent
+    optional_methods = set()
+    for line in lines:
+        mm = RE_METHOD.search(line)
+        if not mm:
+            continue
+        if re.search(r"//\s*optional\b", line):
+            optional_methods.add(mm.group(1))
+        elif mm.group(1) not in contract:
+            findings.append("method %s is not a command in the contract" % mm.group(1))
 
     namespace = None      # (name, marker, json object or None)
     for lineno, line in enumerate(lines, 1):
@@ -150,8 +157,8 @@ def main():
             if marker == "optional":
                 # `// contract: optional yed_x.path`: an object the example omits; the command must exist
                 rest = line.split("optional", 1)[1].strip().split()
-                command = rest[0].split(".")[0] if rest else ""
-                if command not in contract:
+                command = rest[0].split(".")[0].replace("[]", "") if rest else ""
+                if command not in contract and command not in optional_methods:
                     findings.append("%s:%d namespace %s: optional object of unknown command %r" % (HEADER, lineno, name, command))
                 namespace = (name, marker, None)
                 continue

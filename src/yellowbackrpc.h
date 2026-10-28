@@ -21,6 +21,10 @@
 // must be listed under `errors`; and RPC_VERSION must equal the file's `rpcversion`. A constant
 // marked `// optional` is a field the contract marks optional and its example omits, and a
 // namespace marked `// contract: optional <command>.<path>` holds the keys of such an object.
+// `// optional` also marks what a node newer than this contract copy adds: the wallet reads each
+// one when present and degrades to its earlier behaviour when an older node omits it. A method
+// constant marked `// optional` may be absent from the contract (the checker skips it, and accepts
+// an optional namespace of it).
 //
 // The vault primitive's own RPCs (set_*, vault_*) are in vaultrpc.h: they are the primitive's
 // contract (ycash-dd/doc/vault-rpc.md), not Yellowback's.
@@ -70,6 +74,8 @@ constexpr const char* CLAIM               = "yed_claim";
 constexpr const char* LISTPOSITIONS       = "yed_listpositions";
 constexpr const char* LISTTRANSACTIONS    = "yed_listtransactions";
 constexpr const char* ESTIMATEREDEEM      = "yed_estimateredeem";    // rpcversion 6 (IT-9): the redeem quote the dialog shows first
+constexpr const char* ESTIMATESEND        = "yed_estimatesend";      // H3: the dry run of yed_send the Send page runs before its confirmation
+constexpr const char* LISTADDRESSES       = "yed_listaddresses";     // [includeEmpty] the wallet's YED addresses with node-held labels
 // v3 (plan §4.8, A5-b): the two-step notice, the carrier sweep and the attestor actions
 constexpr const char* CLAIMNOTICE         = "yed_claimnotice";        // step 1 of the emergency claim (NOT-1)
 constexpr const char* SWEEPCARRIERS       = "yed_sweepcarriers";      // reclaim lapsed carriers (W7)
@@ -326,6 +332,7 @@ namespace Balance {   // contract: yed_getbalance
     constexpr const char* CONFIRMED_CENTS   = "confirmedCents";
     constexpr const char* UNCONFIRMED_CENTS = "unconfirmedCents";
     constexpr const char* HEIGHT            = "height";
+    constexpr const char* SPENDABLE_CENTS   = "spendableCents";   // confirmed YED not spent by the wallet's own unconfirmed transactions
 }
 
 // ── yed_getvault result / yed_listpositions element ────────────────────────────────────────
@@ -369,6 +376,8 @@ namespace Position {   // contract: yed_listpositions[]
     constexpr const char* EMERGENCY_OPEN_AT = "emergencyOpenAt"; // v3: first refHeight a clause-(b) claim may cite; null unless noticed
     constexpr const char* CAN_NOTICE        = "canNotice";     // v3, listpositions only
     constexpr const char* EARLY_REDEEM_FEE_ZAT = "earlyRedeemFeeZat"; // rpcversion 6 (IT-9), listpositions only: what a redeem now would pay on top of FEE-1
+    constexpr const char* SPEND_PENDING     = "spendPending";  // a transaction spending the vault waits in the mempool
+    constexpr const char* SPEND_TXID        = "spendTxid";     // optional: that transaction's txid; "" or absent otherwise
 
     constexpr const char* STATUS_ACTIVE     = "ACTIVE";        // value
     constexpr const char* STATUS_VOID       = "VOID";          // value
@@ -457,6 +466,15 @@ namespace Transaction {   // contract: yed_listtransactions[]
     constexpr const char* PAYEE             = "payee";         // null where there is no fee output
     constexpr const char* UNBACKED          = "unbacked";
     constexpr const char* EXPIRED           = "expired";
+    constexpr const char* TIME              = "time";          // the block time (Unix seconds, UTC); null or absent while unconfirmed
+    constexpr const char* CARRIER_TXID      = "carrierTxid";   // plan A6: the carrier of a two-step action
+    constexpr const char* MAIN_TXID         = "mainTxid";      // plan A6: the main transaction the carrier led to
+    constexpr const char* CARRIER_OUTCOME   = "carrierOutcome"; // pending | completed | lapsed | swept
+
+    constexpr const char* CARRIER_PENDING   = "pending";       // value
+    constexpr const char* CARRIER_COMPLETED = "completed";     // value
+    constexpr const char* CARRIER_LAPSED    = "lapsed";        // value
+    constexpr const char* CARRIER_SWEPT     = "swept";         // value
 
     constexpr const char* TYPE_MINT         = "mint";          // value
     constexpr const char* TYPE_SEND         = "send";          // value
@@ -501,6 +519,37 @@ namespace Estimate {   // contract: yed_estimatecollateral
 
     constexpr const char* SOURCE_X          = "x";             // value
     constexpr const char* SOURCE_A          = "a";             // value
+    constexpr const char* MINT_BLOCKED      = "mintBlocked";   // MINTPOL-1 would refuse yed_mint now
+    constexpr const char* MINT_BLOCKED_REASON = "mintBlockedReason"; // the identifier yed_mint would throw, "" when not blocked
+}
+
+// ── yed_estimatesend result (H3: the dry run of yed_send) ─────────────────────────────────
+namespace EstimateSend {   // contract: yed_estimatesend
+    constexpr const char* AMOUNT_CENTS      = "amountCents";
+    constexpr const char* WORKABLE          = "workable";
+    constexpr const char* STAGE             = "stage";
+    constexpr const char* INPUTS            = "inputs";
+    constexpr const char* SELECTED_CENTS    = "selectedCents";
+    constexpr const char* CHANGE_CENTS      = "changeCents";
+    constexpr const char* SPENDABLE_CENTS   = "spendableCents";   // confirmed, unspent YED
+    constexpr const char* ERROR             = "error";            // change-floor | insufficient-yed | "" when workable
+    constexpr const char* ALTERNATIVES      = "alternatives";     // null when workable
+    constexpr const char* NETWORK_FEE_ZAT   = "networkFeeZat";    // the YEC network fee of the transfer
+}
+
+// yed_estimatesend.alternatives: the nearest workable amounts (null in the example, which is workable).
+namespace EstimateSendAlternatives {   // contract: optional yed_estimatesend.alternatives
+    constexpr const char* BELOW             = "below";            // null when there is none
+    constexpr const char* ABOVE             = "above";            // null when there is none
+}
+
+// ── yed_listaddresses element ──
+namespace AddressRow {   // contract: yed_listaddresses[]
+    constexpr const char* ADDRESS           = "address";
+    constexpr const char* LABEL             = "label";            // the label wallet.dat holds ("" when none)
+    constexpr const char* CONFIRMED_CENTS   = "confirmedCents";
+    constexpr const char* TX_COUNT          = "txCount";
+    constexpr const char* LAST_USED         = "lastUsed";         // Unix seconds (a height on a node that reports one); null when never used
 }
 
 // ── v3: yed_getprice result (the snapshot at a height; the Overview's two source prices) ──
@@ -861,6 +910,9 @@ namespace Errors {   // contract: errors
     constexpr const char* CANCEL_STATEMENT_CLAIMABLE = "cancel-statement-claimable";
     constexpr const char* PRICE_REQUIRED        = "price-required";
     constexpr const char* CLAIM_UNCONFIRMED     = "claim-unconfirmed";
+    // The DigiByte v9.26.7 review's node follow-ups
+    constexpr const char* VAULT_SPEND_PENDING   = "vault-spend-pending";   // yed_redeem / yed_claim / yed_estimateredeem while a spend of the vault is in the mempool
+    constexpr const char* TOO_MANY_COINS        = "too-many-coins";        // the YEC inputs would exceed the transaction size limit
 }
 
 // Wallet-side error matching that is not part of the yed_* contract (JSON-RPC and ycashd).

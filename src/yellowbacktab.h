@@ -15,6 +15,7 @@ struct YellowbackClaimable;
 struct YellowbackAttestor;
 struct YellowbackPendingClaim;
 struct YellowbackClaimOutcome;
+struct YellowbackAddress;
 
 namespace Ui {
     class YellowbackTab;
@@ -162,6 +163,23 @@ public:
     static bool writePrivateFile(const QString& path, const QByteArray& bytes, QString* error);   // 0600 before the first byte
     QString subscriberConfigPath() const { return subscriberConfPath; }
 
+    // W4 (DigiByte v9.26.7 ea78ad18, 3f09a4a9, b00d185e): the Transactions page's CSV export (plain-decimal dollars,
+    // ISO-8601 UTC dates, a txid column); the button asks for the file, this writes it. False when it could not.
+    bool exportTransactionsCsv(const QString& path, QString* error = nullptr) const;
+    static QString defaultCsvName();                       // "yellowback-transactions-yyyyMMdd.csv"
+    // W5 (DigiByte v9.26.7 943bf9e9, 5e0f27ec, ba84ed96): take the tab's colours from the theme. `themeName` is
+    // YecWallet's theme ("dark", "matrix", "light", "blue", "default"); "" reads it from Settings. The main window
+    // calls it when the theme changes; a palette change (the platform's dark mode) re-applies it.
+    void applyTheme(const QString& themeName = QString());
+    // W8 (DigiByte v9.26.7 5539554c, b3cb2482): the Receive page's past addresses, with the labels the node keeps
+    // in wallet.dat (yed_listaddresses), or the client address book's on an older node.
+    void refreshPastAddresses();
+    QList<YellowbackAddress> pastAddresses() const;
+
+protected:
+    void changeEvent(QEvent* event) override;
+public:
+
 private:
     void setupPages();
     void setupOverview();
@@ -180,6 +198,9 @@ private:
     void updateOverview();
     void updateBalances();
     void updateMintGate();
+    void updateYecAvailable();            // W6: the Mint page's "YEC available", confirmed coins only
+    void confirmSend(const QString& addr, qint64 cents, const nlohmann::json& estimate);   // W1: after yed_estimatesend
+    void showPastAddresses(const QList<YellowbackAddress>& rows, bool fromNode);
     void applyMintableClasses();          // W16: grey out the classes yed_getstats says cannot mint now
     int  mintedStatusHeight = -1;
     YellowbackPositionsFilter* positionsFilter = nullptr;   // the Positions table's status filter (default: open vaults)
@@ -275,7 +296,13 @@ private:
     qint64   estimateCents    = 0;      // the amount the last estimate was for
     int      estimateLockBlocks = -1;
     qint64   estimateZat      = -1;     // last estimate; -1 = none
+    bool     estimateBlocked  = false;  // the last estimate's mintBlocked (a newer node)
     QString  receiveAddress;
+    bool     applyingTheme    = false;
+    QTableWidget* tblPastAddresses = nullptr;   // W8, built in code
+    QLabel*       lblPastAddresses = nullptr;
+    QList<YellowbackAddress>* pastRows = nullptr;
+    QSortFilterProxyModel*    txSort   = nullptr;   // W4: the Transactions page sorts by the model's SortRole
 };
 
 #endif // YELLOWBACKTAB_H
