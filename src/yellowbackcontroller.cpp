@@ -1125,15 +1125,15 @@ QString YellowbackController::mintBlocker(qint64 cents, const QString& termClass
 // ── Typed calls ───────────────────────────────────────────────────────────────────────────
 
 // rpcversion 7: the holder type is named explicitly (receiveAddressTypeFor), never "pqowner" (C-10)
-void YellowbackController::getNewAddress(OkFn ok, ErrFn err, const QString& label) {
+void YellowbackController::getNewAddress(OkFn ok, ErrFn onError, const QString& label) {
     const std::string type = receiveAddressTypeFor(paramsJson).toStdString();
-    if (label.isEmpty()) { call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, err); return; }
+    if (label.isEmpty()) { call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, onError); return; }
     // W8 (DigiByte v9.26.7 5539554c): the label is kept in wallet.dat by a node that takes it; one from before
     // refuses the extra argument, and the address is created without it (the client address book keeps the label)
     call(YellowbackRpc::GETNEWADDRESS, json::array({type, label.toStdString()}), ok,
         [=, this](const QString& e) {
-            if (isIndexUnhealthy(e)) { if (err) err(e); return; }
-            call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, err);
+            if (isIndexUnhealthy(e)) { if (onError) onError(e); return; }
+            call(YellowbackRpc::GETNEWADDRESS, json::array({type}), ok, onError);
         });
 }
 
