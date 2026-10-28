@@ -2648,6 +2648,14 @@ private slots:
     void receiveListsPastAddresses() {
         const QString a1 = "yrPastAddressOne" % QString(19, QChar('1')), a2 = "yrPastAddressTwo" % QString(19, QChar('1'));   // 35 characters
         QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("regtest", a2));
+        // the address book holds YED receive addresses as well as Ycash ones (its Debug assertion used to
+        // know only Ycash addresses and aborted on the Receive page's Save label)
+        QVERIFY(AddressBook::isBookAddress(a2));
+        QVERIFY(AddressBook::isBookAddress(RECIPIENT));
+        QVERIFY(AddressBook::isBookAddress("yb" % QString(51, QChar('2'))));          // a 53-character PQ YED address
+        QVERIFY(AddressBook::isBookAddress("s1NotAYellowbackAddress111111111111"));     // a Ycash transparent address
+        QVERIFY(!AddressBook::isBookAddress("yrTooShort"));
+        QVERIFY(!AddressBook::isBookAddress(QString()));
         {
             Harness h;
             h.rpc.results[YellowbackRpc::LISTADDRESSES] = json::array({

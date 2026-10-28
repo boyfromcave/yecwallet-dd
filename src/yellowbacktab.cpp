@@ -569,6 +569,7 @@ void YellowbackTab::setupReceive() {
     });
     QObject::connect(uiReceive->btnSaveLabel, &QPushButton::clicked, [=, this]() {
         if (receiveAddress.isEmpty()) return;
+        if (!AddressBook::isBookAddress(receiveAddress)) { uiReceive->lblReceiveStatus->setText(tr("Not saved: %1 is not an address the address book can hold.").arg(receiveAddress)); return; }
         AddressBook::getInstance()->addAddressLabel(uiReceive->txtLabel->text().trimmed(), receiveAddress);
         uiReceive->lblReceiveStatus->setText(tr("Label saved."));
         refreshPastAddresses();
@@ -664,7 +665,7 @@ void YellowbackTab::newReceiveAddress() {
                     .arg(ctl->network()).arg(ctl->addressPrefix()) %
                     (ctl->isPqYellowbackAddress(addr) ? " " % tr("It is a post-quantum (Falcon) address.") : QString()));
                 // W8: the label also goes to the client address book, the one an older node's wallet has
-                if (!label.isEmpty()) AddressBook::getInstance()->addAddressLabel(label, addr);
+                if (!label.isEmpty() && AddressBook::isBookAddress(addr)) AddressBook::getInstance()->addAddressLabel(label, addr);
                 refreshPastAddresses();
             };
             if (!ctl->isPqYellowbackAddress(addr)) { show(); return; }
