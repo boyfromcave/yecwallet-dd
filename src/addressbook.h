@@ -38,6 +38,11 @@ public:
     static QString addLabelToAddress(QString addr);
     static QString addressFromAddressLabel(const QString& lblAddr);
 
+    // What the address book holds: a Ycash address (Settings::isValidAddress), a plain-YEC post-quantum
+    // address (sq.../tq.../rq..., Settings::isPQTAddress) or a Yellowback YED address (yb.../yt.../yr...,
+    // 35 or 53 characters: the Yellowback tab's Receive labels). Anything else is a caller's bug.
+    static bool isBookAddress(const QString& address);
+
     // Add a new address/label to the database
     void addAddressLabel(QString label, QString address);
 
