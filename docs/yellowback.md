@@ -153,9 +153,20 @@ sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()
 spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
 the height-based copy (the QTest's `infoLegacy()` cases).
 
+**rpcversion 9: scheme-visible post-quantum prefixes (decision D-9; the workspace's
+`docs/plans/yellowback-pq-prefix-rpc-delta.md` §4.12 and quantum spec §4.1).** The wallet requires `rpcversion` 9
+(`YellowbackRpc::RPC_VERSION`). A post-quantum address is Base58Check of a 3-byte version per network, coin and
+scheme and the 32-byte key hash (53 characters), so its third character names the scheme (`f` FN-DSA-512, `s`
+SLH-DSA-SHA2-128s): YED `ybf…`/`ybs…`, `ytf…`/`yts…`, `yrf…`/`yrs…`; plain YEC `sqf…`/`sqs…`, `tqf…`/`tqs…`,
+`rqf…`/`rqs…`. `yed_getinfo.params.pqAddressVersion` and `params.pq.plainAddressVersion` are objects keyed by scheme
+(`{"1": hex, "2": hex}`); `YellowbackController::pqPrefixes` / `plainPqPrefixes` derive one three-character prefix
+from each (`prefixForVersion`), falling back to the compiled-in ones (`pqYedPrefixesOn`, `pqYecPrefixesOn`). The
+first filter before `yed_validateaddress` (and `Settings::isPQTAddress`) refuses the pre-D-9 53-character form
+(`yb5…`, `sq4…`); the node stays the authority.
+
 **rpcversion 8: the fee structure (branch `q/fees` of `upgrade/quantum-vaults`; the workspace's
 `docs/plans/yellowback-quantum-fees-spec.md` §1–§3 and `yellowback-quantum-fees-rpc-delta.md`, owner decisions
-D-Q-23..D-Q-26).** The wallet requires `rpcversion` 8 (`YellowbackRpc::RPC_VERSION`). What changed:
+D-Q-23..D-Q-26).** That line's wallet required `rpcversion` 8 (now 9, above). What changed:
 - **Protocol fee in dollars.** The fee to a quoting pool is dollars of the debt in marginal bands
   (`params.fees.protocol.bands`: 1.0 % to $1,000, 0.5 % to $10,000, 0.1 % above; `floorCents` $1), converted to
   YEC at the vault's stored mint price `pMint` and charged at the mint and again at the redeem (or claim).
@@ -194,7 +205,8 @@ arguments. The node signs everything; the wallet holds no PQ code. What changed 
   26-40 guard refused every PQ address before `yed_validateaddress` saw it. The mainnet prefix is `yb`
   (owner decision D-Q-21). The prefixes come from the node's own version bytes
   (`yed_getinfo.params.addressVersion`, `pqAddressVersion`, `pq.plainAddressVersion`;
-  `YellowbackController::prefixForVersion`), with the compiled-in `yb`/`yt`/`yr` and `sq`/`tq`/`rq` as the fallback.
+  `YellowbackController::prefixForVersion`), with the compiled-in `yb`/`yt`/`yr` and `sq`/`tq`/`rq` as the fallback
+  (since rpcversion 9 the post-quantum ones carry the scheme letter: see the rpcversion 9 section).
   Plain-YEC PQ addresses (`sq…` / `tq…` / `rq…`, 53 characters, D-Q-20) hold YEC, never YED: the Send page
   refuses them as Ycash addresses, and the stock wallet's helpers (`Settings::isTAddress`) do not take them.
 - **Receive** asks `yed_getnewaddress` for the holder type (`"p2pkh"` while `params.pq.falconActive` is

@@ -46,6 +46,7 @@
 #include <QSortFilterProxyModel>
 #include <QTimeZone>
 #include <QRegularExpression>
+#include <QCryptographicHash>
 
 using json = nlohmann::json;
 
@@ -53,7 +54,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 8, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 9, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
       "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
@@ -78,8 +79,8 @@ static json infoActive() {
                                       "floorZatPerKB": 5000, "fallbackZatPerKB": 100, "flatZat": 1000, "maxTxFeeZat": 10000000}},
                  "supplyCap": {"circulatingZat": 1656250000000, "issuedBeforeStartZat": 625000000000, "priceMicroUsd": 1990000,
                                "capCents": null, "maxVaultShareBps": 1000, "vaultShareFloorCents": 1000000, "maxVaultCents": null},
-                 "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100, "plainAddressVersion": "4c51"},
-                 "addressVersion": "2002", "pqAddressVersion": "5710",
+                 "pq": {"schemes": [1], "falconActive": false, "falconHeight": -1, "feeRateZatPerKB": 100, "plainAddressVersion": {"1": "4c5655", "2": "4c54ef"}},
+                 "addressVersion": "2002", "pqAddressVersion": {"1": "5715aa", "2": "571444"},
                  "windows": {"fast": 8, "mid": 24, "slow": 64},
                  "minFill": {"fast": 4, "mid": 16, "slow": 43},
                  "classes": [{"class": "A", "minBlocks": 48, "maxBlocks": 96, "baseRatioBps": 50000, "earlyRedeemFeeBps": 500},
@@ -124,7 +125,7 @@ static json positionActive() {
     return json::parse(R"({
       "txid": "6a1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8", "vout": 0, "status": "ACTIVE",
       "ownerScheme": 1, "ownerHash": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
-      "ownerAddress": "yr2Qe7xCExamplePQOwnerAddress111111111111111111111cND",
+      "ownerAddress": "yrs2Qe7xCExamplePQOwnerAddress11111111111111111111cND",
       "termClass": "A", "lockHeight": 380, "claimHeight": 404, "collateralZat": 25125628141, "collateral": 251.25628141,
       "mintedCents": 100000, "mintHeight": 332, "refHeight": 329, "feePaidZat": 502512563, "pMint": 1990000, "closeHeight": null,
       "closingTxid": "", "burnedCents": 0, "unbacked": false, "claimable": false, "underwaterAt": 437800,
@@ -704,24 +705,24 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsEight() {
-        // the fee structure (fees spec §3.4): params.fees, maxMintCents, supplyCap, vault.pMint,
-        // yed_estimatefee <mintedCents>; feeMinZat/feeBps and yed_getfeepayee's fee gone
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 8);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 8);
+    void contractVersionIsNine() {
+        // D-9: scheme-visible post-quantum prefixes; pqAddressVersion and pq.plainAddressVersion are
+        // objects keyed by scheme (the fee structure of 8 unchanged)
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 9);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 9);
     }
 
-    // The rpcversion 8 handshake: 8 is accepted, 7 (the flat collateral fee) and 9 are refused
-    // with both numbers named, and nothing is enabled until they match.
-    void handshakeAcceptsRpcVersionEightOnly() {
-        for (int v : { 7, 9 }) {
+    // The rpcversion 9 handshake: 9 is accepted, 8 (the pre-D-9 post-quantum address form) and 10 are
+    // refused with both numbers named, and nothing is enabled until they match.
+    void handshakeAcceptsRpcVersionNineOnly() {
+        for (int v : { 8, 10 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("version 8"));
+            QVERIFY(h.label("lblBanner").contains("version 9"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -868,7 +869,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("version 8"));
+        QVERIFY(h.label("lblBanner").contains("version 9"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -2652,7 +2653,7 @@ private slots:
         // know only Ycash addresses and aborted on the Receive page's Save label)
         QVERIFY(AddressBook::isBookAddress(a2));
         QVERIFY(AddressBook::isBookAddress(RECIPIENT));
-        QVERIFY(AddressBook::isBookAddress("yb" % QString(51, QChar('2'))));          // a 53-character PQ YED address
+        QVERIFY(AddressBook::isBookAddress("ybf" % QString(50, QChar('2'))));         // a 53-character PQ YED address (D-9)
         QVERIFY(AddressBook::isBookAddress("s1NotAYellowbackAddress111111111111"));     // a Ycash transparent address
         QVERIFY(!AddressBook::isBookAddress("yrTooShort"));
         QVERIFY(!AddressBook::isBookAddress(QString()));
@@ -2724,82 +2725,146 @@ private slots:
         for (const QString net : { "main", "test", "regtest" }) {
             const QString pre = YellowbackController::addressPrefixOn(net);
             QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 35)));
-            QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 53)));
-            QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, "  " + make(pre, 53) + " "));   // trimmed
+            for (const QString& pq : YellowbackController::pqYedPrefixesOn(net)) {
+                QVERIFY(pq.size() == 3 && pq.startsWith(pre) && (pq.endsWith('f') || pq.endsWith('s')));
+                QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, make(pq, 53)));
+                QVERIFY(YellowbackController::looksLikeYellowbackAddressOn(net, "  " + make(pq, 53) + " "));   // trimmed
+            }
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre + "5", 53)));   // the pre-D-9 form (D-9: refused)
             for (int bad : { 26, 34, 36, 40, 41, 52, 54, 60 })
                 QVERIFY2(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, bad)), qPrintable(QString("%1 length %2").arg(net).arg(bad)));
-            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 53)));   // plain-YEC PQ
-            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 52) + "l"));    // not Base58
-            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre, 52) + "0"));
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(YellowbackController::pqYecPrefixesOn(net).value(0), 53)));   // plain-YEC PQ
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre + "f", 52) + "l"));    // not Base58
+            QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn(net, make(pre + "f", 52) + "0"));
             // sq…/tq…/rq… are plain YEC, never YED, and the Send page refuses them as Ycash addresses
-            QVERIFY(YellowbackController::isPqYecAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 53)));
-            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(YellowbackController::pqYecPrefixOn(net), 35)));
-            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(pre, 53)));
+            for (const QString& pq : YellowbackController::pqYecPrefixesOn(net)) {
+                QVERIFY(YellowbackController::isPqYecAddressOn(net, make(pq, 53)));
+                QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(pq, 35)));
+            }
+            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(YellowbackController::pqYecPrefixOn(net) + "4", 53)));   // pre-D-9
+            QVERIFY(!YellowbackController::isPqYecAddressOn(net, make(pre + "f", 53)));
         }
         QCOMPARE(YellowbackController::addressPrefixOn("main"), QString("yb"));
         QCOMPARE(YellowbackController::addressPrefixOn("test"), QString("yt"));
         QCOMPARE(YellowbackController::addressPrefixOn("regtest"), QString("yr"));
         QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("main", make("ye", 53)));       // the Y-B sweep: "ye" is gone
-        // the prefix from the version bytes (quantum spec §4, D-Q-20, D-Q-21): the interval's lowest value
+        QCOMPARE(YellowbackController::pqYedPrefixesOn("main"), QStringList({"ybf", "ybs"}));
+        QCOMPARE(YellowbackController::pqYecPrefixesOn("regtest"), QStringList({"rqf", "rqs"}));
+        // the prefix from the version bytes (quantum spec §4, §4.1, D-Q-20, D-Q-21, D-9): the interval's lowest value;
+        // two characters for a 2-byte version, three for a 3-byte one (the twelve D-9 versions over a 32-byte key hash)
         const QList<std::tuple<QString, int, QString>> versions = {
-            {"1fdd", 20, "yb"}, {"56ab", 33, "yb"}, {"2007", 20, "yt"}, {"571e", 33, "yt"}, {"2002", 20, "yr"}, {"5710", 33, "yr"},
-            {"1fe4", 20, "ye"}, {"56bf", 33, "ye"}, {"4dd9", 33, "sq"}, {"4f61", 33, "tq"}, {"4c51", 33, "rq"} };
+            {"1fdd", 20, "yb"}, {"2007", 20, "yt"}, {"2002", 20, "yr"}, {"1fe4", 20, "ye"},
+            {"56aede", 32, "ybf"}, {"56b044", 32, "ybs"}, {"5721c9", 32, "ytf"}, {"572330", 32, "yts"}, {"571444", 32, "yrf"}, {"5715aa", 32, "yrs"},
+            {"4ddd04", 32, "sqf"}, {"4dde6a", 32, "sqs"}, {"4f6519", 32, "tqf"}, {"4f667f", 32, "tqs"}, {"4c54ef", 32, "rqf"}, {"4c5655", 32, "rqs"} };
         for (const auto& [v, n, want] : versions)
             QVERIFY2(YellowbackController::prefixForVersion(v, n) == want, qPrintable(v % " -> " % YellowbackController::prefixForVersion(v, n)));
         QVERIFY(YellowbackController::prefixForVersion("", 20).isEmpty());
         QVERIFY(YellowbackController::prefixForVersion("1fd", 20).isEmpty());
         QVERIFY(YellowbackController::prefixForVersion("zz00", 20).isEmpty());
         QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("test", make("ye", 35)));
-        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("regtest", make("yt", 53)));
-        // the spec's own extreme PQ addresses (quantum spec §4) pass the mainnet filter
-        QVERIFY(YellowbackController::looksLikeYellowbackAddressWith("ye", "ye", "ye3SZot1kepFFNT7S9eGf61sufuSARvXG4VZQ4WqPqJKrosTayohv"));
-        QVERIFY(YellowbackController::looksLikeYellowbackAddressWith("ye", "ye", "yeC2CP3NepyAPLy8ChifYtByPvLdpGLnzDwBXcyBVKn5a6CXWeucQ"));
+        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("regtest", make("ytf", 53)));
+        // the node's shared D-9 vectors (src/test/data/pq_address_vectors.json): the extremes pass the mainnet filter,
+        // and the pre-D-9 form of the same key does not
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "ybf2PMJN6mP845b1PKcFGNoTjMpLnf8EygfruSxCVVqzF7o7HCZKM"));
+        QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "ybs4EbdcEEJrrNzX1X4M66DayNaHsTW3W3AKL6XySKiEeLxDJpH4S"));
+        QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("main", "yb5u8LCGfU3hYYhhAqvYzR3ZQuNFEUWzx5dmLiGjPW8Gqto3xqqCc"));
         // the stock wallet's helpers never take a PQ address for one of theirs
-        for (const QString& a : { make("yr", 53), make("rq", 53), make("sq", 53), make("yb", 53) }) {
+        for (const QString& a : { make("yrf", 53), make("rqs", 53), make("sqf", 53), make("ybs", 53) }) {
             QVERIFY(!Settings::isTAddress(a));
             QVERIFY(!Settings::isZAddress(a));
             QVERIFY(!Settings::isValidAddress(a));
         }
         // ...and recognise a plain-YEC PQ coin (D-Q-20; the devnet's residual paid to rq…) for display only
-        QVERIFY(Settings::isPQTAddress("rq5Lc4rKBUJdgNAmbqFrZKuakMWGjrsQVq3Fn1B4zpGUzd7b1jvvq"));
-        for (const QString& a : { make("sq", 53), make("tq", 53), make("rq", 53) }) QVERIFY(Settings::isPQTAddress(a));
-        for (const QString& a : { make("yr", 53), make("rq", 52), make("rq", 54), QString("smQhW9Jkt9ga962FSNVWWdGcsXjzu4sSCYD"), make("rq", 52) + "0" })
+        QVERIFY(Settings::isPQTAddress("rqs453qxBF36FCu5fMdq9iVHY25HYqrsBUjqEZTDkkwEN1jMu8gmf"));
+        for (const QString& a : { make("sqf", 53), make("sqs", 53), make("tqf", 53), make("tqs", 53), make("rqf", 53), make("rqs", 53) }) QVERIFY(Settings::isPQTAddress(a));
+        for (const QString& a : { make("yrf", 53), make("rqf", 52), make("rqf", 54), QString("smQhW9Jkt9ga962FSNVWWdGcsXjzu4sSCYD"), make("rqf", 52) + "0",
+                                  QString("rq5Lc4rKBUJdgNAmbqFrZKuakMWGjrsQVq3Fn1B4zpGUzd7b1jvvq") })   // the last: the pre-D-9 form
             QVERIFY2(!Settings::isPQTAddress(a), qPrintable(a));
         Harness h;
         h.feedActive();
         QCOMPARE(h.ctl.p2pkhPrefix(), QString("yr"));
-        QCOMPARE(h.ctl.pqPrefix(), QString("yr"));
+        QCOMPARE(h.ctl.pqPrefixes(), QStringList({"yrs", "yrf"}));       // reported, in scheme order "1", "2"
+        QCOMPARE(h.ctl.plainPqPrefixes(), QStringList({"rqs", "rqf"}));
         QCOMPARE(h.ctl.plainPqPrefix(), QString("rq"));
         {   // a node reporting the mainnet versions on regtest data: the reported bytes win over the network name
             Harness m;
-            json info = infoActive(); info["params"]["addressVersion"] = "1fdd"; info["params"]["pqAddressVersion"] = "56ab";
-            info["params"]["pq"]["plainAddressVersion"] = "4dd9";
+            json info = infoActive(); info["params"]["addressVersion"] = "1fdd";
+            info["params"]["pqAddressVersion"] = json{{"1", "56b044"}, {"2", "56aede"}};
+            info["params"]["pq"]["plainAddressVersion"] = json{{"1", "4dde6a"}, {"2", "4ddd04"}};
             m.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json(nullptr), json(nullptr), json(nullptr));
             QCOMPARE(m.ctl.addressPrefix(), QString("yb"));
-            QVERIFY(m.ctl.looksLikeYellowbackAddress(make("yb", 35)) && m.ctl.looksLikeYellowbackAddress(make("yb", 53)));
-            QVERIFY(!m.ctl.looksLikeYellowbackAddress(make("yr", 35)));
-            QVERIFY(m.ctl.isPqYecAddress(make("sq", 53)) && !m.ctl.isPqYecAddress(make("rq", 53)));
+            QVERIFY(m.ctl.looksLikeYellowbackAddress(make("yb", 35)) && m.ctl.looksLikeYellowbackAddress(make("ybf", 53)));
+            QVERIFY(!m.ctl.looksLikeYellowbackAddress(make("yr", 35)) && !m.ctl.looksLikeYellowbackAddress(make("yb5", 53)));
+            QVERIFY(m.ctl.isPqYecAddress(make("sqs", 53)) && !m.ctl.isPqYecAddress(make("rqs", 53)));
         }
-        QVERIFY(h.ctl.isPqYellowbackAddress(make("yr", 53)));
+        {   // a node with the pre-D-9 string versions: not 3-byte versions, so the compiled-in D-9 prefixes apply
+            Harness o;
+            json info = infoActive(); info["params"]["pqAddressVersion"] = "5710"; info["params"]["pq"]["plainAddressVersion"] = "4c51";
+            o.ctl.feed(info, statsOpen(), activationActive(), balanceReply(500000), json(nullptr), json(nullptr), json(nullptr));
+            QCOMPARE(o.ctl.pqPrefixes(), QStringList({"yrf", "yrs"}));
+            QVERIFY(!o.ctl.looksLikeYellowbackAddress(make("yr2", 53)));
+        }
+        QVERIFY(h.ctl.isPqYellowbackAddress(make("yrf", 53)));
         QVERIFY(!h.ctl.isPqYellowbackAddress(RECIPIENT));
-        QVERIFY(h.ctl.isShieldedAddress(make("rq", 53)));
-        h.sendTo(make("rq", 53), "123");
+        QVERIFY(h.ctl.isShieldedAddress(make("rqf", 53)));
+        h.sendTo(make("rqf", 53), "123");
         h.tab.doSend();
         QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 0);
         QVERIFY(h.label("lblSendHint").contains("Ycash address"));
         // a 53-character PQ address reaches the node's yed_validateaddress (the 26-40 guard refused it)
-        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", make("yr", 53).toStdString()}, {"type", "pq"}, {"pqscheme", 2}, {"ismine", false}};
+        h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", make("yrf", 53).toStdString()}, {"type", "pq"}, {"pqscheme", 2}, {"ismine", false}};
         h.rpc.results[YellowbackRpc::SEND] = json{{"txid", "5e1d"}, {"changeCents", 0}, {"expiryHeight", 351}};
-        h.sendTo(make("yr", 53), "123");
+        h.sendTo(make("yrf", 53), "123");
         h.tab.doSend();
         QCOMPARE(h.rpc.count(YellowbackRpc::VALIDATEADDRESS), 1);
         QCOMPARE(h.rpc.count(YellowbackRpc::SEND), 1);
-        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SEND), json::array({make("yr", 53).toStdString(), 12300}));
+        QCOMPARE(h.rpc.lastParams(YellowbackRpc::SEND), json::array({make("yrf", 53).toStdString(), 12300}));
+    }
+
+    // D-9: the node lines' shared post-quantum address vectors (tests/data/pq_address_vectors.json, a byte-identical copy of
+    // ycash-dd / ycash6 src/test/data/pq_address_vectors.json; sha256 pinned). The wallet only filters by length,
+    // prefix and alphabet before yed_validateaddress, the authority: every valid vector passes its own network's
+    // filter (YED or plain YEC) and no other network's; the pre-D-9 form, truncated and extended strings are refused;
+    // a bad checksum or an unknown version under a valid-looking prefix is left to the node.
+    void sharedPqAddressVectors() {
+        QFile f(QFINDTESTDATA("data/pq_address_vectors.json"));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray raw = f.readAll();
+        QCOMPARE(QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex(),
+                 QByteArray("dbbd1da05d995d659e1e9f8a671197e141c272998722d6cca85cdbdb52b61797"));
+        const json v = json::parse(raw.toStdString());
+        QCOMPARE(QString::fromStdString(v["format"].get<std::string>()), QString("ycash-pq-address-vectors-1"));
+        QCOMPARE((int)v["valid"].size(), 72);
+        QCOMPARE((int)v["invalid"].size(), 60);
+        const QStringList nets = { "main", "test", "regtest" };
+        for (const auto& c : v["valid"]) {
+            const QString a = QString::fromStdString(c["address"].get<std::string>());
+            const QString net = QString::fromStdString(c["network"].get<std::string>());
+            const bool yed = c["coin"].get<std::string>() == "yed";
+            const QString prefix = (yed ? YellowbackController::pqYedPrefixesOn(net) : YellowbackController::pqYecPrefixesOn(net))
+                                       .value(c["scheme"].get<int>() == 2 ? 0 : 1);
+            QVERIFY2(a.startsWith(prefix), qPrintable(a % " / " % prefix));
+            QVERIFY2(YellowbackController::prefixForVersion(QString::fromStdString(c["version"].get<std::string>()), 32) == prefix, qPrintable(a));
+            for (const QString& n : nets) {
+                QCOMPARE(YellowbackController::looksLikeYellowbackAddressOn(n, a), yed && n == net);
+                QCOMPARE(YellowbackController::isPqYecAddressOn(n, a), !yed && n == net);
+            }
+            QCOMPARE(Settings::isPQTAddress(a), !yed);
+        }
+        for (const auto& c : v["invalid"]) {
+            const QString a = QString::fromStdString(c["address"].get<std::string>());
+            const std::string reason = c["reason"].get<std::string>();
+            if (reason == "bad-checksum" || reason == "unknown-version") continue;   // the node's to refuse
+            for (const QString& n : nets)
+                QVERIFY2(!YellowbackController::looksLikeYellowbackAddressOn(n, a) && !YellowbackController::isPqYecAddressOn(n, a),
+                         qPrintable(a % " (" % QString::fromStdString(reason) % ") on " % n));
+            QVERIFY2(!Settings::isPQTAddress(a), qPrintable(a));
+        }
     }
 
     // C-10: a vault owner's SLH-DSA address is never a YED recipient; TOK-PQ: after Falcon no P2PKH holder
     void sendRefusesOwnerAddressAndOldHolderAfterFalcon() {
-        const std::string owner = "yr2Qe7xCExamp1ePQwnerAddress1111111111111111111111cND";
+        const std::string owner = "yrs2Qe7xCExamp1ePQwnerAddress111111111111111111111cND";
         Harness h;
         h.feedActive();
         h.rpc.results[YellowbackRpc::VALIDATEADDRESS] = json{{"isvalid", true}, {"address", owner}, {"type", "pq"}, {"pqscheme", 1}, {"ismine", true}};
@@ -2834,7 +2899,7 @@ private slots:
     // Receive asks for the holder type explicitly (p2pkh before Falcon, pq after) and never shows an
     // SLH-DSA (owner) address, even when the node returns one
     void receiveAsksHolderTypeAndNeverShowsOwnerKey() {
-        const std::string falconAddr = "yr9Fa1conHo1derAddress1111111111111111111111111111AB";
+        const std::string falconAddr = "yrf9Fa1conHo1derAddress111111111111111111111111111AB";
         {
             Harness h;
             h.feedActive();

@@ -730,17 +730,23 @@ QString YellowbackController::addressPrefix() const {
     return p2pkhPrefix();
 }
 
-// D-Q-21 (owner, 2026-10-10): the mainnet YED prefix on the post-quantum line is "yb" (20-byte 0x1FDD,
-// PQ 0x56AB); testnet "yt" and regtest "yr" are unchanged. The fallback when the node reports no version.
+// D-Q-21 (2026-10-10): the mainnet YED prefix on the post-quantum line is "yb" (20-byte 0x1FDD); testnet
+// "yt" and regtest "yr" are unchanged. D-9: a PQ YED address adds the scheme letter (ybf/ybs, 3-byte versions
+// 0x56AEDE / 0x56B044; pqYedPrefixesOn). The fallback when the node reports no version.
 QString YellowbackController::addressPrefixOn(const QString& network) {
     if (network == "test")    return "yt";
     if (network == "regtest") return "yr";
     return "yb";
 }
 
+QStringList YellowbackController::pqYedPrefixesOn(const QString& network) {
+    const QString p = addressPrefixOn(network);
+    return { p + "f", p + "s" };
+}
+
 QString YellowbackController::prefixForVersion(const QString& versionHex, int payloadBytes) {
-    static const QRegularExpression hex4("^[0-9a-fA-F]{4}$");
-    if (!hex4.match(versionHex).hasMatch() || payloadBytes <= 0) return QString();
+    static const QRegularExpression hex46("^([0-9a-fA-F]{4}|[0-9a-fA-F]{6})$");
+    if (!hex46.match(versionHex).hasMatch() || payloadBytes <= 0) return QString();
     // Base58 of version || zero payload || zero checksum: the lowest value of the version's interval
     QByteArray num = QByteArray::fromHex(versionHex.toLatin1());
     num.append(QByteArray(payloadBytes + 4, '\0'));
@@ -757,7 +763,7 @@ QString YellowbackController::prefixForVersion(const QString& versionHex, int pa
         out.prepend(QChar(alphabet[rem]));
         num = quot;
     }
-    return out.left(2);
+    return out.left(versionHex.size() / 2);
 }
 
 static QString reportedPrefix(const json& obj, const char* key, int payloadBytes, const QString& fallback) {
@@ -765,37 +771,62 @@ static QString reportedPrefix(const json& obj, const char* key, int payloadBytes
     return p.isEmpty() ? fallback : p;
 }
 
+// rpcversion 9 (D-9): a PQ version is an object {"1": hex, "2": hex}, one 3-byte version per scheme over a
+// 32-byte key hash. The prefixes of every well-formed entry, else the compiled-in ones.
+static QStringList reportedPqPrefixes(const json& obj, const char* key, const QStringList& fallback) {
+    QStringList out;
+    const auto f = obj.is_object() ? obj.find(key) : obj.end();
+    if (f != obj.end() && f->is_object()) {
+        for (auto it = f->begin(); it != f->end(); ++it) {
+            const QString hex = it->is_string() ? QString::fromStdString(it->get<std::string>()) : QString();
+            const QString p = hex.size() == 6 ? YellowbackController::prefixForVersion(hex, 32) : QString();
+            if (!p.isEmpty()) out << p;
+        }
+    }
+    return out.isEmpty() ? fallback : out;
+}
+
 QString YellowbackController::p2pkhPrefix() const {
     return reportedPrefix(paramsJson, YellowbackRpc::Params::ADDRESS_VERSION, 20, addressPrefixOn(net));
 }
 
-QString YellowbackController::pqPrefix() const {
-    return reportedPrefix(paramsJson, YellowbackRpc::Params::PQ_ADDRESS_VERSION, 33, addressPrefixOn(net));
+QStringList YellowbackController::pqPrefixes() const {
+    return reportedPqPrefixes(paramsJson, YellowbackRpc::Params::PQ_ADDRESS_VERSION, pqYedPrefixesOn(net));
+}
+
+QStringList YellowbackController::plainPqPrefixes() const {
+    return reportedPqPrefixes(YellowbackJson::obj(paramsJson, YellowbackRpc::Params::PQ), YellowbackRpc::ParamsPq::PLAIN_ADDRESS_VERSION, pqYecPrefixesOn(net));
 }
 
 QString YellowbackController::plainPqPrefix() const {
-    return reportedPrefix(YellowbackJson::obj(paramsJson, YellowbackRpc::Params::PQ), YellowbackRpc::ParamsPq::PLAIN_ADDRESS_VERSION, 33, pqYecPrefixOn(net));
+    return plainPqPrefixes().value(0).left(2);
+}
+
+static bool startsWithAny(const QString& a, const QStringList& prefixes) {
+    for (const QString& p : prefixes) if (!p.isEmpty() && a.startsWith(p)) return true;
+    return false;
 }
 
 // A first filter before yed_validateaddress, which stays the authority. A Yellowback address is
-// Base58Check of a 2-byte version and either a 20-byte key id (35 characters, P2PKH) or, since
-// rpcversion 7, scheme || 32-byte key hash (53 characters, quantum spec §4). Every other length is
-// refused, so a 36-52 or 54+ character string never reaches the node.
-bool YellowbackController::looksLikeYellowbackAddressWith(const QString& p2pkh, const QString& pq, const QString& addr) {
+// Base58Check of a 2-byte version and a 20-byte key id (35 characters, P2PKH) or, since rpcversion 9
+// (D-9), of a 3-byte version per scheme and a 32-byte key hash (53 characters, quantum spec §4.1; the
+// third character names the scheme). Every other length is refused, so a 36-52 or 54+ character string
+// never reaches the node, and so is the pre-D-9 53-character form (yb5..., yr2...).
+bool YellowbackController::looksLikeYellowbackAddressWith(const QString& p2pkh, const QStringList& pq, const QString& addr) {
     QString a = addr.trimmed();
     if (a.length() == P2PKH_ADDRESS_LENGTH) { if (!a.startsWith(p2pkh)) return false; }
-    else if (a.length() == PQ_ADDRESS_LENGTH) { if (!a.startsWith(pq)) return false; }
+    else if (a.length() == PQ_ADDRESS_LENGTH) { if (!startsWithAny(a, pq)) return false; }
     else return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
 }
 
 bool YellowbackController::looksLikeYellowbackAddressOn(const QString& network, const QString& addr) {
-    return looksLikeYellowbackAddressWith(addressPrefixOn(network), addressPrefixOn(network), addr);
+    return looksLikeYellowbackAddressWith(addressPrefixOn(network), pqYedPrefixesOn(network), addr);
 }
 
 bool YellowbackController::looksLikeYellowbackAddress(const QString& addr) const {
-    return looksLikeYellowbackAddressWith(p2pkhPrefix(), pqPrefix(), addr);
+    return looksLikeYellowbackAddressWith(p2pkhPrefix(), pqPrefixes(), addr);
 }
 
 bool YellowbackController::isPqYellowbackAddress(const QString& addr) const {
@@ -803,25 +834,30 @@ bool YellowbackController::isPqYellowbackAddress(const QString& addr) const {
 }
 
 // D-Q-20: a plain-YEC post-quantum address (the node encodes it for its PQ coins, e.g. a vault owner's
-// residual): "sq" / "tq" / "rq", 53 characters. It holds YEC, never YED, and the node does not decode it
-// as a recipient or a funding source yet, so the wallet only displays it.
+// residual): "sqf"/"sqs", "tqf"/"tqs", "rqf"/"rqs" (D-9), 53 characters. It holds YEC, never YED, so the
+// Yellowback tab only displays it.
 QString YellowbackController::pqYecPrefixOn(const QString& network) {
     if (network == "test")    return "tq";
     if (network == "regtest") return "rq";
     return "sq";
 }
 
+QStringList YellowbackController::pqYecPrefixesOn(const QString& network) {
+    const QString p = pqYecPrefixOn(network);
+    return { p + "f", p + "s" };
+}
+
 bool YellowbackController::isPqYecAddressOn(const QString& network, const QString& addr) {
     QString a = addr.trimmed();
     if (a.length() != PQ_ADDRESS_LENGTH) return false;
-    if (!a.startsWith(pqYecPrefixOn(network))) return false;
+    if (!startsWithAny(a, pqYecPrefixesOn(network))) return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
 }
 
 bool YellowbackController::isPqYecAddress(const QString& addr) const {
     QString a = addr.trimmed();
-    if (a.length() != PQ_ADDRESS_LENGTH || !a.startsWith(plainPqPrefix())) return false;
+    if (a.length() != PQ_ADDRESS_LENGTH || !startsWithAny(a, plainPqPrefixes())) return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
 }
