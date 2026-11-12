@@ -51,7 +51,8 @@ application. The wallet adds a **Yellowback** tab; everything else is stock YecW
 A `ycashd` built from the `upgrade/quantum-vaults` branch of
 [ycash-dd](https://github.com/boyfromcave/ycash-dd) or [ycash6](https://github.com/boyfromcave/ycash6)
 (this line joins `upgrade/vault` at release). The wallet requires Yellowback RPC version
-(`rpcversion`) **8** exactly; with any other node the tab is disabled and names both numbers. A
+(`rpcversion`) **9** exactly (the scheme-visible post-quantum address prefixes, decision D-9: ycash-dd and
+ycash6 6.22.x from that change on); with any other node the tab is disabled and names both numbers. A
 stock `ycashd` has no Yellowback, and the tab says so. Nothing in `ycash.conf` turns Yellowback on.
 
 ### Build and test

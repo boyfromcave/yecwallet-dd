@@ -90,7 +90,8 @@ bool Settings::isZAddress(QString addr) {
 }
 
 bool Settings::isPQTAddress(QString addr) {
-    static const QRegularExpression pqt("^[str]q[1-9A-HJ-NP-Za-km-z]{51}$");
+    // D-9: the scheme in the prefix, sqf/sqs (main), tqf/tqs (test), rqf/rqs (regtest); the pre-D-9 sq5... form is refused
+    static const QRegularExpression pqt("^[str]q[fs][1-9A-HJ-NP-Za-km-z]{50}$");
     return pqt.match(addr).hasMatch();
 }
 

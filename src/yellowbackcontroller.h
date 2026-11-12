@@ -99,27 +99,35 @@ public:
     QString addressPrefix() const;                // yb | yt | yr (D-Q-21: mainnet "yb" on the post-quantum line)
     static QString addressPrefixOn(const QString& network);
     static constexpr int P2PKH_ADDRESS_LENGTH = 35;   // Base58Check(version:2 || keyId:20)
-    static constexpr int PQ_ADDRESS_LENGTH    = 53;   // rpcversion 7: Base58Check(version:2 || scheme:1 || keyHash:32)
+    static constexpr int PQ_ADDRESS_LENGTH    = 53;   // rpcversion 9 (D-9): Base58Check(version:3 || keyHash:32)
     /** 35 or 53 Base58 characters with the prefixes the node reports (else the network's compiled-in
-     *  one); yed_validateaddress stays the authority. */
+     *  ones); yed_validateaddress stays the authority. */
     bool    looksLikeYellowbackAddress(const QString& addr) const;
     static bool looksLikeYellowbackAddressOn(const QString& network, const QString& addr);
-    /** The same against explicit prefixes: 35 characters with `p2pkhPrefix` or 53 with `pqPrefix`. */
-    static bool looksLikeYellowbackAddressWith(const QString& p2pkhPrefix, const QString& pqPrefix, const QString& addr);
+    /** The same against explicit prefixes: 35 characters with `p2pkhPrefix` or 53 with one of `pqPrefixes`. */
+    static bool looksLikeYellowbackAddressWith(const QString& p2pkhPrefix, const QStringList& pqPrefixes, const QString& addr);
     bool    isPqYellowbackAddress(const QString& addr) const;   // a 53-character PQ YED address
-    /** D-Q-20: a plain-YEC post-quantum address (sq... / tq... / rq..., 53 characters); display only. */
+    /** D-Q-20: a plain-YEC post-quantum address (sqf/sqs... , tqf/tqs..., rqf/rqs..., 53 characters); display only. */
     bool    isPqYecAddress(const QString& addr) const;
     static bool isPqYecAddressOn(const QString& network, const QString& addr);
-    static QString pqYecPrefixOn(const QString& network);   // sq | tq | rq
-    /** The two leading characters every Base58Check string of `versionHex` (2 bytes) followed by
-     *  `payloadBytes` bytes and the 4-byte checksum starts with (the node chooses versions whose whole
-     *  interval shares one prefix and one length, quantum spec §4); "" for a malformed version. Pure. */
+    static QString pqYecPrefixOn(const QString& network);   // sq | tq | rq (the family, for messages)
+    /** D-9 (quantum spec §4.1): the compiled-in post-quantum prefixes of a network, the scheme in the third
+     *  character (f FN-DSA-512, s SLH-DSA-SHA2-128s): YED ybf/ybs, ytf/yts, yrf/yrs; plain YEC sqf/sqs,
+     *  tqf/tqs, rqf/rqs. */
+    static QStringList pqYedPrefixesOn(const QString& network);
+    static QStringList pqYecPrefixesOn(const QString& network);
+    /** The leading characters every Base58Check string of `versionHex` followed by `payloadBytes` bytes and
+     *  the 4-byte checksum starts with: two for a 2-byte version, three for a 3-byte one (the node chooses
+     *  versions whose whole interval shares one prefix and one length, quantum spec §4, §4.1); "" for a
+     *  malformed version. Pure. */
     static QString prefixForVersion(const QString& versionHex, int payloadBytes);
-    /** The prefixes this node reports (yed_getinfo.params.addressVersion / pqAddressVersion /
-     *  pq.plainAddressVersion), each falling back to the compiled-in one for the network. */
+    /** The prefixes this node reports (yed_getinfo.params.addressVersion; since rpcversion 9 the objects
+     *  pqAddressVersion / pq.plainAddressVersion, one 3-byte version per scheme), each falling back to the
+     *  compiled-in ones for the network. */
     QString p2pkhPrefix() const;
-    QString pqPrefix() const;
-    QString plainPqPrefix() const;
+    QStringList pqPrefixes() const;
+    QStringList plainPqPrefixes() const;
+    QString plainPqPrefix() const;   // the plain family ("sq" | "tq" | "rq"), for messages
     bool    isShieldedAddress(const QString& addr) const;   // s1..., sq..., ys..., z... (refused)
     const json& info() const { return infoJson; }               // yed_getinfo (whole result)
     const json& stats() const { return statsJson; }             // yed_getstats

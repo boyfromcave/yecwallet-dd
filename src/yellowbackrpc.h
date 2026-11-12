@@ -45,7 +45,7 @@ namespace YellowbackRpc {
 // dollars of the debt in marginal bands at the vault's stored mint price pMint, the early-redeem fee is
 // of the debt, network fees are dollars per KB at the attested price, params.feeMinZat/feeBps and
 // yed_getfeepayee's collateralZat/feeZat are gone, yed_estimatefee takes <mintedCents> [priceMicroUsd]).
-constexpr int RPC_VERSION = 8;
+constexpr int RPC_VERSION = 9;
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";
@@ -179,7 +179,7 @@ namespace Params {   // contract: yed_getinfo.params
     // rpcversion 7 (post-quantum owners, quantum spec §6.2)
     constexpr const char* PQ                  = "pq";                // the ParamsPq object
     constexpr const char* ADDRESS_VERSION     = "addressVersion";    // hex Base58Check version of a 20-byte YED address (mainnet 1fdd "yb")
-    constexpr const char* PQ_ADDRESS_VERSION  = "pqAddressVersion";  // hex version of a 33-byte PQ YED address (mainnet 56ab "yb")
+    constexpr const char* PQ_ADDRESS_VERSION  = "pqAddressVersion";  // rpcversion 9 (D-9): {"<scheme>": 3-byte hex} of a PQ YED address (mainnet "2": 56aede "ybf", "1": 56b044 "ybs")
     // rpcversion 8 (the fee structure, D-Q-23..D-Q-25)
     constexpr const char* MAX_MINT_CENTS      = "maxMintCents";      // D-Q-24: $100,000
     constexpr const char* FEES                = "fees";              // the ParamsFees object
@@ -243,7 +243,7 @@ namespace ParamsPq {   // contract: yed_getinfo.params.pq
     constexpr const char* FALCON_ACTIVE       = "falconActive";      // YED holders must be Falcon PQ addresses from then on (TOK-PQ)
     constexpr const char* FALCON_HEIGHT       = "falconHeight";      // -1 while no height is set
     constexpr const char* FEE_RATE_ZAT_PER_KB = "feeRateZatPerKB";   // the node's -pqfeerate: fees grow with a transaction's size
-    constexpr const char* PLAIN_ADDRESS_VERSION = "plainAddressVersion"; // hex version of a plain-YEC PQ address (D-Q-20: sq/tq/rq)
+    constexpr const char* PLAIN_ADDRESS_VERSION = "plainAddressVersion"; // rpcversion 9 (D-9): {"<scheme>": 3-byte hex} of a plain-YEC PQ address (sqf/sqs, tqf/tqs, rqf/rqs)
 }
 
 // rpcversion 7: the post-quantum scheme identifiers (ownerScheme, yed_validateaddress.pqscheme).
