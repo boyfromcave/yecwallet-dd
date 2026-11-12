@@ -7,3 +7,30 @@
 ea28af340628c7c3417df89a4dcd26ce37f1bc94:tests/yellowbacktab_test.cpp:generic-api-key:114
 ea28af340628c7c3417df89a4dcd26ce37f1bc94:tests/yellowbacktab_test.cpp:generic-api-key:1589
 fa1fcfcadf44e0951c95f49f201915c2c39de4b4:tests/yellowbacktab_test.cpp:generic-api-key:3139
+
+# tests/data/pq_address_vectors.json: the shared post-quantum address vectors (quantum spec 4.1, D-9): public key hashes and
+# addresses, no secrets; matched by generic-api-key. Checked 2026-11-12.
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:51
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:60
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:105
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:114
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:159
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:168
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:213
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:222
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:267
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:276
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:321
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:330
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:375
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:384
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:429
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:438
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:483
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:492
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:537
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:546
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:591
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:600
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:645
+7f78aa7db365ca112d973fbaf49f4b75dd00b492:tests/data/pq_address_vectors.json:generic-api-key:654
