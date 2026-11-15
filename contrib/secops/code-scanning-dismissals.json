@@ -14,6 +14,20 @@
       "path": ".github/workflows/yecwallet-tests.yml",
       "reason": "false positive",
       "comment": "The checkout is the node repo (boyfromcave/ycash-dd or ycash6) at a ref 'Resolve the node branch' admits: its own branch or tag, or a SHA on one of its line branches (compare API). No PR head or fork commit. Dispatch only, write access. CodeQL matches the name 'sha'."
+    },
+    {
+      "tool": "CodeQL",
+      "rule": "actions/untrusted-checkout/medium",
+      "path": ".github/workflows/yecwallet-release.yml",
+      "reason": "false positive",
+      "comment": "Checks out boyfromcave/ycash6 at the commit check-version.sh --remote proved a ycash6 tag names (git ls-remote): the pinned node release, or a dispatch override verified the same way. Tag push or dispatch only (write access); no PR head, no fork; no cache in the job."
+    },
+    {
+      "tool": "CodeQL",
+      "rule": "actions/cache-poisoning/poisonable-step",
+      "path": ".github/workflows/yecwallet-release.yml",
+      "reason": "false positive",
+      "comment": "The build job restores and saves no cache. The ycash6 code it builds (yellowback-attest) is at a commit a ycash6 tag names, proved by check-version.sh --remote; tag push or dispatch only (write access), never a PR head or fork commit. CodeQL matches the output name."
     }
   ]
 }

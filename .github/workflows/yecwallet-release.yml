@@ -266,14 +266,9 @@ jobs:
             libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev \
             libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
             libxcb-util-dev libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev
-      - name: Restore static Qt (non-strict proving runs only)
-        # A tag and a strict proving run build Qt from source, so a release never links anything a
-        # cache entry put there (zizmor cache-poisoning); a strict proving run proves what a tag does.
-        if: needs.version.outputs.strict != 'true' && github.ref_type != 'tag'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0 # zizmor: ignore[cache-poisoning] -- never runs on a tag or a strict proving run (the if above)
-        with:
-          path: deps
-          key: release-qt-${{ matrix.target }}-${{ env.QT_VERSION }}-${{ hashFiles('scripts/build-qt.sh', 'scripts/fetch-llvm-mingw.sh') }}
+      # No cache restore: every run builds static Qt from source (scripts/build-qt.sh checks the
+      # tarball's SHA-256), so nothing a cache entry put there is ever linked, and the job that
+      # checks out ycash6 below never saves a cache (CodeQL actions/cache-poisoning).
       # yellowback-attest, the attestation subscriber the Settings page launches, at the same
       # ycash6 commit as the node; with the toolchain the crate's rust-toolchain.toml pins.
       - name: Check out ycash6's yellowback-attest at the pinned commit

@@ -44,7 +44,7 @@ same pinned commit, with the toolchain that crate pins.
 
 Every package is built by `build.sh <target> --package --ycashd <node> [--attest <bin>]` with a
 static Qt (`QT_VERSION` 6.5.8) built from source on the runner; the Qt source tarball is checked
-against its SHA-256 (`scripts/build-qt.sh`). A tag and a strict proving run restore no cache.
+against its SHA-256 (`scripts/build-qt.sh`). No run restores a cache.
 Tier 1 must pass for a release to be drafted; a tier-2 job may fail and its package is then
 missing. Tier 2 is honest about what is proven: before beta3 only the macOS arm64 package had been
 built by `build.sh` (on a developer Mac); the Linux and Windows packages had never been built in CI.
@@ -106,8 +106,8 @@ release a tag would create. It never creates a release; its packages are workflo
     -f ycash6_commit=fbc9f625c657eca50ddc09e5065e8ed0d3a33a48 -f targets=macos-arm64
   ```
 
-A non-strict run may restore static Qt from a cache; a strict run and a tag build it from source
-(about an hour per target on a hosted runner; the Windows job builds the Linux host Qt first).
+Every run builds static Qt from source, with no cache (about an hour per target on a hosted
+runner; the Windows job builds the Linux host Qt first).
 
 ## Locally
 
