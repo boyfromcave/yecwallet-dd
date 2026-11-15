@@ -197,15 +197,18 @@ elif $DO_PACKAGE; then
     echo "         will only work against an already running ycashd (or --no-embedded)." >&2
 fi
 
-# Copy the node beside the wallet executable: strip a copy, never the original.
+# Copy the node beside the wallet executable: strip a copy, never the original. On Windows the
+# wallet starts ycashd.exe (src/connection.cpp embeddedZcashdProgram), elsewhere ycashd.
 bundle_ycashd() {
     local dest_dir="$1"
     [[ -n "$YCASHD_BIN" ]] || return 0
+    local name="ycashd"
+    [[ "$TARGET" == windows-* ]] && name="ycashd.exe"
     mkdir -p "${dest_dir}"
-    cp "$YCASHD_BIN" "${dest_dir}/ycashd"
-    chmod 755 "${dest_dir}/ycashd"
-    strip "${dest_dir}/ycashd" 2>/dev/null || true
-    step "Bundled ycashd: ${dest_dir}/ycashd ($(du -h "${dest_dir}/ycashd" | cut -f1))"
+    cp "$YCASHD_BIN" "${dest_dir}/${name}"
+    chmod 755 "${dest_dir}/${name}"
+    strip "${dest_dir}/${name}" 2>/dev/null || true
+    step "Bundled ycashd: ${dest_dir}/${name} ($(du -h "${dest_dir}/${name}" | cut -f1))"
 }
 
 # ── Attestation subscriber binary to bundle (--attest) ───────────────────────
@@ -382,14 +385,34 @@ if $DO_PACKAGE; then
         # bundle's plugin/rpath layout, so keep it. The .dmg is made with hdiutil rather than
         # macdeployqt -dmg, which names the volume after the bundle's full build path.
         "${QT_STATIC_ROOT}/bin/macdeployqt" "${APP_BUNDLE}" 2>&1 | grep -v -E '^WARNING: ?$|Could not find any external Qt frameworks|Perhaps macdeployqt was already used|you will need to rebuild' || true
+        # Ad-hoc signatures, no Apple identity (docs/release.md): macOS on Apple Silicon runs no
+        # unsigned arm64 binary, and copying, stripping and macdeployqt can invalidate the one the
+        # linker added. Sign every Mach-O inside first, then seal the bundle; then check it.
+        step "Ad-hoc signing the bundle (codesign --sign -; no Developer ID, not notarized)..."
+        while IFS= read -r -d '' _f; do
+            [[ "${_f}" == "${APP_BUNDLE}/Contents/MacOS/yecwallet" ]] && continue
+            file -b "${_f}" | grep -q 'Mach-O' || continue
+            codesign --force --sign - --timestamp=none "${_f}"
+        done < <(find "${APP_BUNDLE}/Contents" -type f -print0)
+        codesign --force --sign - --timestamp=none "${APP_BUNDLE}"
+        _arch_opt=()
+        [[ "$TARGET" != macos-universal ]] && _arch_opt=(--arch "${TARGET#macos-}")
+        bash "${SCRIPT_DIR}/contrib/yecwallet-release/check-macos-adhoc.sh" "${APP_BUNDLE}" ${_arch_opt[@]+"${_arch_opt[@]}"}
         DMG="${ARTIFACTS_DIR}/${TARGET}-yecwallet-v${APP_VERSION}.dmg"
         STAGE="${BUILD_DIR}/dmg-stage"
         rm -rf "${STAGE}" "${DMG}"
         mkdir -p "${STAGE}"
         cp -R "${APP_BUNDLE}" "${STAGE}/"
         ln -s /Applications "${STAGE}/Applications"
-        hdiutil create -quiet -volname "YecWallet ${APP_VERSION}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}"
+        # hdiutil fails now and then with "Resource busy" on CI runners: three tries.
+        for _try in 1 2 3; do
+            hdiutil create -quiet -volname "YecWallet ${APP_VERSION}" -srcfolder "${STAGE}" -ov -format UDZO "${DMG}" && break
+            [[ $_try -lt 3 ]] || die "hdiutil create failed three times"
+            step "hdiutil create failed (try ${_try}); retrying in 10 s"
+            sleep 10
+        done
         rm -rf "${STAGE}"
+        bash "${SCRIPT_DIR}/contrib/yecwallet-release/check-macos-adhoc.sh" "${DMG}" ${_arch_opt[@]+"${_arch_opt[@]}"}
         step "Package: ${DMG} ($(du -h "${DMG}" | cut -f1))"
         ;;
     esac

@@ -116,6 +116,28 @@ jobs:
           fi
           python3 tests/check-rpc-contract.py --spec "$RUNNER_TEMP/node-spec.md"
 
+  # The release guards, cheaply, on Linux (docs/release.md): the macOS builds run only on a release
+  # tag or a dispatch of yecwallet-release.yml, never on a pull request. Warn mode, without the
+  # remote check: between releases the node pin may be unset, which a tag would refuse.
+  release-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The version and the bundled-node pin (contrib/yecwallet-release/check-version.sh --warn)
+        run: |
+          set -euo pipefail
+          contrib/yecwallet-release/check-version.sh --warn | tee "$RUNNER_TEMP/v"
+          v=$(sed -n 's/^version=//p' "$RUNNER_TEMP/v")
+          [ -s "docs/release-notes/release-notes-$v.md" ] \
+            || echo "::warning::docs/release-notes/release-notes-$v.md is missing: a v$v tag would be refused"
+      - name: shellcheck the release scripts
+        run: |
+          shellcheck -S warning contrib/yecwallet-release/*.sh
+          shellcheck -S error build.sh scripts/build-qt.sh scripts/fetch-llvm-mingw.sh
+
   qtest:
     runs-on: ubuntu-22.04
     timeout-minutes: 60

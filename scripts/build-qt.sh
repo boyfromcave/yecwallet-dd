@@ -60,7 +60,18 @@ if [[ "${QT_MAJOR}" -gt 6 ]] || { [[ "${QT_MAJOR}" -eq 6 ]] && [[ "${QT_MINOR}" 
 else
     QT_SRC_BASE="qt-everywhere-opensource-src-${QT_VERSION}"
 fi
-QT_SRC_URL="https://download.qt.io/official_releases/qt/${QT_SHORT}/${QT_VERSION}/src/single/${QT_SRC_BASE}.tar.xz"
+# A release that is no longer current moves from official_releases/ to archive/ (6.5.x did); try both.
+QT_SRC_URLS=(
+    "https://download.qt.io/official_releases/qt/${QT_SHORT}/${QT_VERSION}/src/single/${QT_SRC_BASE}.tar.xz"
+    "https://download.qt.io/archive/qt/${QT_SHORT}/${QT_VERSION}/src/single/${QT_SRC_BASE}.tar.xz"
+)
+# The source tarball's SHA-256, checked before it is unpacked: QT_SHA256 in the environment, else
+# the known value for the default version (download.qt.io's published hash, taken 2026-11-15).
+case "${QT_VERSION}" in
+    6.5.8) QT_SHA256_KNOWN="4eeb391891b325cd00aed6e42cb4ef966ffeef0877e188c9667a702944760c27" ;;
+    *)     QT_SHA256_KNOWN="" ;;
+esac
+QT_SHA256="${QT_SHA256:-${QT_SHA256_KNOWN}}"
 QT_SRC_DIR="${WORK_DIR}/qt-everywhere-src-${QT_VERSION}"
 QT_BUILD_DIR="${WORK_DIR}/qt-build-${TARGET}"
 QT_TARBALL="${WORK_DIR}/${QT_SRC_BASE}.tar.xz"
@@ -72,7 +83,20 @@ if [[ ! -d "${QT_SRC_DIR}" ]]; then
     if [[ ! -f "${QT_TARBALL}" ]]; then
         info "Downloading Qt ${QT_VERSION} source (~600 MB)..."
         need curl
-        curl -L --progress-bar -o "${QT_TARBALL}" "${QT_SRC_URL}"
+        _got=false
+        for _url in "${QT_SRC_URLS[@]}"; do
+            if curl -fL --progress-bar -o "${QT_TARBALL}.part" "${_url}"; then _got=true; break; fi
+            info "Not at ${_url}"
+        done
+        $_got || die "Could not download ${QT_SRC_BASE}.tar.xz"
+        mv "${QT_TARBALL}.part" "${QT_TARBALL}"
+    fi
+    if [[ -n "${QT_SHA256}" ]]; then
+        _sum="$( (sha256sum "${QT_TARBALL}" 2>/dev/null || shasum -a 256 "${QT_TARBALL}") | awk '{print $1}')"
+        [[ "${_sum}" == "${QT_SHA256}" ]] || { rm -f "${QT_TARBALL}"; die "SHA-256 mismatch for ${QT_TARBALL}: ${_sum} != ${QT_SHA256}"; }
+        info "Qt source SHA-256 verified"
+    else
+        info "WARNING: no known SHA-256 for Qt ${QT_VERSION}; set QT_SHA256 to verify the source"
     fi
     info "Extracting Qt source..."
     tar -xf "${QT_TARBALL}" -C "${WORK_DIR}"
