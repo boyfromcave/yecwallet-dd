@@ -14,7 +14,7 @@ name: code-scanning
 on:
   push:
     branches: ['upgrade/vault']
-    paths: ['contrib/secops/code-scanning-dismissals.json', '.github/workflows/code-scanning.yml']
+    paths: ['contrib/secops/code-scanning-dismissals.json', 'contrib/secops/code-scanning-triage.py', '.github/workflows/code-scanning.yml']
   schedule:
     - cron: '53 3 * * *'
   workflow_dispatch:

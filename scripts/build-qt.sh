@@ -67,11 +67,13 @@ QT_SRC_URLS=(
 )
 # The source tarball's SHA-256, checked before it is unpacked: QT_SHA256 in the environment, else
 # the known value for the default version (download.qt.io's published hash, taken 2026-11-15).
+# A version with neither is refused: no Qt source is built unchecked.
 case "${QT_VERSION}" in
     6.5.8) QT_SHA256_KNOWN="4eeb391891b325cd00aed6e42cb4ef966ffeef0877e188c9667a702944760c27" ;;
     *)     QT_SHA256_KNOWN="" ;;
 esac
 QT_SHA256="${QT_SHA256:-${QT_SHA256_KNOWN}}"
+[[ "${QT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || die "No known SHA-256 for Qt ${QT_VERSION}: set QT_SHA256 to the hash download.qt.io publishes (<tarball URL>.sha256), or add it to the table above"
 QT_SRC_DIR="${WORK_DIR}/qt-everywhere-src-${QT_VERSION}"
 QT_BUILD_DIR="${WORK_DIR}/qt-build-${TARGET}"
 QT_TARBALL="${WORK_DIR}/${QT_SRC_BASE}.tar.xz"
@@ -91,13 +93,9 @@ if [[ ! -d "${QT_SRC_DIR}" ]]; then
         $_got || die "Could not download ${QT_SRC_BASE}.tar.xz"
         mv "${QT_TARBALL}.part" "${QT_TARBALL}"
     fi
-    if [[ -n "${QT_SHA256}" ]]; then
-        _sum="$( (sha256sum "${QT_TARBALL}" 2>/dev/null || shasum -a 256 "${QT_TARBALL}") | awk '{print $1}')"
-        [[ "${_sum}" == "${QT_SHA256}" ]] || { rm -f "${QT_TARBALL}"; die "SHA-256 mismatch for ${QT_TARBALL}: ${_sum} != ${QT_SHA256}"; }
-        info "Qt source SHA-256 verified"
-    else
-        info "WARNING: no known SHA-256 for Qt ${QT_VERSION}; set QT_SHA256 to verify the source"
-    fi
+    _sum="$( (sha256sum "${QT_TARBALL}" 2>/dev/null || shasum -a 256 "${QT_TARBALL}") | awk '{print $1}')"
+    [[ "${_sum}" == "${QT_SHA256}" ]] || { rm -f "${QT_TARBALL}"; die "SHA-256 mismatch for ${QT_TARBALL}: ${_sum} != ${QT_SHA256}"; }
+    info "Qt source SHA-256 verified"
     info "Extracting Qt source..."
     tar -xf "${QT_TARBALL}" -C "${WORK_DIR}"
 fi

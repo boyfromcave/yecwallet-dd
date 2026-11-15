@@ -324,10 +324,13 @@ Two host facts found on 2026-09-05 (macOS 26, Command Line Tools 26.2):
   wallet build; set `SDKROOT` yourself to override. The resulting binaries record SDK 15.4 and a
   minimum macOS of 11.0. Moving to a Qt release that no longer links AGL (6.8 or later) removes
   the need.
-- The package is **ad-hoc signed** (`codesign` shows `Signature=adhoc`, no team). Gatekeeper
-  treats it as from an unidentified developer: right-click → Open on first launch, or
-  `xattr -d com.apple.quarantine` on the app. Developer ID signing and notarization are a
-  separate step that needs an Apple Developer account.
+- The package is **ad-hoc signed** (`codesign` shows `Signature=adhoc`, no team): `build.sh`
+  signs every binary in the app and checks it with `contrib/yecwallet-release/check-macos-adhoc.sh`.
+  There is no Developer ID signature and no notarization (the Yellowback lead architect's
+  decision), so Gatekeeper blocks the first launch of a downloaded copy; right-click → Open no
+  longer gets past it on current macOS. What users do instead (System Settings → Privacy &
+  Security → Open Anyway, or clearing the quarantine mark) is in
+  [install-macos.md](install-macos.md).
 
 ## Trying it on one laptop: the devnet
 

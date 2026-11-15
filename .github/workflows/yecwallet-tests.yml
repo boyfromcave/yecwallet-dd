@@ -133,6 +133,8 @@ jobs:
           v=$(sed -n 's/^version=//p' "$RUNNER_TEMP/v")
           [ -s "docs/release-notes/release-notes-$v.md" ] \
             || echo "::warning::docs/release-notes/release-notes-$v.md is missing: a v$v tag would be refused"
+      - name: The code-scanning triage matcher's unit tests (narrowed dismissals are current)
+        run: python3 contrib/secops/test_code_scanning_triage.py -v
       - name: shellcheck the release scripts
         run: |
           shellcheck -S warning contrib/yecwallet-release/*.sh
