@@ -55,6 +55,15 @@ A `ycashd` built from the `upgrade/quantum-vaults` branch of
 ycash6 6.22.x from that change on); with any other node the tab is disabled and names both numbers. A
 stock `ycashd` has no Yellowback, and the tab says so. Nothing in `ycash.conf` turns Yellowback on.
 
+### Download
+
+Releases of this fork, with `ycashd` inside, are at
+<https://github.com/boyfromcave/yecwallet-dd/releases> (from 6.22.0-beta3 on; pre-releases, for
+the Ycash testnets). They are not signed with an Apple Developer ID or notarized: check the
+download against `SHA256SUMS` and its minisign signature, then allow the app once in System
+Settings → Privacy & Security. [docs/install-macos.md](docs/install-macos.md) walks through both;
+[docs/release.md](docs/release.md) is how a release is made.
+
 ### Build and test
 
 With CMake, Ninja and Qt 6 (the CI uses Qt 6.5 with testlib):
@@ -67,7 +76,8 @@ python3 tests/check-rpc-contract.py   # the RPC fields the wallet reads vs docs/
 ```
 
 A release package with the node inside is built by `build.sh`, for example
-`bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd`.
+`bash build.sh macos-arm64 --package --ycashd ../ycash6/src/ycashd`; the release workflow does
+the same with the pinned ycash6 release ([docs/release.md](docs/release.md)).
 
 ### Try it on one laptop
 

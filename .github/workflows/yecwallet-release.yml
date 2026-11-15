@@ -1,0 +1,527 @@
+# Release builds of YecWallet with Ycash Yellowback (YED): one package per platform with the node
+# (ycashd) inside, an SBOM per package, a SHA256SUMS file with build provenance and a keyless cosign
+# signature, and a DRAFT GitHub release that a person publishes by hand. The procedure around it
+# (version bump, node pin, tag, the lead architect's minisign signature, publish) is docs/release.md;
+# what a user does on first run is docs/install-macos.md.
+#
+# In plain words: when the Yellowback lead architect pushes a version tag, this workflow fetches the
+# ycashd release of the same version from ycash6 (checking that it is the pinned commit and that its
+# checksums and signatures hold), builds the wallet around it for each platform, checks that every
+# macOS binary carries an ad-hoc signature, and puts the files on a draft release page only the
+# repository's maintainers can see. Nothing here publishes a release.
+#
+# Triggers:
+#   push of a tag v*        build, check, sign and create a DRAFT release (a prerelease when the
+#                           version has -beta/-rc). The tag must equal v<APP_VERSION> of
+#                           src/version.h, and the bundled node must be the pin in
+#                           contrib/yecwallet-release/bundled-ycashd.env: ycash6's release v<APP_VERSION>,
+#                           whose tag names YCASH6_COMMIT (contrib/yecwallet-release/check-version.sh).
+#   workflow_dispatch       a proving run (dry run) on a branch: the same guards (input `strict`,
+#                           default true), builds, checks, SBOMs and signatures, then
+#                           `release-dry-run`, which checks the signed set and the notes file and
+#                           prints the release a tag would create. It never creates a release: the
+#                           `release` job runs on a pushed tag only. With strict=false a proving run
+#                           may bundle another ycash6 release (inputs ycash6_tag + ycash6_commit),
+#                           e.g. the previous one while the pinned node release is not out yet, and
+#                           build only some targets (input `targets`).
+#
+# macOS builds run here only (a tag or a dispatch): a macOS runner on every pull request is too
+# expensive. The pull-request check (yecwallet-tests.yml `release-check`) runs the version and pin
+# guards and shellcheck on the release scripts on Linux.
+#
+# Platforms (tier 1 must pass for a release; tier 2 is continue-on-error and its package is simply
+# absent when it fails):
+#   macos-arm64     tier 1  macos-15, build.sh with static Qt built from source, ycashd from ycash6's
+#                           macos_aarch64 package, yellowback-attest built at the pinned ycash6 commit
+#   macos-x86_64    tier 2  macos-15-intel, the same with ycash6's macos_x86_64 package (tier 2 there)
+#   linux-x86_64    tier 2  ubuntu-22.04, build.sh with static Qt (never built in CI before beta3)
+#   windows-x86_64  tier 2  ubuntu-22.04, build.sh's llvm-mingw cross build (host Qt first), with
+#                           ycash6's windows package; no yellowback-attest (no Windows build of it)
+#
+# Signing: no Apple Developer ID, no notarization, no Windows Authenticode (the lead architect's
+# decision, 2026-11-15). macOS binaries are ad-hoc signed (build.sh) and checked by
+# contrib/yecwallet-release/check-macos-adhoc.sh; Gatekeeper warns on first run (docs/install-macos.md).
+# The trust anchors are the project's own: GitHub build provenance for every asset, a keyless
+# cosign signature of SHA256SUMS whose identity is this workflow at the tag, and the lead
+# architect's minisign signature (SHA256SUMS.minisig, key 02C923A6C593AF18), added to the draft
+# from the private ycash-ops `sign-release` workflow (repo yecwallet-dd) before it is published.
+name: yecwallet release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'refuse what a tag would refuse (version, node pin); false: warn only'
+        type: boolean
+        default: true
+      ycash6_tag:
+        description: 'strict=false only: bundle this ycash6 release instead of the pin (e.g. v6.22.0-beta2)'
+        type: string
+        default: ''
+      ycash6_commit:
+        description: 'strict=false only: the commit that ycash6 tag names (40 hex)'
+        type: string
+        default: ''
+      targets:
+        description: 'strict=false only: comma-separated targets, or all (macos-arm64,macos-x86_64,linux-x86_64,windows-x86_64)'
+        type: string
+        default: all
+
+permissions: {}
+
+concurrency:
+  group: yecwallet-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  QT_VERSION: '6.5.8'
+
+jobs:
+  version:
+    name: Version, node pin and targets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      ycash6_repo: ${{ steps.v.outputs.ycash6_repo }}
+      ycash6_tag: ${{ steps.v.outputs.ycash6_tag }}
+      ycash6_commit: ${{ steps.v.outputs.ycash6_commit }}
+      ycash6_version: ${{ steps.v.outputs.ycash6_version }}
+      strict: ${{ steps.v.outputs.strict }}
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The version, the tag and the bundled node
+        id: v
+        env:
+          STRICT: ${{ github.ref_type == 'tag' || inputs.strict != false }}
+          O_TAG: ${{ inputs.ycash6_tag }}
+          O_COMMIT: ${{ inputs.ycash6_commit }}
+        run: |
+          set -euo pipefail
+          # A tag releases by being pushed: a dispatch on a tag ref would sign and attest with the
+          # tag's identity, so only a branch is dispatched.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "a proving run is dispatched on a branch, not $GITHUB_REF; a tag releases by being pushed"; exit 1
+          fi
+          args=(--remote)
+          [ "$GITHUB_REF_TYPE" = tag ] && args+=(--tag "$GITHUB_REF_NAME")
+          [ "$STRICT" = true ] || args+=(--warn)
+          if [ -n "${O_TAG:-}${O_COMMIT:-}" ]; then args+=(--ycash6-tag "$O_TAG" --ycash6-commit "$O_COMMIT"); fi
+          contrib/yecwallet-release/check-version.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
+          echo "strict=$STRICT" >> "$GITHUB_OUTPUT"
+      - name: The build matrix
+        id: m
+        env:
+          STRICT: ${{ steps.v.outputs.strict }}
+          TARGETS: ${{ inputs.targets || 'all' }}
+        run: |
+          set -euo pipefail
+          all='[
+            {"target":"macos-arm64","tier":1,"os":"macos-15","node":"macos_aarch64","attest":true},
+            {"target":"macos-x86_64","tier":2,"os":"macos-15-intel","node":"macos_x86_64","attest":true},
+            {"target":"linux-x86_64","tier":2,"os":"ubuntu-22.04","node":"linux_x86_64","attest":true},
+            {"target":"windows-x86_64","tier":2,"os":"ubuntu-22.04","node":"windows","attest":false}
+          ]'
+          if [ "$TARGETS" = all ]; then
+            m=$(jq -c . <<<"$all")
+          else
+            [ "$STRICT" = true ] && { echo "a strict run builds every target (targets=all)"; exit 1; }
+            m=$(jq -c --arg t "$TARGETS" '($t | split(",") | map(gsub("^ +| +$"; ""))) as $want | map(select(.target as $x | $want | index($x)))' <<<"$all")
+            [ "$(jq length <<<"$m")" -gt 0 ] || { echo "no known target in '$TARGETS'"; exit 1; }
+          fi
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "\(.target) (tier \(.tier)) on \(.os), ycashd from ycash6 \(.node)"' <<<"$m"
+
+  # The node, fetched once: ycash6's published release packages at the pinned tag, checked against
+  # its SHA256SUMS, the cosign identity of ycash6's release workflow at that tag, and the Ycash
+  # release minisign key; then only ycashd is handed on. A draft ycash6 release is not downloadable,
+  # so the wallet can only bundle a node release that has been published.
+  node:
+    name: ycashd from the pinned ycash6 release
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      REPO: ${{ needs.version.outputs.ycash6_repo }}
+      TAG: ${{ needs.version.outputs.ycash6_tag }}
+      NVER: ${{ needs.version.outputs.ycash6_version }}
+      NCOMMIT: ${{ needs.version.outputs.ycash6_commit }}
+      STRICT: ${{ needs.version.outputs.strict }}
+      MATRIX: ${{ needs.version.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install minisign
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q minisign
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download and verify the ycash6 packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/n" node && cd "$RUNNER_TEMP/n"
+          base="https://github.com/$REPO/releases/download/$TAG"
+          curl -fsSLO "$base/SHA256SUMS"
+          curl -fsSLO "$base/SHA256SUMS.cosign.bundle"
+          cosign verify-blob --bundle SHA256SUMS.cosign.bundle \
+            --certificate-identity "https://github.com/$REPO/.github/workflows/yellowback-release.yml@refs/tags/$TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          if curl -fsSLO "$base/SHA256SUMS.minisig"; then
+            minisign -Vm SHA256SUMS -p "$GITHUB_WORKSPACE/contrib/yecwallet-release/ycash-release.pub"
+          elif [ "$STRICT" = true ]; then
+            echo "$REPO $TAG has no SHA256SUMS.minisig: the lead architect signs the node release before the wallet bundles it"; exit 1
+          else
+            echo "::warning::$REPO $TAG has no SHA256SUMS.minisig (strict=false: continuing)"
+          fi
+          for node in $(jq -r '.[].node' <<<"$MATRIX"); do
+            ext=tar.gz; [ "$node" = windows ] && ext=zip
+            pkg="ycashd_v${NVER}_${node}"
+            grep -q "  $pkg.$ext\$" SHA256SUMS || { echo "SHA256SUMS of $TAG does not list $pkg.$ext"; exit 1; }
+            if ! curl -fsSLO "$base/$pkg.$ext"; then
+              # ycash6's own tier-2 packages may be absent from its release; the matching wallet
+              # target is tier 2 here too and then fails on its own.
+              echo "::warning::$REPO $TAG has no $pkg.$ext"; continue
+            fi
+            grep "  $pkg.$ext\$" SHA256SUMS | sha256sum -c -
+            mkdir -p "$GITHUB_WORKSPACE/node/$node"
+            if [ "$ext" = zip ]; then
+              unzip -q -j "$pkg.zip" "$pkg/ycashd.exe" -d "$GITHUB_WORKSPACE/node/$node"
+            else
+              tar -xzf "$pkg.tar.gz" -C "$GITHUB_WORKSPACE/node/$node" --strip-components=1 "$pkg/ycashd"
+            fi
+          done
+          [ -d "$GITHUB_WORKSPACE/node/macos_aarch64" ] || ! jq -e 'any(.[]; .target == "macos-arm64")' <<<"$MATRIX" >/dev/null \
+            || { echo "missing the tier-1 node package macos_aarch64"; exit 1; }
+          cd "$GITHUB_WORKSPACE" && find node -type f -exec ls -l {} +
+          {
+            echo "### Bundled node"
+            echo "$REPO \`$TAG\` ($NCOMMIT): SHA256SUMS, cosign identity and minisign verified"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: node
+          path: node
+          if-no-files-found: error
+          retention-days: 3
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [version, node]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.tier == 2 }}
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.version.outputs.matrix) }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NVER: ${{ needs.version.outputs.ycash6_version }}
+      TARGET: ${{ matrix.target }}
+      NODE: ${{ matrix.node }}
+      ATTEST: ${{ matrix.attest }}
+      WORK_DIR: ${{ github.workspace }}/.qt-work
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: node
+          path: node
+      - name: The node package for this target is here
+        run: |
+          ext=; [ "$NODE" = windows ] && ext=.exe
+          [ -f "node/$NODE/ycashd$ext" ] || { echo "no ycashd for $TARGET (ycash6 package $NODE)"; exit 1; }
+          chmod 755 "node/$NODE/ycashd$ext"
+      - name: Install build prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          command -v ninja >/dev/null || brew install ninja
+          echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+      - name: Install build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential clang cmake ninja-build pkg-config libssl-dev zip \
+            libgl1-mesa-dev libglu1-mesa-dev libfontconfig1-dev libfreetype-dev libdbus-1-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev \
+            libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev \
+            libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
+            libxcb-util-dev libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev
+      # No cache restore: every run builds static Qt from source (scripts/build-qt.sh checks the
+      # tarball's SHA-256), so nothing a cache entry put there is ever linked, and the job that
+      # checks out ycash6 below never saves a cache (CodeQL actions/cache-poisoning).
+      # yellowback-attest, the attestation subscriber the Settings page launches, at the same
+      # ycash6 commit as the node; with the toolchain the crate's rust-toolchain.toml pins.
+      - name: Check out ycash6's yellowback-attest at the pinned commit
+        if: matrix.attest
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ needs.version.outputs.ycash6_repo }}
+          ref: ${{ needs.version.outputs.ycash6_commit }}
+          path: ycash6-src
+          sparse-checkout: contrib/yellowback/attest
+          persist-credentials: false
+      - name: Read the crate's toolchain pin
+        if: matrix.attest
+        id: toolchain
+        run: |
+          chan=$(sed -n 's/^channel = "\(.*\)"/\1/p' ycash6-src/contrib/yellowback/attest/rust-toolchain.toml)
+          [ -n "$chan" ] || { echo "no toolchain pin in rust-toolchain.toml"; exit 1; }
+          echo "channel=$chan" >> "$GITHUB_OUTPUT"
+      - name: Install the pinned toolchain
+        if: matrix.attest
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1 (master, 2026-10-01)
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: Build yellowback-attest
+        if: matrix.attest
+        working-directory: ycash6-src/contrib/yellowback/attest
+        run: |
+          cargo build --release --locked
+          echo "ATTEST_BIN=$PWD/target/release/yellowback-attest" >> "$GITHUB_ENV"
+      - name: Number of cores
+        id: nproc
+        run: echo "count=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" >> "$GITHUB_OUTPUT"
+      - name: Build the wallet and package it with the node (build.sh --package)
+        env:
+          JOBS: ${{ steps.nproc.outputs.count }}
+        run: |
+          set -euo pipefail
+          ext=; [ "$NODE" = windows ] && ext=.exe
+          args=("$TARGET" --package --ycashd "node/$NODE/ycashd$ext" --jobs "$JOBS")
+          [ -n "${ATTEST_BIN:-}" ] && args+=(--attest "$ATTEST_BIN")
+          # The Windows cross build needs a host (Linux) Qt for moc/rcc/uic first.
+          [ "$TARGET" = windows-x86_64 ] && bash build.sh linux-x86_64 --deps-only --jobs "$JOBS"
+          bash build.sh "${args[@]}"
+          ls -l artifacts
+      - name: Smoke test the package
+        # macOS: build.sh already ran contrib/yecwallet-release/check-macos-adhoc.sh on the app and the .dmg;
+        # here the bundled binaries are run from the mounted image (an arm64 binary without a valid
+        # signature is killed on start). Linux: the node from the tarball. Windows: the layout only.
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+          macos-*)
+            dmg="artifacts/$TARGET-yecwallet-v$VERSION.dmg"
+            mnt=$(mktemp -d); hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mnt" "$dmg"
+            trap 'hdiutil detach -quiet "$mnt" || true' EXIT
+            macos="$mnt/yecwallet.app/Contents/MacOS"
+            "$macos/ycashd" --version | head -n1 | tee /dev/stderr | grep -q "v$NVER" || { echo "bundled ycashd is not v$NVER"; exit 1; }
+            if [ "$ATTEST" = true ]; then "$macos/yellowback-attest" --help >/dev/null; fi
+            ;;
+          linux-*)
+            d=$(mktemp -d); tar -xzf "artifacts/$TARGET-yecwallet-v$VERSION.tar.gz" -C "$d"
+            p="$d/yecwallet-v$VERSION"
+            "$p/ycashd" --version | head -n1 | tee /dev/stderr | grep -q "v$NVER" || { echo "bundled ycashd is not v$NVER"; exit 1; }
+            if [ "$ATTEST" = true ]; then "$p/yellowback-attest" --help >/dev/null; fi
+            [ -x "$p/yecwallet" ]
+            ;;
+          windows-*)
+            unzip -l "artifacts/$TARGET-yecwallet-v$VERSION.zip" | tee /dev/stderr \
+              | grep -q "yecwallet-v$VERSION/ycashd.exe" || { echo "no ycashd.exe in the zip"; exit 1; }
+            ;;
+          esac
+      - name: Install syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - name: An SBOM of the package (SPDX JSON)
+        # syft over what the package holds: the app (or directory) with the wallet and the node.
+        # Qt and the node's depends are linked statically and carry no package metadata syft can
+        # read; the node's own SBOM is in ycash6's release.
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          set -euo pipefail
+          base="$TARGET-yecwallet-v$VERSION"
+          case "$TARGET" in
+            macos-*) src="build/$TARGET/bin/yecwallet.app" ;;
+            *)       src="build/$TARGET/pkg/yecwallet-v$VERSION" ;;
+          esac
+          "$SYFT" scan "dir:$src" --source-name "$base" --source-version "$VERSION" -o "spdx-json=artifacts/$base.spdx.json"
+          test -s "artifacts/$base.spdx.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  # Checksums, provenance and the keyless signature. Its own job so the OIDC token (id-token:
+  # write) never shares a job with the release-writing token. Runs on a proving run too, so the
+  # proving run proves the signing; its certificate then names the branch, never a tag.
+  sign:
+    name: SHA256SUMS, provenance and cosign
+    needs: [version, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write       # keyless cosign and the provenance attestation (GitHub OIDC)
+      attestations: write   # store the provenance attestations on this repository
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MATRIX: ${{ needs.version.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Every tier-1 package is present
+        run: |
+          set -euo pipefail
+          cd dist
+          for t in $(jq -r '.[] | select(.tier == 1) | .target' <<<"$MATRIX"); do
+            ls "$t-yecwallet-v$VERSION".* >/dev/null 2>&1 || { echo "missing tier-1 package $t"; exit 1; }
+          done
+          ls -l
+      - name: SHA256SUMS (packages and SBOMs)
+        run: cd dist && sha256sum ./*-yecwallet-v* | sed 's|  \./|  |' > SHA256SUMS && cat SHA256SUMS
+      - name: Build provenance (packages, SBOMs, SHA256SUMS)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*-yecwallet-v*
+            dist/SHA256SUMS
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Keyless signature of SHA256SUMS (cosign sign-blob)
+        env:
+          WORKFLOW_REF_URL: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          cd dist
+          cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle SHA256SUMS
+          identity="${WORKFLOW_REF_URL%%@*}@${GITHUB_REF}"
+          cosign verify-blob --bundle SHA256SUMS.cosign.bundle \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          echo "cosign identity: $identity"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-signed
+          path: dist/*
+          if-no-files-found: error
+
+  # A proving run's stand-in for `release`: the signed set and the notes checked, and the release
+  # a tag would create printed. Read-only: no token that can write a release ever reaches it.
+  release-dry-run:
+    name: Draft release (dry run, no release)
+    needs: [version, sign]
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref_type != 'tag' && !cancelled() && needs.sign.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      STRICT: ${{ needs.version.outputs.strict }}
+      NODE_TAG: ${{ needs.version.outputs.ycash6_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-signed
+          path: dist
+      - name: The signed set is complete, SHA256SUMS holds and the notes exist
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS && [ -s SHA256SUMS.cosign.bundle ] && ls -l)
+          notes=docs/release-notes/release-notes-$VERSION.md
+          [ -s "$notes" ] || { echo "missing $notes: the tag's release job would refuse (docs/release.md)"; exit 1; }
+          pre=; [ "$PRERELEASE" = true ] && pre=--prerelease
+          {
+            echo "## Dry run (strict=$STRICT): the tag v$VERSION would create"
+            echo
+            echo "gh release create v$VERSION dist/* --draft $pre --verify-tag --title \"YecWallet v$VERSION (Yellowback)\""
+            echo
+            echo "Bundled node: ycash6 $NODE_TAG"
+            echo
+            echo "Assets:"
+            echo
+            sed 's/^/    /' dist/SHA256SUMS
+            echo
+            echo "Notes ($notes), first lines:"
+            echo
+            head -20 "$notes" | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "dry run: no release created"
+
+  release:
+    name: Draft release
+    needs: [version, sign]
+    # A pushed tag only: a workflow_dispatch never writes a release. The draft is published by hand
+    # after the lead architect's minisign signature is on it (docs/release.md).
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && !cancelled() && needs.sign.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write       # create the draft release and upload its assets
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NODE_REPO: ${{ needs.version.outputs.ycash6_repo }}
+      NODE_TAG: ${{ needs.version.outputs.ycash6_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-signed
+          path: dist
+      - name: The signed set is complete and SHA256SUMS holds
+        run: cd dist && sha256sum -c SHA256SUMS && [ -s SHA256SUMS.cosign.bundle ] && ls -l
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          notes=docs/release-notes/release-notes-$VERSION.md
+          [ -f "$notes" ] || { echo "missing $notes (docs/release.md)"; exit 1; }
+          body="$RUNNER_TEMP/notes.md"
+          cat "$notes" > "$body"
+          cat >> "$body" <<EOF
+
+          ## Verifying these files
+
+          The node inside is ycashd from [$NODE_REPO $NODE_TAG](https://github.com/$NODE_REPO/releases/tag/$NODE_TAG),
+          checked against that release's signatures before it was bundled. Every package, SBOM and
+          \`SHA256SUMS\` here carries GitHub build provenance, and \`SHA256SUMS\` a keyless Sigstore
+          signature (\`SHA256SUMS.cosign.bundle\`) and the Ycash release minisign signature
+          (\`SHA256SUMS.minisig\`, key \`02C923A6C593AF18\`):
+
+              shasum -a 256 -c --ignore-missing SHA256SUMS      # Linux: sha256sum -c --ignore-missing SHA256SUMS
+              minisign -Vm SHA256SUMS -P RWQYr5PFpiPJAigk86vf89bPYrJCXj5tskgRAPRYFsEXyciZo8dveOGQ
+              cosign verify-blob --bundle SHA256SUMS.cosign.bundle \\
+                --certificate-identity ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/yecwallet-release.yml@refs/tags/${GITHUB_REF_NAME} \\
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+              gh attestation verify macos-arm64-yecwallet-v${VERSION}.dmg -R ${GITHUB_REPOSITORY} \\
+                --source-ref refs/tags/${GITHUB_REF_NAME} \\
+                --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/yecwallet-release.yml
+          EOF
+          pre=; [ "$PRERELEASE" = true ] && pre=--prerelease
+          gh release create "$GITHUB_REF_NAME" dist/* --draft $pre --verify-tag \
+            --title "YecWallet v$VERSION (Yellowback)" --notes-file "$body"
