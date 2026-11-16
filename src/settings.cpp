@@ -191,6 +191,10 @@ int Settings::getYellowbackRpcVersion() {
     return YellowbackRpc::RPC_VERSION;
 }
 
+int Settings::getYellowbackMinRpcVersion() {
+    return YellowbackRpc::MIN_RPC_VERSION;
+}
+
 QString Settings::getYellowbackTransportKind() {
     return QSettings().value("yellowback/transport.kind", "dir").toString();
 }

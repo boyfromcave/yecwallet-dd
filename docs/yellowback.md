@@ -2,8 +2,10 @@
 
 YecWallet's Yellowback tab drives Ycash Yellowback (YED) on a node built from `upgrade/vault`: the
 Ycash vault upgrade (`UPGRADE_VAULT`, branch ID `6d5b7a31`), with YED as the rule module of the
-upgrade's vault primitive. On `upgrade/quantum-vaults` the wallet speaks `rpcversion` 7 only (exact
-match: an `rpcversion` 6 node disables the tab and names both numbers). Yellowback's rules are
+upgrade's vault primitive. The wallet accepts `rpcversion` 9 (beta2) and 10 (beta3)
+(`Settings::getYellowbackMinRpcVersion` to `getYellowbackRpcVersion`); a node at any other version
+disables the tab, which names the accepted range and the node's number. The sections on rpcversion
+7 and 8 below are the history of those steps. Yellowback's rules are
 consensus wherever the upgrade and the network's YED attestor set are configured, so the wallet
 shows the upgrade's status (`yed_getinfo.upgrade`, `vault_getinfo`) and writes no `ycash.conf`
 key for Yellowback. A `-32601` ("Method not found") from `yed_getinfo` means the node has no vault
@@ -153,9 +155,19 @@ sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()
 spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
 the height-based copy (the QTest's `infoLegacy()` cases).
 
+**rpcversion 10: beta3 (the workspace's `docs/plans/beta3/beta3-plan.md` R-1, decision B3-D5).** One step covering
+the run's node additions: `getcoinbasetemplatefor`, `getblockchaininfo.transparentPools`, input addresses for
+post-quantum spends, the `gettransaction` fee and the `-ydf` default. None changes a `yed_*` field the wallet reads,
+so the handshake is no longer exact: the wallet accepts `YellowbackRpc::MIN_RPC_VERSION` 9 to
+`YellowbackRpc::RPC_VERSION` 10 (a beta2 and a beta3 node); 8 and 11 disable the tab and name the numbers.
+`RPC_VERSION` still equals the contract copy's `rpcversion` (`tests/check-rpc-contract.py`). The wallet reads no
+`valuePools` entry (none by position).
+
+The rpcversion 9 section, as it was written (9 is still accepted):
+
 **rpcversion 9: scheme-visible post-quantum prefixes (decision D-9; the workspace's
-`docs/plans/yellowback-pq-prefix-rpc-delta.md` §4.12 and quantum spec §4.1).** The wallet requires `rpcversion` 9
-(`YellowbackRpc::RPC_VERSION`). A post-quantum address is Base58Check of a 3-byte version per network, coin and
+`docs/plans/yellowback-pq-prefix-rpc-delta.md` §4.12 and quantum spec §4.1).** The wallet required `rpcversion` 9
+(`YellowbackRpc::RPC_VERSION`; since 10, above, 9 and 10). A post-quantum address is Base58Check of a 3-byte version per network, coin and
 scheme and the 32-byte key hash (53 characters), so its third character names the scheme (`f` FN-DSA-512, `s`
 SLH-DSA-SHA2-128s): YED `ybf…`/`ybs…`, `ytf…`/`yts…`, `yrf…`/`yrs…`; plain YEC `sqf…`/`sqs…`, `tqf…`/`tqs…`,
 `rqf…`/`rqs…`. `yed_getinfo.params.pqAddressVersion` and `params.pq.plainAddressVersion` are objects keyed by scheme

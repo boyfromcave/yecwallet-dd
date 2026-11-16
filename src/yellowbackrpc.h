@@ -44,8 +44,15 @@ namespace YellowbackRpc {
 // fee structure, docs/plans/yellowback-quantum-fees-spec.md §3.4 in the workspace: the protocol fee is
 // dollars of the debt in marginal bands at the vault's stored mint price pMint, the early-redeem fee is
 // of the debt, network fees are dollars per KB at the attested price, params.feeMinZat/feeBps and
-// yed_getfeepayee's collateralZat/feeZat are gone, yed_estimatefee takes <mintedCents> [priceMicroUsd]).
-constexpr int RPC_VERSION = 9;
+// yed_getfeepayee's collateralZat/feeZat are gone, yed_estimatefee takes <mintedCents> [priceMicroUsd]);
+// to 9 with the scheme-visible post-quantum prefixes (D-9); to 10 with beta3 (the workspace's
+// docs/plans/beta3/beta3-plan.md R-1, decision B3-D5: getcoinbasetemplatefor,
+// getblockchaininfo.transparentPools, input addresses for post-quantum spends, the gettransaction fee,
+// the -ydf default). RPC_VERSION is the newest contract this build knows and equals the contract
+// copy's; 10 changed no yed_* field this wallet reads, so from 10 the handshake is a window,
+// MIN_RPC_VERSION..RPC_VERSION: a beta2 node (9) and a beta3 node (10) are both accepted.
+constexpr int RPC_VERSION = 10;
+constexpr int MIN_RPC_VERSION = 9;   // 8 prints the pre-D-9 post-quantum address form this wallet refuses
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────
 constexpr const char* GETINFO             = "yed_getinfo";

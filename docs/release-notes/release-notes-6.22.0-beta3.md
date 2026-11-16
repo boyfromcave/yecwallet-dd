@@ -9,6 +9,24 @@ needs no separate node.
 upgrade has not been adopted by the Ycash Foundation, and there is no external audit. Use it on the
 Ycash testnets; expect breaking changes between pre-releases.
 
+## Before you start
+
+- **The node is inside.** The package starts its bundled ycashd v6.22.0-beta3; nothing else to
+  install. The first start downloads and checks the chain, which takes a while.
+- **Your own node instead** (`--no-embedded` with its `ycash.conf`): a ycashd of the vault upgrade,
+  ycash6 6.22.0-beta2 or later or ycash-dd's `upgrade/vault`. The Yellowback tab needs the node's
+  Yellowback RPC version 9 (beta2) or 10 (beta3); with any other version it is disabled and says
+  which versions it accepts. A stock ycashd has no Yellowback, and the tab says so.
+- **Check the download first** (below), then open it.
+
+## What is in it
+
+Stock YecWallet, plus a **Yellowback** tab: mint YED against YEC locked in a vault, send and
+redeem it, claim an undercollateralized vault and release the claim, and the attestors' pages
+(register, heartbeat, leave, withdraw the bond, report equivocation, cancel a claim made at a wrong
+price). Fees are shown before you confirm. The
+[README](https://github.com/boyfromcave/yecwallet-dd/blob/upgrade/vault/README.md) describes the tab.
+
 ## Downloads
 
 | Platform | File |
@@ -38,3 +56,15 @@ block the app with no override. The full guide is
 [docs/install-macos.md](https://github.com/boyfromcave/yecwallet-dd/blob/upgrade/vault/docs/install-macos.md).
 
 Windows shows a SmartScreen prompt for the same reason: **More info → Run anyway**.
+
+## Known limitations
+
+- **No Apple Developer ID signature and no notarization.** Every macOS binary is ad-hoc signed,
+  which Apple silicon requires and which says nothing about who built it; `SHA256SUMS` and its
+  minisign and cosign signatures are what do. Macs managed by an organization may refuse the app.
+- **Only the Apple silicon package is required for a release.** The Intel macOS, Linux and Windows
+  packages are built on a best-effort basis and may be missing.
+- **No YED on the fast testnet.** The vault upgrade is active there, but no YED attestor set is
+  configured, so the tab cannot mint. YEC works as usual.
+- **Not live on mainnet.** No activation height for the vault upgrade is set there, so the
+  Yellowback tab has nothing to work with on mainnet.

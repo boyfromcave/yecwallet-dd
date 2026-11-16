@@ -91,7 +91,8 @@ public:
     // ejected and its bond frozen), so a signed cancel is kept and only ever re-sent.
     QString     getYellowbackSignedCancel(const QString& intentOutpoint);
     void        setYellowbackSignedCancel(const QString& intentOutpoint, const QString& hex);
-    static int  getYellowbackRpcVersion();              // the rpcversion this build understands
+    static int  getYellowbackRpcVersion();              // the newest rpcversion this build understands
+    static int  getYellowbackMinRpcVersion();           // the oldest one it still accepts (beta3: 9)
     // v3: the attestation subscriber's transport (yellowback-attest subscribe), plan §4.8 Settings row.
     QString     getYellowbackTransportKind();           // "dir" | "iroh"
     void        setYellowbackTransportKind(const QString& kind);

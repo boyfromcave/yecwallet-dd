@@ -3276,7 +3276,7 @@ void YellowbackTab::updateSettingsPage() {
     auto s = Settings::getInstance();
     uiSettings->chkUnitCents->setChecked(s->getYellowbackUnitCents());
     uiSettings->chkAdvanced->setChecked(s->getYellowbackAdvanced());
-    uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC version %1.").arg(Settings::getYellowbackRpcVersion()) %
+    uiSettings->lblRpcVersion->setText(tr("This YecWallet understands Yellowback RPC versions %1 to %2.").arg(Settings::getYellowbackMinRpcVersion()).arg(Settings::getYellowbackRpcVersion()) %
         (ctl != nullptr && ctl->isVersionOk() ? tr(" The node matches.") : ""));
     // v3: the subscriber keeps this node's attestation pool filled; without it a mint cannot
     // build its bundle while the layer is armed.
