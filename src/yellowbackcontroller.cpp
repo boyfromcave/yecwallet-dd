@@ -157,11 +157,11 @@ void YellowbackController::applyInfo(const json& info) {
         emit infoUpdated();
         return;
     }
-    if (version != Settings::getYellowbackRpcVersion()) {
+    if (version < Settings::getYellowbackMinRpcVersion() || version > Settings::getYellowbackRpcVersion()) {
         versionOk = false;
-        setAvailability(false, tr("this YecWallet understands Yellowback RPC version %1 but the node reports version %2. "
+        setAvailability(false, tr("this YecWallet understands Yellowback RPC versions %1 to %2 but the node reports version %3. "
                                   "Update YecWallet (or ycashd) so the two match; the Yellowback tab is disabled until then.")
-                                  .arg(Settings::getYellowbackRpcVersion()).arg(version));
+                                  .arg(Settings::getYellowbackMinRpcVersion()).arg(Settings::getYellowbackRpcVersion()).arg(version));
         emit infoUpdated();
         return;
     }
