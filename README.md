@@ -8,10 +8,12 @@ network upgrade that adds **post-quantum vaults** (YEC locked under rules every 
 **Ycash Yellowback (YED)**, a dollar backed by YEC in vaults (`1 YED = $1`), as the first
 application. The wallet adds a **Yellowback** tab; everything else is stock YecWallet.
 
-> **Status: in development.** It runs on regtest and on a one-laptop devnet only. No activation
-> height is set on mainnet or testnet, the upgrade has not been adopted by the Ycash Foundation,
-> and there is no external audit. The releases linked under Installation are upstream YecWallet
-> and know nothing of vaults or YED.
+> **Status: beta (pre-releases for the Ycash testnets).** No activation height is set on mainnet,
+> the upgrade has not been adopted by the Ycash Foundation, and there is no external audit. On the
+> project's fast testnet the vault upgrade is active but YED cannot be minted (no attestor set is
+> configured there); the Yellowback tab works with YED on regtest and the one-laptop devnet. This
+> fork's own releases are under *Download* below; the releases linked under *Installation
+> (upstream YecWallet)* know nothing of vaults or YED.
 
 ### What the Yellowback tab does
 
@@ -28,12 +30,13 @@ application. The wallet adds a **Yellowback** tab; everything else is stock YecW
 
 - **Vault owners** sign with SLH-DSA-SHA2-128s. The node creates the owner key and keeps it in
   `wallet.dat`; the wallet itself holds no post-quantum code.
-- **YED holders** use Falcon-512 addresses: `yb…` on mainnet, `yt…` on testnet, `yr…` on regtest
-  (53 characters). Falcon is active from the upgrade's first block on mainnet; Receive hands out a
+- **YED holders** use Falcon-512 addresses: `ybf…` on mainnet, `ytf…` on testnet, `yrf…` on
+  regtest (53 characters; an ordinary YED address is `yb…`/`yt…`/`yr…`, 35 characters). Falcon is active from the upgrade's first block on mainnet; Receive hands out a
   Falcon address once it is, and Send refuses a vault owner's address or, after Falcon, an
   ordinary one.
-- **Plain YEC** post-quantum addresses (`sq…` / `tq…` / `rq…`) hold YEC, never YED; the YED Send
-  page refuses them.
+- **Plain YEC** post-quantum addresses (`sqf…`/`sqs…` on mainnet, `tqf…`/`tqs…` on testnet,
+  `rqf…`/`rqs…` on regtest; the third letter names the scheme, FN-DSA-512 or SLH-DSA) hold YEC,
+  never YED; the YED Send page refuses them.
 - Shielded (Sapling) YEC, the attestors' keys and the pools' keys are not post-quantum. No
   hardware wallet, watch-only wallet or xpub supports these keys.
 
@@ -48,9 +51,10 @@ application. The wallet adds a **Yellowback** tab; everything else is stock YecW
 
 ### The node it needs
 
-A `ycashd` built from the `upgrade/quantum-vaults` branch of
-[ycash-dd](https://github.com/boyfromcave/ycash-dd) or [ycash6](https://github.com/boyfromcave/ycash6)
-(this line joins `upgrade/vault` at release). The wallet requires Yellowback RPC version
+The release packages bundle the matching ycashd (YecWallet `v6.22.0-beta3` carries ycashd
+`v6.22.0-beta3` from [ycash6](https://github.com/boyfromcave/ycash6)). With your own node
+(`--no-embedded`), use a ycashd of the vault upgrade: ycash6 6.22.0-beta2 or later, or the
+`upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd). The wallet requires Yellowback RPC version
 (`rpcversion`) **9** (the scheme-visible post-quantum address prefixes, decision D-9: ycash-dd and
 ycash6 6.22.x from that change on; beta2) or **10** (beta3); with any other node the tab is disabled and names
 the numbers. A
