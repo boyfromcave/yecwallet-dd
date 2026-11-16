@@ -2,8 +2,10 @@
 
 YecWallet's Yellowback tab drives Ycash Yellowback (YED) on a node built from `upgrade/vault`: the
 Ycash vault upgrade (`UPGRADE_VAULT`, branch ID `6d5b7a31`), with YED as the rule module of the
-upgrade's vault primitive. On `upgrade/quantum-vaults` the wallet speaks `rpcversion` 7 only (exact
-match: an `rpcversion` 6 node disables the tab and names both numbers). Yellowback's rules are
+upgrade's vault primitive. The wallet accepts `rpcversion` 9 (beta2) and 10 (beta3)
+(`Settings::getYellowbackMinRpcVersion` to `getYellowbackRpcVersion`); a node at any other version
+disables the tab, which names the accepted range and the node's number. The sections on rpcversion
+7 and 8 below are the history of those steps. Yellowback's rules are
 consensus wherever the upgrade and the network's YED attestor set are configured, so the wallet
 shows the upgrade's status (`yed_getinfo.upgrade`, `vault_getinfo`) and writes no `ycash.conf`
 key for Yellowback. A `-32601` ("Method not found") from `yed_getinfo` means the node has no vault
