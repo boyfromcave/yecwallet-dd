@@ -713,7 +713,7 @@ YellowbackStatus YellowbackController::describeStatus(bool available, const QStr
     const json& miner = YellowbackJson::obj(info, Info::MINER);
     if (YellowbackJson::has(miner, Miner::PAYOUT_ADDRESS)) {
         QString kind = YellowbackJson::toStr(miner, Miner::QUOTE_KIND);
-        QString line = tr("This node mines with payout %1: ").arg(YellowbackJson::toStr(miner, Miner::PAYOUT_ADDRESS));
+        QString line = tr("This node mines with payout %1: ").arg(describePayee(YellowbackJson::toStr(miner, Miner::PAYOUT_ADDRESS)));
         if (kind == Miner::KIND_QUOTE)
             line += tr("next tag carries a price quote (%1 s old)").arg(YellowbackJson::toInt(miner, Miner::QUOTE_AGE_SECONDS));
         else
@@ -853,6 +853,14 @@ bool YellowbackController::isPqYecAddressOn(const QString& network, const QStrin
     if (!startsWithAny(a, pqYecPrefixesOn(network))) return false;
     static const QRegularExpression base58("^[1-9A-HJ-NP-Za-km-z]+$");
     return base58.match(a).hasMatch();
+}
+
+QString YellowbackController::describePayee(const QString& addr) {
+    const QString a = addr.trimmed();
+    static const QRegularExpression pq("^[str]q([fs])[1-9A-HJ-NP-Za-km-z]{50}$");
+    const QRegularExpressionMatch m = pq.match(a);
+    if (!m.hasMatch()) return addr;
+    return tr("%1 (post-quantum, %2)").arg(a, m.captured(1) == "f" ? QStringLiteral("FN-DSA-512") : QStringLiteral("SLH-DSA-SHA2-128s"));
 }
 
 bool YellowbackController::isPqYecAddress(const QString& addr) const {

@@ -1317,7 +1317,7 @@ void YellowbackTab::doMint() {
                         ? YellowbackJson::toStr(f, FeePayee::PREFERRED)
                         : YellowbackJson::toStr(def, FeePayeeDefault::PAYOUT_ADDRESS);
                     ask(feeAmount % " " % tr("Paid from your own YEC on top of the collateral (as are any attestation fee and the network fee) to the pool %1 (a pool that published a price quote in the 100 blocks up to the reference height).")
-                            .arg(payee) % " " % again % "\n" % networkLine % "\n" %
+                            .arg(YellowbackController::describePayee(payee)) % " " % again % "\n" % networkLine % "\n" %
                         tr("Maximum mint: %1 per vault.").arg(YellowbackFormat::cents(ctl->maxMintCents())));
                 },
                 [=, this](const QString& e) {
@@ -1356,7 +1356,7 @@ QString YellowbackTab::mintSummary(qint64 cents, const json& r, qint64 confirmed
             .arg(YellowbackJson::toInt(r, MintResult::LOCK_HEIGHT)).arg(YellowbackJson::toInt(r, MintResult::CLAIM_HEIGHT));
     else
         out += "\n" % tr("vault %1:0").arg(txid);
-    QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, MintResult::PAYEE);
+    QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackController::describePayee(YellowbackJson::toStr(r, MintResult::PAYEE));
     out += "\n" % tr("protocol fee %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee);
     if (YellowbackJson::has(r, MintResult::FUNDED_FROM))
         out += "\n" % tr("funded from %1").arg(YellowbackJson::toStr(r, MintResult::FUNDED_FROM));

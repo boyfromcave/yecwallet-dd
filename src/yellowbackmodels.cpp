@@ -4,6 +4,7 @@
 
 #include "yellowbackmodels.h"
 #include "yellowbackrpc.h"
+#include "yellowbackcontroller.h"
 #include "settings.h"
 
 // ── JSON readers ──────────────────────────────────────────────────────────────────────────
@@ -1255,7 +1256,7 @@ QVariant YellowbackTxModel::data(const QModelIndex& index, int role) const {
                 return tr("YED in: %1, out: %2, burned: %3; protocol fee %4%5")
                         .arg(YellowbackFormat::cents(t.yedIn)).arg(YellowbackFormat::cents(t.yedOut))
                         .arg(YellowbackFormat::cents(t.burned)).arg(YellowbackFormat::zec(t.feeZat))
-                        .arg(t.payee.isEmpty() ? QString() : tr(" to %1").arg(t.payee));
+                        .arg(t.payee.isEmpty() ? QString() : tr(" to %1").arg(YellowbackController::describePayee(t.payee)));
             case Verdict:
                 return tr("The Yellowback index's verdict on this transaction (a stable identifier).");
             case Height:

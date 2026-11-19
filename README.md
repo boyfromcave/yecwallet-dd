@@ -56,7 +56,8 @@ The release packages bundle the matching ycashd (YecWallet `v6.22.0-beta3` carri
 (`--no-embedded`), use a ycashd of the vault upgrade: ycash6 6.22.0-beta2 or later, or the
 `upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd). The wallet requires Yellowback RPC version
 (`rpcversion`) **9** (the scheme-visible post-quantum address prefixes, decision D-9: ycash-dd and
-ycash6 6.22.x from that change on; beta2) or **10** (beta3); with any other node the tab is disabled and names
+ycash6 6.22.x from that change on; beta2), **10** (beta3) or **11** (beta4: tag v2, a post-quantum payout key;
+a post-quantum fee payee is shown with its scheme); with any other node the tab is disabled and names
 the numbers. A
 stock `ycashd` has no Yellowback, and the tab says so. Nothing in `ycash.conf` turns Yellowback on.
 
