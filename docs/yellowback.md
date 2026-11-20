@@ -2,7 +2,7 @@
 
 YecWallet's Yellowback tab drives Ycash Yellowback (YED) on a node built from `upgrade/vault`: the
 Ycash vault upgrade (`UPGRADE_VAULT`, branch ID `6d5b7a31`), with YED as the rule module of the
-upgrade's vault primitive. The wallet accepts `rpcversion` 9 (beta2) and 10 (beta3)
+upgrade's vault primitive. The wallet accepts `rpcversion` 9 (beta2), 10 (beta3) and 11 (beta4)
 (`Settings::getYellowbackMinRpcVersion` to `getYellowbackRpcVersion`); a node at any other version
 disables the tab, which names the accepted range and the node's number. The sections on rpcversion
 7 and 8 below are the history of those steps. Yellowback's rules are
@@ -154,6 +154,14 @@ sentence is the in-term promise (IT-8) verbatim, `YellowbackTab::inTermPromise()
 `tests/check-rpc-contract.py --spec <node>/doc/yellowback-spec.md` checks it against the generated
 spec's §8.1, and CI runs that on `upgrade/vault-in-term`. With `inTermClaims` false the wallet keeps
 the height-based copy (the QTest's `infoLegacy()` cases).
+
+**rpcversion 11: beta4, tag v2 (the workspace's `docs/plans/beta4/rpc-contract-delta.md` §4.14, decisions D-8,
+D-10).** A miner's payout key may be post-quantum: `yed_gettag` / `yed_getprice.tag` gain `payoutScheme` (the wallet
+reads neither), and every payee and payout address (`yed_getfeepayee`, `yed_getinfo.miner.payoutAddress`, the `payee` of
+the mint, redeem and transaction calls) may be a plain post-quantum address (`sqf…`/`sqs…`, `tqf…`/`tqs…`, `rqf…`/`rqs…`).
+The node builds every fee output (P2PKH or TX_PQPKH), so the wallet only shows them:
+`YellowbackController::describePayee` names the scheme ("… (post-quantum, FN-DSA-512)"). The window is
+`MIN_RPC_VERSION` 9 to `RPC_VERSION` 11; the contract copy is ycash-dd's rpcversion 11 one.
 
 **rpcversion 10: beta3 (the workspace's `docs/plans/beta3/beta3-plan.md` R-1, decision B3-D5).** One step covering
 the run's node additions: `getcoinbasetemplatefor`, `getblockchaininfo.transparentPools`, input addresses for

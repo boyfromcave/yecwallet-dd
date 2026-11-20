@@ -50,8 +50,13 @@ namespace YellowbackRpc {
 // getblockchaininfo.transparentPools, input addresses for post-quantum spends, the gettransaction fee,
 // the -ydf default). RPC_VERSION is the newest contract this build knows and equals the contract
 // copy's; 10 changed no yed_* field this wallet reads, so from 10 the handshake is a window,
-// MIN_RPC_VERSION..RPC_VERSION: a beta2 node (9) and a beta3 node (10) are both accepted.
-constexpr int RPC_VERSION = 10;
+// MIN_RPC_VERSION..RPC_VERSION: a beta2 node (9) and a beta3 node (10) are both accepted. 11 is beta4
+// (the workspace's docs/plans/beta4/rpc-contract-delta.md section 4.14, decisions D-8, D-10): tag v2, a
+// post-quantum payout key; yed_gettag / yed_getprice.tag gain payoutScheme (not read here) and every payee
+// and payout address may be a plain post-quantum address (sqf/sqs, tqf/tqs, rqf/rqs), which this wallet
+// shows with its scheme (YellowbackController::describePayee). The node builds every fee output, so the
+// step is additive: 9 to 11 are accepted.
+constexpr int RPC_VERSION = 11;
 constexpr int MIN_RPC_VERSION = 9;   // 8 prints the pre-D-9 post-quantum address form this wallet refuses
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────

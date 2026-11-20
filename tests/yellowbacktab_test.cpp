@@ -54,7 +54,7 @@ using json = nlohmann::json;
 
 static json infoActive() {
     return json::parse(R"({
-      "rpcversion": 10, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
+      "rpcversion": 11, "enabled": true, "network": "regtest", "height": 331, "mintRequiresArmed": false,
       "blockhash": "0f3a9c1e5b7d2a4c6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
       "chainHeight": 331, "startHeight": 103, "healthy": true, "unhealthyReason": "",
       "supplyCapReached": false, "lockedOutputs": 0, "protectedByIndex": true, "rebuilt": false,
@@ -705,18 +705,29 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsTen() {
-        // beta3 (R-1, B3-D5): 10 is the newest contract, 9 (D-9) still accepted
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 10);
+    void contractVersionIsEleven() {
+        // beta4 (tag v2): 11 is the newest contract, 9 (D-9) and 10 (beta3) still accepted
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 11);
         QCOMPARE(YellowbackRpc::MIN_RPC_VERSION, 9);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 10);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 11);
         QCOMPARE(Settings::getYellowbackMinRpcVersion(), 9);
     }
 
-    // The beta3 handshake: 9 (a beta2 node) and 10 (beta3) are accepted, 8 (the pre-D-9 post-quantum
-    // address form) and 11 are refused with the numbers named, and nothing is enabled outside the window.
-    void handshakeAcceptsRpcVersionNineAndTen() {
-        for (int v : { 9, 10 }) {
+    // rpcversion 11 (tag v2): a plain post-quantum payee is shown with its scheme; P2PKH and "" unchanged.
+    void payeeNamesThePostQuantumScheme() {
+        const QString f = "rqf" + QString(50, 'A');
+        const QString sl = "tqs" + QString(50, 'B');
+        QCOMPARE(YellowbackController::describePayee(f), f + " (post-quantum, FN-DSA-512)");
+        QCOMPARE(YellowbackController::describePayee(sl), sl + " (post-quantum, SLH-DSA-SHA2-128s)");
+        QCOMPARE(YellowbackController::describePayee("smQvTmAz2ExamplePayoutAddress1111111"), QString("smQvTmAz2ExamplePayoutAddress1111111"));
+        QCOMPARE(YellowbackController::describePayee(""), QString());
+        QCOMPARE(YellowbackController::describePayee("yrf" + QString(50, 'A')), "yrf" + QString(50, 'A'));   // a YED owner form is no payee
+    }
+
+    // The beta4 handshake: 9 (a beta2 node), 10 (beta3) and 11 (beta4) are accepted, 8 (the pre-D-9
+    // post-quantum address form) and 12 are refused with the numbers named, and nothing is enabled outside the window.
+    void handshakeAcceptsRpcVersionNineToEleven() {
+        for (int v : { 9, 10, 11 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
@@ -724,14 +735,14 @@ private slots:
             QVERIFY(h.ctl.isVersionOk());
             QVERIFY(h.ctl.isAvailable());
         }
-        for (int v : { 8, 11 }) {
+        for (int v : { 8, 12 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("versions 9 to 10"));
+            QVERIFY(h.label("lblBanner").contains("versions 9 to 11"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -878,7 +889,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("versions 9 to 10"));
+        QVERIFY(h.label("lblBanner").contains("versions 9 to 11"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 

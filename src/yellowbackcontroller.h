@@ -111,6 +111,10 @@ public:
     bool    isPqYecAddress(const QString& addr) const;
     static bool isPqYecAddressOn(const QString& network, const QString& addr);
     static QString pqYecPrefixOn(const QString& network);   // sq | tq | rq (the family, for messages)
+    /** rpcversion 11 (beta4 tag v2): a fee payee or payout address as shown; a plain post-quantum one
+     *  (sqf/sqs, tqf/tqs, rqf/rqs: a pool whose tag carries a post-quantum payout key) gets its scheme
+     *  named, "<address> (post-quantum, FN-DSA-512)"; anything else is returned unchanged. */
+    static QString describePayee(const QString& addr);
     /** D-9 (quantum spec §4.1): the compiled-in post-quantum prefixes of a network, the scheme in the third
      *  character (f FN-DSA-512, s SLH-DSA-SHA2-128s): YED ybf/ybs, ytf/yts, yrf/yrs; plain YEC sqf/sqs,
      *  tqf/tqs, rqf/rqs. */

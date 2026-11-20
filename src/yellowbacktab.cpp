@@ -1317,7 +1317,7 @@ void YellowbackTab::doMint() {
                         ? YellowbackJson::toStr(f, FeePayee::PREFERRED)
                         : YellowbackJson::toStr(def, FeePayeeDefault::PAYOUT_ADDRESS);
                     ask(feeAmount % " " % tr("Paid from your own YEC on top of the collateral (as are any attestation fee and the network fee) to the pool %1 (a pool that published a price quote in the 100 blocks up to the reference height).")
-                            .arg(payee) % " " % again % "\n" % networkLine % "\n" %
+                            .arg(YellowbackController::describePayee(payee)) % " " % again % "\n" % networkLine % "\n" %
                         tr("Maximum mint: %1 per vault.").arg(YellowbackFormat::cents(ctl->maxMintCents())));
                 },
                 [=, this](const QString& e) {
@@ -1356,7 +1356,7 @@ QString YellowbackTab::mintSummary(qint64 cents, const json& r, qint64 confirmed
             .arg(YellowbackJson::toInt(r, MintResult::LOCK_HEIGHT)).arg(YellowbackJson::toInt(r, MintResult::CLAIM_HEIGHT));
     else
         out += "\n" % tr("vault %1:0").arg(txid);
-    QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, MintResult::PAYEE);
+    QString payee = YellowbackJson::isNull(r, MintResult::PAYEE) ? tr("none") : YellowbackController::describePayee(YellowbackJson::toStr(r, MintResult::PAYEE));
     out += "\n" % tr("protocol fee %1 to %2").arg(YellowbackFormat::zec(YellowbackJson::toInt(r, MintResult::FEE_ZAT))).arg(payee);
     if (YellowbackJson::has(r, MintResult::FUNDED_FROM))
         out += "\n" % tr("funded from %1").arg(YellowbackJson::toStr(r, MintResult::FUNDED_FROM));
@@ -1388,7 +1388,7 @@ QString YellowbackTab::claimSummary(const json& r) const {
     // yed_claim's shape and yed_gettxinfo's differ in the burn key only
     qint64 burned = YellowbackJson::has(r, RedeemResult::BURNED_CENTS) ? YellowbackJson::toInt(r, RedeemResult::BURNED_CENTS)
                                                                         : YellowbackJson::toInt(r, TxInfo::BURNED);
-    QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
+    QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackController::describePayee(YellowbackJson::toStr(r, RedeemResult::PAYEE));
     QString out = tr("txid %1\nYED burned: %2%3\nprotocol fee: %4 to %5")
         .arg(YellowbackJson::toStr(r, RedeemResult::TXID)).arg(YellowbackFormat::cents(burned)).arg(extraBurnLine(r))
         .arg(YellowbackFormat::zec(YellowbackJson::toInt(r, RedeemResult::FEE_ZAT))).arg(payee);
@@ -1663,7 +1663,7 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
         if (!confirm(tr("Confirm %1").arg(what.toLower()), text)) return;
         ctl->redeem(p.txid, to,
             [=, this](const json& r) {
-                QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackJson::toStr(r, RedeemResult::PAYEE);
+                QString payee = YellowbackJson::isNull(r, RedeemResult::PAYEE) ? tr("none") : YellowbackController::describePayee(YellowbackJson::toStr(r, RedeemResult::PAYEE));
                 const qint64 early = YellowbackJson::toInt(r, RedeemResult::EARLY_REDEEM_FEE_ZAT);
                 notice(tr("%1 sent").arg(what),
                     tr("txid %1\nYED burned: %2%7\nprotocol fee: %3 to %4%8\ncollateral out: %5 to %6\n\nThe vault closes when the transaction is mined.")
@@ -1729,7 +1729,7 @@ void YellowbackTab::redeemVault(const YellowbackPosition& p, const QString& to) 
                     : tr("Protocol fee: %1 from the collateral to the pool %2 (the fee of the %3 debt, as at the mint).")
                           .arg(YellowbackController::dollarsAndYec(YellowbackJson::toInt(q, EstimateRedeem::PROTOCOL_FEE_CENTS),
                                                                    YellowbackJson::toInt(q, EstimateRedeem::PROTOCOL_FEE_ZAT), pMint))
-                          .arg(payee).arg(YellowbackFormat::cents(p.mintedCents));
+                          .arg(YellowbackController::describePayee(payee)).arg(YellowbackFormat::cents(p.mintedCents));
                 if (YellowbackJson::toBool(q, EstimateRedeem::EARLY))
                     feeLine += "\n" % (early > 0
                         ? tr("Early-redeem fee: %1, because the vault's term (class %2) runs to height %3; it goes to the same pool. "
