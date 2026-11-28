@@ -55,8 +55,9 @@ namespace YellowbackRpc {
 // post-quantum payout key; yed_gettag / yed_getprice.tag gain payoutScheme (not read here) and every payee
 // and payout address may be a plain post-quantum address (sqf/sqs, tqf/tqs, rqf/rqs), which this wallet
 // shows with its scheme (YellowbackController::describePayee). The node builds every fee output, so the
-// step is additive: 9 to 11 are accepted.
-constexpr int RPC_VERSION = 11;
+// step is additive: 9 to 11 are accepted. 12 is the Yugen node (ycashd 6.23.x, yugen_getinfo; no yed_*
+// shape change): 9 to 12 are accepted.
+constexpr int RPC_VERSION = 12;
 constexpr int MIN_RPC_VERSION = 9;   // 8 prints the pre-D-9 post-quantum address form this wallet refuses
 
 // ── Methods (node context) ────────────────────────────────────────────────────────────────

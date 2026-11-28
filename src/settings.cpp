@@ -83,7 +83,7 @@ bool Settings::isSproutAddress(QString addr) {
 }
 
 bool Settings::isZAddress(QString addr) {
-    if (!isValidAddress(addr))
+    if (!isValidAddress(addr) || isYugenAddress(addr))
         return false;
         
     return addr.startsWith("z") || addr.startsWith("y");
@@ -93,6 +93,13 @@ bool Settings::isPQTAddress(QString addr) {
     // D-9: the scheme in the prefix, sqf/sqs (main), tqf/tqs (test), rqf/rqs (regtest); the pre-D-9 sq5... form is refused
     static const QRegularExpression pqt("^[str]q[fs][1-9A-HJ-NP-Za-km-z]{50}$");
     return pqt.match(addr).hasMatch();
+}
+
+bool Settings::isYugenAddress(QString addr) {
+    // Bech32m, HRP yqf (main), yqtf (test), yqrf (regtest); the length varies (short ~66 to full ~2,660).
+    // yqk/yqtk/yqrk (Falcon-1024) are left out until the node pays them; the node refuses them anyway.
+    static const QRegularExpression yq("^yq[tr]?f1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{20,}$");
+    return yq.match(addr).hasMatch();
 }
 
 bool Settings::isTAddress(QString addr) {
@@ -466,6 +473,7 @@ bool Settings::isValidAddress(QString addr) {
     QRegularExpression zrsexp("^yregtestsapling[a-z0-9]{76}$", QRegularExpression::CaseInsensitiveOption);   // regtest Sapling
     QRegularExpression texp("^s[a-z0-9]{34}$", QRegularExpression::CaseInsensitiveOption);
 
+    if (isYugenAddress(addr) || isPQTAddress(addr)) return true;   // checked first: a short yq... could fit zsexp
     return  zcexp.match(addr).hasMatch()  || texp.match(addr).hasMatch() ||
             ztsexp.match(addr).hasMatch() || zsexp.match(addr).hasMatch() || zrsexp.match(addr).hasMatch();
 }

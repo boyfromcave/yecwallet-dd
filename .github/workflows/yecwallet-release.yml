@@ -38,6 +38,13 @@
 #   windows-x86_64  tier 2  ubuntu-22.04, build.sh's llvm-mingw cross build (host Qt first), with
 #                           ycash6's windows package; no yellowback-attest (no Windows build of it)
 #
+# The Yugen line (a bundled ycash6 6.23.x or later, doc/yugen-release.md there): ycash6 packages
+# the native macOS and Linux builds only, each with the three Yugen helpers beside ycashd
+# (yugen-leafverify, yugen-sendbuild, yewd-yugen). The matrix then drops windows-x86_64, the node
+# job takes the helpers out of the same verified package as ycashd and refuses a package without
+# them, and build.sh --yugen-helpers puts them beside ycashd, where the wallet passes them to the
+# embedded node (-yugenverifier, -yugenbuilder, -yugenprover; src/connection.cpp yugenHelperArgs).
+#
 # Signing: no Apple Developer ID, no notarization, no Windows Authenticode (the lead architect's
 # decision, 2026-11-15). macOS binaries are ad-hoc signed (build.sh) and checked by
 # contrib/yecwallet-release/check-macos-adhoc.sh; Gatekeeper warns on first run (docs/install-macos.md).
@@ -95,6 +102,7 @@ jobs:
       ycash6_version: ${{ steps.v.outputs.ycash6_version }}
       strict: ${{ steps.v.outputs.strict }}
       matrix: ${{ steps.m.outputs.matrix }}
+      yugen: ${{ steps.m.outputs.yugen }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -123,8 +131,12 @@ jobs:
         env:
           STRICT: ${{ steps.v.outputs.strict }}
           TARGETS: ${{ inputs.targets || 'all' }}
+          NVER: ${{ steps.v.outputs.ycash6_version }}
         run: |
           set -euo pipefail
+          # The Yugen line: a node of 6.23.0 or later ships the Yugen helpers and no Windows package.
+          yugen=false
+          [ "$(printf '%s\n' 6.23.0 "${NVER%%-*}" | sort -V | head -n1)" = 6.23.0 ] && yugen=true
           all='[
             {"target":"macos-arm64","tier":1,"os":"macos-15","node":"macos_aarch64","attest":true},
             {"target":"macos-x86_64","tier":2,"os":"macos-15-intel","node":"macos_x86_64","attest":true},
@@ -132,18 +144,24 @@ jobs:
             {"target":"windows-x86_64","tier":2,"os":"ubuntu-22.04","node":"windows","attest":false}
           ]'
           if [ "$TARGETS" = all ]; then
-            m=$(jq -c . <<<"$all")
+            m=$(jq -c --argjson y "$yugen" 'if $y then map(select(.node != "windows")) else . end' <<<"$all")
           else
             [ "$STRICT" = true ] && { echo "a strict run builds every target (targets=all)"; exit 1; }
             m=$(jq -c --arg t "$TARGETS" '($t | split(",") | map(gsub("^ +| +$"; ""))) as $want | map(select(.target as $x | $want | index($x)))' <<<"$all")
             [ "$(jq length <<<"$m")" -gt 0 ] || { echo "no known target in '$TARGETS'"; exit 1; }
+            if [ "$yugen" = true ] && jq -e 'any(.[]; .node == "windows")' <<<"$m" >/dev/null; then
+              echo "ycash6 $NVER (the Yugen line) publishes no Windows package"; exit 1
+            fi
           fi
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          echo "yugen=$yugen" >> "$GITHUB_OUTPUT"
+          echo "Yugen line (helpers bundled): $yugen"
           jq -r '.[] | "\(.target) (tier \(.tier)) on \(.os), ycashd from ycash6 \(.node)"' <<<"$m"
 
   # The node, fetched once: ycash6's published release packages at the pinned tag, checked against
   # its SHA256SUMS, the cosign identity of ycash6's release workflow at that tag, and the Ycash
-  # release minisign key; then only ycashd is handed on. A draft ycash6 release is not downloadable,
+  # release minisign key; then only ycashd (and, on the Yugen line, the three Yugen helpers from the
+  # same package) is handed on. A draft ycash6 release is not downloadable,
   # so the wallet can only bundle a node release that has been published.
   node:
     name: ycashd from the pinned ycash6 release
@@ -159,6 +177,7 @@ jobs:
       NCOMMIT: ${{ needs.version.outputs.ycash6_commit }}
       STRICT: ${{ needs.version.outputs.strict }}
       MATRIX: ${{ needs.version.outputs.matrix }}
+      YUGEN: ${{ needs.version.outputs.yugen }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -201,6 +220,14 @@ jobs:
               unzip -q -j "$pkg.zip" "$pkg/ycashd.exe" -d "$GITHUB_WORKSPACE/node/$node"
             else
               tar -xzf "$pkg.tar.gz" -C "$GITHUB_WORKSPACE/node/$node" --strip-components=1 "$pkg/ycashd"
+              if [ "$YUGEN" = true ]; then
+                # The helpers come from the package whose checksum and signatures were just checked;
+                # ycash6's signing job refuses a Yugen package without them, and so does this one.
+                for h in yugen-leafverify yugen-sendbuild yewd-yugen; do
+                  tar -xzf "$pkg.tar.gz" -C "$GITHUB_WORKSPACE/node/$node" --strip-components=1 "$pkg/$h" \
+                    || { echo "$pkg.tar.gz has no $h: the Yugen line's package carries the three helpers"; exit 1; }
+                done
+              fi
             fi
           done
           [ -d "$GITHUB_WORKSPACE/node/macos_aarch64" ] || ! jq -e 'any(.[]; .target == "macos-arm64")' <<<"$MATRIX" >/dev/null \
@@ -209,6 +236,7 @@ jobs:
           {
             echo "### Bundled node"
             echo "$REPO \`$TAG\` ($NCOMMIT): SHA256SUMS, cosign identity and minisign verified"
+            if [ "$YUGEN" = true ]; then echo "Yugen helpers from the same packages: yugen-leafverify, yugen-sendbuild, yewd-yugen"; fi
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -235,6 +263,7 @@ jobs:
       TARGET: ${{ matrix.target }}
       NODE: ${{ matrix.node }}
       ATTEST: ${{ matrix.attest }}
+      YUGEN: ${{ needs.version.outputs.yugen }}
       WORK_DIR: ${{ github.workspace }}/.qt-work
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -249,6 +278,12 @@ jobs:
           ext=; [ "$NODE" = windows ] && ext=.exe
           [ -f "node/$NODE/ycashd$ext" ] || { echo "no ycashd for $TARGET (ycash6 package $NODE)"; exit 1; }
           chmod 755 "node/$NODE/ycashd$ext"
+          if [ "$YUGEN" = true ]; then
+            for h in yugen-leafverify yugen-sendbuild yewd-yugen; do
+              [ -f "node/$NODE/$h" ] || { echo "no $h for $TARGET (ycash6 package $NODE)"; exit 1; }
+              chmod 755 "node/$NODE/$h"
+            done
+          fi
       - name: Install build prerequisites (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -309,6 +344,7 @@ jobs:
           ext=; [ "$NODE" = windows ] && ext=.exe
           args=("$TARGET" --package --ycashd "node/$NODE/ycashd$ext" --jobs "$JOBS")
           [ -n "${ATTEST_BIN:-}" ] && args+=(--attest "$ATTEST_BIN")
+          [ "$YUGEN" = true ] && args+=(--yugen-helpers "node/$NODE")
           # The Windows cross build needs a host (Linux) Qt for moc/rcc/uic first.
           [ "$TARGET" = windows-x86_64 ] && bash build.sh linux-x86_64 --deps-only --jobs "$JOBS"
           bash build.sh "${args[@]}"
@@ -327,12 +363,21 @@ jobs:
             macos="$mnt/yecwallet.app/Contents/MacOS"
             "$macos/ycashd" --version | head -n1 | tee /dev/stderr | grep -q "v$NVER" || { echo "bundled ycashd is not v$NVER"; exit 1; }
             if [ "$ATTEST" = true ]; then "$macos/yellowback-attest" --help >/dev/null; fi
+            if [ "$YUGEN" = true ]; then
+              for h in yugen-leafverify yugen-sendbuild yewd-yugen; do
+                [ -x "$macos/$h" ] || { echo "no $h in the app"; exit 1; }
+                codesign --verify "$macos/$h"
+              done
+            fi
             ;;
           linux-*)
             d=$(mktemp -d); tar -xzf "artifacts/$TARGET-yecwallet-v$VERSION.tar.gz" -C "$d"
             p="$d/yecwallet-v$VERSION"
             "$p/ycashd" --version | head -n1 | tee /dev/stderr | grep -q "v$NVER" || { echo "bundled ycashd is not v$NVER"; exit 1; }
             if [ "$ATTEST" = true ]; then "$p/yellowback-attest" --help >/dev/null; fi
+            if [ "$YUGEN" = true ]; then
+              for h in yugen-leafverify yugen-sendbuild yewd-yugen; do [ -x "$p/$h" ] || { echo "no $h in the package"; exit 1; }; done
+            fi
             [ -x "$p/yecwallet" ]
             ;;
           windows-*)

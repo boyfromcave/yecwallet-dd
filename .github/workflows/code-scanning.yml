@@ -13,7 +13,7 @@
 name: code-scanning
 on:
   push:
-    branches: ['upgrade/vault']
+    branches: ['upgrade/vault', 'upgrade/yugen']
     paths: ['contrib/secops/code-scanning-dismissals.json', 'contrib/secops/code-scanning-triage.py', '.github/workflows/code-scanning.yml']
   schedule:
     - cron: '53 3 * * *'

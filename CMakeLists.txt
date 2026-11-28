@@ -248,7 +248,7 @@ if(QT_STATIC)
         target_link_libraries(yecwallet PRIVATE Qt6::QWindowsIntegrationPlugin)
         target_sources(yecwallet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/import_plugins_windows.cpp)
     elseif(APPLE)
-        target_link_libraries(yecwallet PRIVATE Qt6::QCocoaIntegrationPlugin)
+        target_link_libraries(yecwallet PRIVATE Qt6::QCocoaIntegrationPlugin Qt6::QOffscreenIntegrationPlugin)
         target_sources(yecwallet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/import_plugins_macos.cpp)
     elseif(UNIX)
         if(TARGET Qt6::QXcbIntegrationPlugin)
@@ -332,7 +332,8 @@ if(TARGET Qt6::Test AND NOT QT_STATIC)
     # yellowback_test: the Yellowback tab. nodecompat_test: the version-aware calls for the two
     # ycashd lines (v4.5.0 and 6.20.0, ycash6 plan Phase 7), against a loopback mock ycashd.
     # nodedatacheck_test: the one-way data directory upgrade check (NodeDataCheck).
-    # connection_test: randomPassword(), the generated ycash.conf rpcpassword (audit 06/W-1).
+    # connection_test: randomPassword(), the generated ycash.conf rpcpassword (audit 06/W-1), and
+    # yugenHelperArgs(), the -yugen* flags for the bundled Yugen helpers.
     foreach(test_name yellowback_test nodecompat_test nodedatacheck_test connection_test)
         if(test_name STREQUAL "yellowback_test")
             set(test_source tests/yellowbacktab_test.cpp)

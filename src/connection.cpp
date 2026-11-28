@@ -131,6 +131,48 @@ QString randomPassword() {
     return s;
 }
 
+QStringList yugenHelperArgs(const QString& dir, const QSet<QString>& confKeys) {
+    static const struct { const char* option; const char* helper; } helpers[] = {
+        {"yugenverifier", "yugen-leafverify"},
+        {"yugenbuilder",  "yugen-sendbuild"},
+        {"yugenprover",   "yewd-yugen"},
+    };
+    QStringList args;
+    QDir d(dir);
+    for (const auto& h : helpers) {
+        const QString option = QString::fromLatin1(h.option);
+        if (confKeys.contains(option))
+            continue;
+#ifdef Q_OS_WIN
+        const QString path = d.absoluteFilePath(QString::fromLatin1(h.helper) + ".exe");
+#else
+        const QString path = d.absoluteFilePath(QString::fromLatin1(h.helper));
+#endif
+        const QFileInfo fi(path);
+        if (fi.isFile() && fi.isExecutable())
+            args << "-" + option + "=" + fi.absoluteFilePath();
+    }
+    return args;
+}
+
+QSet<QString> confOptionNames(const QString& confPath) {
+    QSet<QString> names;
+    QFile file(confPath);
+    if (confPath.isEmpty() || !file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return names;
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        const QString line = in.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith('#'))
+            continue;
+        const auto s = line.indexOf('=');
+        if (s <= 0)
+            continue;
+        names.insert(line.left(s).trimmed().toLower());
+    }
+    return names;
+}
+
 /**
  * This will create a new ycash.conf, download Ycash parameters.
  */ 
@@ -526,6 +568,15 @@ bool ConnectionLoader::startEmbeddedZcashd() {
         QFileInfo(confLocation).absoluteFilePath() != QFileInfo(zcashConfWritableLocation()).absoluteFilePath()) {
         args << "-conf=" + QFileInfo(confLocation).absoluteFilePath();
         main->logger->write("Starting ycashd with " + args.join(' '));
+    }
+
+    // The Yugen helpers the package carries beside ycashd (ycash6 6.23.x): without -yugenprover the
+    // node keeps no Yugen account and a send to a Yugen address fails. A flag the conf sets stands.
+    const QString nodeConf = confLocation.isEmpty() ? zcashConfWritableLocation() : confLocation;
+    const QStringList yugenArgs = yugenHelperArgs(appPath.absolutePath(), confOptionNames(nodeConf));
+    if (!yugenArgs.isEmpty()) {
+        args << yugenArgs;
+        main->logger->write("Starting ycashd with the bundled Yugen helpers: " + yugenArgs.join(' '));
     }
 
 #ifdef Q_OS_LINUX

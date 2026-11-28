@@ -12,7 +12,7 @@ name: codeql
 # show on the PR's code scanning check and in the Security tab.
 on:
   push:
-    branches: [ upgrade/vault ]
+    branches: [ upgrade/vault, upgrade/yugen ]
   pull_request:
   schedule:
     - cron: '29 4 * * 1'

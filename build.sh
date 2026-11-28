@@ -30,6 +30,11 @@
 #                       cargo from ycash-dd/contrib/yellowback/attest). The wallet's
 #                       Settings page launches `yellowback-attest subscribe` from
 #                       beside its own executable; without it the launcher is disabled.
+#   --yugen-helpers DIR Bundle the three Yugen helpers from DIR beside ycashd:
+#                       yugen-leafverify, yugen-sendbuild, yewd-yugen (ycash6 6.23.x
+#                       packages ship them with ycashd). The wallet starts ycashd with
+#                       -yugenverifier/-yugenbuilder/-yugenprover pointing at them;
+#                       without them the bundled node makes no Yugen sends.
 #   -h, --help          Show this help
 #
 # ENVIRONMENT VARIABLES (override defaults)
@@ -56,6 +61,9 @@
 #   bash build.sh macos-arm64 --package --ycashd ../ycash-dd/src/ycashd \
 #       --attest ../ycash-dd/target/release/yellowback-attest
 #
+#   # Yugen line (6.23.x): node and helpers from an unpacked ycash6 package
+#   bash build.sh macos-arm64 --package --ycashd pkg/ycashd --yugen-helpers pkg
+#
 #   # Use a pre-built Qt, only compile the app
 #   QT_STATIC_ROOT=/opt/myqt bash build.sh --app-only linux-x86_64
 # =============================================================================
@@ -77,6 +85,8 @@ DO_PACKAGE=false
 REBUILD_QT=false
 YCASHD_BIN=""
 ATTEST_BIN=""
+YUGEN_DIR=""
+YUGEN_HELPERS=(yugen-leafverify yugen-sendbuild yewd-yugen)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 info()    { echo ""; echo "━━━ $* ━━━"; }
@@ -93,6 +103,7 @@ while [[ $# -gt 0 ]]; do
         --package)         DO_PACKAGE=true ;;
         --ycashd)          YCASHD_BIN="$2"; shift ;;
         --attest)          ATTEST_BIN="$2"; shift ;;
+        --yugen-helpers)   YUGEN_DIR="$2"; shift ;;
         --build-type)      BUILD_TYPE="$2"; shift ;;
         --qt-version)      QT_VERSION="$2"; shift ;;
         --prefix)          DEPS_PREFIX="$2"; shift ;;
@@ -230,6 +241,39 @@ elif $DO_PACKAGE && [[ -n "$YCASHD_BIN" ]]; then
     echo "         wallet's subscriber launcher will be disabled (run the subscriber by hand)." >&2
 fi
 
+# ── Yugen helpers to bundle (--yugen-helpers) ────────────────────────────────
+# All three or none: the node's Yugen sends need the builder, the prover and the verifier together.
+if [[ -n "$YUGEN_DIR" ]]; then
+    [[ -d "$YUGEN_DIR" ]] || die "--yugen-helpers: not a directory: $YUGEN_DIR"
+    YUGEN_DIR="$(cd "$YUGEN_DIR" && pwd)"
+    [[ "$TARGET" == windows-* ]] && die "--yugen-helpers: ycash6 publishes no Windows Yugen helpers"
+    for _h in "${YUGEN_HELPERS[@]}"; do
+        [[ -f "$YUGEN_DIR/$_h" && -x "$YUGEN_DIR/$_h" ]] || die "--yugen-helpers: no executable $_h in $YUGEN_DIR"
+        if [[ "$TARGET" == macos-* ]]; then
+            _archs="$(lipo -archs "$YUGEN_DIR/$_h" 2>/dev/null || echo unknown)"
+            case "$TARGET" in
+                macos-arm64)      [[ "$_archs" == *arm64*  ]] || die "--yugen-helpers: $_h is [$_archs], need arm64" ;;
+                macos-x86_64)     [[ "$_archs" == *x86_64* ]] || die "--yugen-helpers: $_h is [$_archs], need x86_64" ;;
+                macos-universal)  [[ "$_archs" == *arm64* && "$_archs" == *x86_64* ]] || die "--yugen-helpers: $_h is [$_archs], need x86_64 and arm64" ;;
+            esac
+        fi
+    done
+    [[ -n "$YCASHD_BIN" ]] || die "--yugen-helpers needs --ycashd: the helpers run under the bundled node"
+    step "Yugen helpers to bundle: ${YUGEN_DIR} (${YUGEN_HELPERS[*]})"
+fi
+
+bundle_yugen() {
+    local dest_dir="$1"
+    [[ -n "$YUGEN_DIR" ]] || return 0
+    mkdir -p "${dest_dir}"
+    for _h in "${YUGEN_HELPERS[@]}"; do
+        cp "$YUGEN_DIR/$_h" "${dest_dir}/$_h"
+        chmod 755 "${dest_dir}/$_h"
+        strip "${dest_dir}/$_h" 2>/dev/null || true
+        step "Bundled $_h: ${dest_dir}/$_h ($(du -h "${dest_dir}/$_h" | cut -f1))"
+    done
+}
+
 bundle_attest() {
     local dest_dir="$1"
     [[ -n "$ATTEST_BIN" ]] || return 0
@@ -360,6 +404,7 @@ if $DO_PACKAGE; then
         cp "${SCRIPT_DIR}/LICENSE" "${PKG_DIR}/"
         bundle_ycashd "${PKG_DIR}"
         bundle_attest "${PKG_DIR}"
+        bundle_yugen "${PKG_DIR}"
         TARBALL="${ARTIFACTS_DIR}/linux-x86_64-yecwallet-v${APP_VERSION}.tar.gz"
         tar -czf "${TARBALL}" -C "${BUILD_DIR}/pkg" "yecwallet-v${APP_VERSION}"
         step "Package: ${TARBALL}"
@@ -380,6 +425,7 @@ if $DO_PACKAGE; then
         [[ -d "${APP_BUNDLE}" ]] || die "App bundle not found: ${APP_BUNDLE}"
         bundle_ycashd "${APP_BUNDLE}/Contents/MacOS"
         bundle_attest "${APP_BUNDLE}/Contents/MacOS"
+        bundle_yugen "${APP_BUNDLE}/Contents/MacOS"
         step "Running macdeployqt..."
         # Static Qt: macdeployqt finds no frameworks to copy and says so; it still fixes up the
         # bundle's plugin/rpath layout, so keep it. The .dmg is made with hdiutil rather than

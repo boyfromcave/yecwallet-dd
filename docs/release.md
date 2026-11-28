@@ -29,6 +29,12 @@ tagged: a draft ycash6 release cannot be downloaded. `yellowback-attest`, the at
 subscriber the Settings page launches, is built from ycash6's `contrib/yellowback/attest` at the
 same pinned commit, with the toolchain that crate pins.
 
+On the Yugen line (a bundled ycash6 6.23.x or later) the three Yugen helpers, `yugen-leafverify`,
+`yugen-sendbuild` and `yewd-yugen`, are taken from the same verified ycash6 package as ycashd and put
+beside it (`build.sh --yugen-helpers`); the workflow refuses a package without them. The wallet starts
+the embedded ycashd with `-yugenverifier`, `-yugenbuilder` and `-yugenprover` pointing at them (unless
+`ycash.conf` sets one). ycash6 publishes no Windows Yugen package, so that line has no Windows asset.
+
 ## What a release contains
 
 | Asset | Built on | Tier |
@@ -114,5 +120,7 @@ runner; the Windows job builds the Linux host Qt first).
 ```sh
 contrib/yecwallet-release/check-version.sh --remote          # the guards a tag runs, against the pin
 bash build.sh macos-arm64 --package --ycashd <ycashd> --attest <yellowback-attest>
+# Yugen line: <pkg> is the unpacked ycash6 package (ycashd and the three helpers)
+bash build.sh macos-arm64 --package --ycashd <pkg>/ycashd --yugen-helpers <pkg> --attest <yellowback-attest>
 contrib/yecwallet-release/check-macos-adhoc.sh artifacts/macos-arm64-yecwallet-v<V>.dmg --arch arm64
 ```

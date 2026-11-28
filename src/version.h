@@ -1,1 +1,1 @@
-#define APP_VERSION "6.22.0-beta3"
+#define APP_VERSION "6.23.0-beta4"

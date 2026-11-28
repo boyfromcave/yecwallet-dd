@@ -137,6 +137,7 @@ public:
     // Yellowback post-quantum line (D-Q-20): a plain-YEC PQ address sq... / tq... / rq... (53 characters).
     // The node encodes it for its PQ coins (a vault owner's residual) but does not decode it yet: display only.
     static bool    isPQTAddress(QString addr);
+    static bool    isYugenAddress(QString addr);   // Yugen (ruling 14): yqf/yqtf/yqrf, paid through z_sendmany
 
     static QString getDecimalString(double amt);
     static QString getUSDFormat(double usdAmt);

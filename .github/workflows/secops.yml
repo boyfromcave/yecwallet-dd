@@ -16,7 +16,7 @@ name: secops
 # Security -> Code scanning (categories zizmor, gitleaks, osv-scanner); nothing opens a PR or an issue.
 on:
   push:
-    branches: [ upgrade/vault ]
+    branches: [ upgrade/vault, upgrade/yugen ]
   pull_request:
   schedule:
     - cron: '43 3 * * *'

@@ -265,7 +265,7 @@ void MainWindow::addAddressSection() {
 
 void MainWindow::addressChanged(int itemNumber, const QString& text) {   
     auto addr = AddressBook::addressFromAddressLabel(text);
-    setMemoEnabled(itemNumber, Settings::isZAddress(addr));
+    setMemoEnabled(itemNumber, Settings::isZAddress(addr) || Settings::isYugenAddress(addr));
     recalcFee();
 }
 
@@ -578,7 +578,7 @@ bool MainWindow::confirmTx(Tx tx) {
             confirm.gridLayout->addWidget(AmtUSD, row, 2, 1, 1);            
 
             // Memo
-            if (Settings::isZAddress(toAddr.addr) && !toAddr.txtMemo.isEmpty()) {
+            if ((Settings::isZAddress(toAddr.addr) || Settings::isYugenAddress(toAddr.addr)) && !toAddr.txtMemo.isEmpty()) {
                 row++;
                 auto Memo = new QLabel(confirm.sendToAddrs);
                 Memo->setObjectName(QStringLiteral("Memo") % QString::number(i + 1));

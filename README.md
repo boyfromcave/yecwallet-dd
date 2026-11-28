@@ -51,14 +51,21 @@ application. The wallet adds a **Yellowback** tab; everything else is stock YecW
 
 ### The node it needs
 
-The release packages bundle the matching ycashd (YecWallet `v6.22.0-beta3` carries ycashd
-`v6.22.0-beta3` from [ycash6](https://github.com/boyfromcave/ycash6)). With your own node
-(`--no-embedded`), use a ycashd of the vault upgrade: ycash6 6.22.0-beta2 or later, or the
-`upgrade/vault` branch of [ycash-dd](https://github.com/boyfromcave/ycash-dd). The wallet requires Yellowback RPC version
+The release packages bundle the matching ycashd: on the Yugen beta4 line (`upgrade/yugen`),
+YecWallet `v6.23.0-beta4` carries ycashd `v6.23.0-beta4` from
+[ycash6](https://github.com/boyfromcave/ycash6) `upgrade/yugen`, and beside it the three Yugen
+helpers from the same verified ycash6 package: `yugen-leafverify`, `yugen-sendbuild` and
+`yewd-yugen`, separate processes ycashd runs (never linked into it). The wallet starts its embedded
+ycashd with `-yugenverifier`, `-yugenbuilder` and `-yugenprover` pointing at them, so the bundled
+node makes Yugen sends; a flag your `ycash.conf` already sets is left to it. The Yugen packages are
+macOS and Linux only (ycash6 publishes no Windows Yugen build). [docs/yugen.md](docs/yugen.md)
+describes the wallet against a Yugen-activated ycashd. With your own node (`--no-embedded`), use a ycashd of the vault upgrade:
+ycash6 6.22.0-beta2 or later (6.23.x for Yugen), or the `upgrade/vault` branch of
+[ycash-dd](https://github.com/boyfromcave/ycash-dd) (no Yugen there). The wallet requires Yellowback RPC version
 (`rpcversion`) **9** (the scheme-visible post-quantum address prefixes, decision D-9: ycash-dd and
-ycash6 6.22.x from that change on; beta2), **10** (beta3) or **11** (beta4: tag v2, a post-quantum payout key;
-a post-quantum fee payee is shown with its scheme); with any other node the tab is disabled and names
-the numbers. A
+ycash6 6.22.x from that change on; beta2), **10** (beta3), **11** (tag v2, a post-quantum payout key;
+a post-quantum fee payee is shown with its scheme) or **12** (Yugen, ycash6 6.23.x; no `yed_*` shape
+change); with any other node the tab is disabled and names the numbers. A
 stock `ycashd` has no Yellowback, and the tab says so. Nothing in `ycash.conf` turns Yellowback on.
 
 ### Download

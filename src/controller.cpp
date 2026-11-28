@@ -667,6 +667,7 @@ void Controller::watchTxStatus() {
         return noConnection();
 
     zrpc->fetchOpStatus([=, this](const json& reply) {
+        QString pendingNote;   // a Yugen send waiting for the payee's record (ruling 16)
         // There's an array for each item in the status
         for (auto& it : reply.get<json::array_t>()) {  
             // If we were watching this Tx and its status became "success", then we'll show a status bar alert
@@ -694,7 +695,10 @@ void Controller::watchTxStatus() {
                     auto wtx = watchingOps[id];
                     watchingOps.remove(id);
                     wtx.error(id, errorMsg);
-                } 
+                } else if (status == "pending" && it.find("pending") != it.end()) {
+                    // A Yugen send waits for the payee's record to be served (ruling 16); the node asks again
+                    pendingNote = QObject::tr("\nYugen payment pending: ") + QString::fromStdString(it["pending"].get<std::string>());
+                }
             }
 
             if (watchingOps.isEmpty()) {
@@ -709,7 +713,7 @@ void Controller::watchTxStatus() {
             main->loadingLabel->setVisible(false);
         } else {
             main->loadingLabel->setVisible(true);
-            main->loadingLabel->setToolTip(QString::number(watchingOps.size()) + QObject::tr(" tx computing. This can take several minutes."));
+            main->loadingLabel->setToolTip(QString::number(watchingOps.size()) + QObject::tr(" tx computing. This can take several minutes.") + pendingNote);
         }
     });
 }

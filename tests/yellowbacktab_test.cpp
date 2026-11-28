@@ -705,11 +705,11 @@ private slots:
         QVERIFY(banner != nullptr && !banner->isHidden());
     }
 
-    void contractVersionIsEleven() {
-        // beta4 (tag v2): 11 is the newest contract, 9 (D-9) and 10 (beta3) still accepted
-        QCOMPARE(YellowbackRpc::RPC_VERSION, 11);
+    void contractVersionIsTwelve() {
+        // Yugen (12, no yed_* shape change) is the newest contract; 9 (D-9), 10 (beta3) and 11 (beta4) still accepted
+        QCOMPARE(YellowbackRpc::RPC_VERSION, 12);
         QCOMPARE(YellowbackRpc::MIN_RPC_VERSION, 9);
-        QCOMPARE(Settings::getYellowbackRpcVersion(), 11);
+        QCOMPARE(Settings::getYellowbackRpcVersion(), 12);
         QCOMPARE(Settings::getYellowbackMinRpcVersion(), 9);
     }
 
@@ -724,10 +724,10 @@ private slots:
         QCOMPARE(YellowbackController::describePayee("yrf" + QString(50, 'A')), "yrf" + QString(50, 'A'));   // a YED owner form is no payee
     }
 
-    // The beta4 handshake: 9 (a beta2 node), 10 (beta3) and 11 (beta4) are accepted, 8 (the pre-D-9
-    // post-quantum address form) and 12 are refused with the numbers named, and nothing is enabled outside the window.
-    void handshakeAcceptsRpcVersionNineToEleven() {
-        for (int v : { 9, 10, 11 }) {
+    // The Yugen handshake: 9 (a beta2 node), 10 (beta3), 11 (beta4) and 12 (Yugen) are accepted, 8 (the pre-D-9
+    // post-quantum address form) and 13 are refused with the numbers named, and nothing is enabled outside the window.
+    void handshakeAcceptsRpcVersionNineToTwelve() {
+        for (int v : { 9, 10, 11, 12 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
@@ -735,14 +735,14 @@ private slots:
             QVERIFY(h.ctl.isVersionOk());
             QVERIFY(h.ctl.isAvailable());
         }
-        for (int v : { 8, 12 }) {
+        for (int v : { 8, 13 }) {
             Harness h;
             json info = infoActive();
             info["rpcversion"] = v;
             h.feed(info, statsOpen(), activationActive());
             QVERIFY(!h.ctl.isAvailable());
             QVERIFY(!h.ctl.isVersionOk());
-            QVERIFY(h.label("lblBanner").contains("versions 9 to 11"));
+            QVERIFY(h.label("lblBanner").contains("versions 9 to 12"));
             QVERIFY(h.label("lblBanner").contains(QString("version %1").arg(v)));
             QVERIFY(!h.button("btnMint")->isEnabled());
         }
@@ -889,7 +889,7 @@ private slots:
         info["rpcversion"] = 2;
         h.feed(info);
         QVERIFY(!h.ctl.isAvailable());
-        QVERIFY(h.label("lblBanner").contains("versions 9 to 11"));
+        QVERIFY(h.label("lblBanner").contains("versions 9 to 12"));
         QVERIFY(h.label("lblBanner").contains("version 2"));
     }
 
@@ -2789,11 +2789,21 @@ private slots:
         QVERIFY(YellowbackController::looksLikeYellowbackAddressOn("main", "ybs4EbdcEEJrrNzX1X4M66DayNaHsTW3W3AKL6XySKiEeLxDJpH4S"));
         QVERIFY(!YellowbackController::looksLikeYellowbackAddressOn("main", "yb5u8LCGfU3hYYhhAqvYzR3ZQuNFEUWzx5dmLiGjPW8Gqto3xqqCc"));
         // the stock wallet's helpers never take a PQ address for one of theirs
-        for (const QString& a : { make("yrf", 53), make("rqs", 53), make("sqf", 53), make("ybs", 53) }) {
-            QVERIFY(!Settings::isTAddress(a));
+        for (const QString& a : { make("yrf", 53), make("rqs", 53), make("sqf", 53), make("ybs", 53) }) QVERIFY(!Settings::isZAddress(a));
+        // a YED owner form is never a Send recipient; a plain-YEC PQ address is one since the Yugen node (rpcversion 12),
+        // and on mainnet the Send tab treats it as transparent (no memo)
+        for (const QString& a : { make("yrf", 53), make("ybs", 53) }) { QVERIFY(!Settings::isValidAddress(a)); QVERIFY(!Settings::isTAddress(a)); }
+        for (const QString& a : { make("rqs", 53), make("sqf", 53) }) QVERIFY(Settings::isValidAddress(a));
+        QVERIFY(Settings::isTAddress(make("sqf", 53)));   // isTAddress is the mainnet "s" test, as for a P2PKH address
+        // a Yugen address (yqf/yqtf/yqrf, Bech32m) is a valid recipient, never a z- or t-address; Falcon-1024 forms are not
+        for (const QString& a : { "yqf1" + QString(60, 'q'), "yqtf1" + QString(60, 'p'), "yqrf1" + QString(60, 'z') }) {
+            QVERIFY(Settings::isYugenAddress(a));
+            QVERIFY(Settings::isValidAddress(a));
             QVERIFY(!Settings::isZAddress(a));
-            QVERIFY(!Settings::isValidAddress(a));
+            QVERIFY(!Settings::isTAddress(a));
         }
+        QVERIFY(!Settings::isYugenAddress("yqk1" + QString(60, 'q')));
+        QVERIFY(!Settings::isYugenAddress("yqf1" + QString(60, 'b')));   // 'b' is outside the Bech32 alphabet
         // ...and recognise a plain-YEC PQ coin (D-Q-20; the devnet's residual paid to rq…) for display only
         QVERIFY(Settings::isPQTAddress("rqs453qxBF36FCu5fMdq9iVHY25HYqrsBUjqEZTDkkwEN1jMu8gmf"));
         for (const QString& a : { make("sqf", 53), make("sqs", 53), make("tqf", 53), make("tqs", 53), make("rqf", 53), make("rqs", 53) }) QVERIFY(Settings::isPQTAddress(a));

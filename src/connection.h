@@ -35,6 +35,18 @@ class Connection;
 // [0-9A-Za-z] by QRandomGenerator::global() (audit 06/W-1). Declared here for tests/connection_test.cpp.
 QString randomPassword();
 
+// The Yugen helpers the bundled ycashd runs (ycash6 6.23.x, doc/yugen-node.md "Helper build"):
+// yugen-leafverify (-yugenverifier), yugen-sendbuild (-yugenbuilder) and yewd-yugen (-yugenprover,
+// which turns on the node's Yugen account). Returns one -flag=<dir>/<helper> argument for each
+// helper present in `dir` (the wallet's own directory, where the package puts them beside ycashd),
+// leaving out a flag the node's ycash.conf already sets (`confKeys`, lower-case option names),
+// so a user's own choice stands. Nothing is passed for a missing helper: a package or build
+// without them starts ycashd exactly as before. Declared here for tests/connection_test.cpp.
+QStringList yugenHelperArgs(const QString& dir, const QSet<QString>& confKeys);
+
+// The lower-case option names set in a ycash.conf (`name=value` lines; comments skipped).
+QSet<QString> confOptionNames(const QString& confPath);
+
 class ConnectionLoader {
 
 public:

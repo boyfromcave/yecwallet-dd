@@ -262,7 +262,7 @@
         "yed_redeem",
         "yed_claim"
       ],
-      "when": "no fresh key could be drawn (keypoolrefill)"
+      "when": "no fresh key could be drawn (keypoolrefill); on 6.20.0 only the CReserveKey change paths can raise it (see yed_getnewaddress)"
     },
     "lock-below-min": {
       "raisedBy": [
@@ -487,7 +487,7 @@
     },
     "wallet-locked": {
       "raisedBy": [
-        "every signing command"
+        "every signing command; on 6.20.0 also `yed_getnewaddress` and every fresh-key draw"
       ],
       "when": "the wallet is encrypted and locked (walletpassphrase first); the stock EnsureWalletIsUnlocked message may precede it"
     },
@@ -510,7 +510,7 @@
       "when": "the index is unhealthy (unhealthyReason follows); provoke with -yellowbacktestfault=storage:commit then any non-allow-listed command. Also the storage boundary of yed_addattestation and yed_buildbundle (audit A-3): a storage exception under either marks the index unhealthy and the call fails with yellowback-unhealthy: storage failure in AddAttestation: … / … in BuildBundle: …"
     }
   },
-  "rpcversion": 11,
+  "rpcversion": 12,
   "source": {
     "plan": "docs/plans/yellowback-v2-development-plan.md",
     "planInTerm": "docs/plans/yellowback-in-term-claims-plan.md",
@@ -519,7 +519,7 @@
     "revision": 6,
     "revisionInTerm": 1,
     "revisionV3": 4,
-    "rpcdoc": "ycash-dd/doc/yellowback-rpc.md",
+    "rpcdoc": "ycash6/doc/yellowback-rpc.md",
     "section": "4.5",
     "sectionInTerm": "4.1",
     "sectionUpgrade": "15.10"
@@ -1023,7 +1023,7 @@
       },
       "protectedByIndex": true,
       "rebuilt": false,
-      "rpcversion": 11,
+      "rpcversion": 12,
       "startHeight": 103,
       "supplyCapReached": false,
       "unhealthyReason": "",
